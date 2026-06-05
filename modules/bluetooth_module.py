@@ -7,7 +7,7 @@ log = logging.getLogger("ph3b3.bluetooth")
 
 KNOWN_DEVICES = {
     # Add your devices here as you pair them
-    # "AA:BB:CC:DD:EE:FF": "Astroson Phone",
+    # "AA:BB:CC:DD:EE:FF": "Owner Device",
 }
 
 class BluetoothModule:
