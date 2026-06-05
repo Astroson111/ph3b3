@@ -6,7 +6,7 @@ from pathlib import Path
 
 log = logging.getLogger("ph3b3.calendar")
 
-# Google Calendar is accessed via the gcalcli tool on Nyx
+# Google Calendar is accessed via the gcalcli command-line tool
 # Install: pip install gcalcli
 # Auth: gcalcli init (opens browser for Google OAuth)
 # Ph3b3 calls gcalcli as a subprocess — no API keys needed
