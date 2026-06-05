@@ -26,6 +26,7 @@ NON_LATIN_LANGS = {
     'ja', 'zh', 'ko', 'ar', 'ru', 'uk', 'bg', 'sr', 'mk', 'be',
     'hi', 'mr', 'ne', 'th', 'el', 'he', 'fa', 'bn', 'gu', 'ta',
     'te', 'kn', 'ml', 'si', 'my', 'km', 'lo', 'ka', 'am', 'mn',
+    'tg',
 }
 
 # deep_translator / Google Translate requires exact casing for a handful of codes.
@@ -33,6 +34,17 @@ _TRANSLATOR_CODE = {
     'zh-cn': 'zh-CN',
     'zh-tw': 'zh-TW',
     'mni-mtei': 'mni-Mtei',
+}
+
+# Dialect / alias names → canonical Google Translate code (also used as romanization base).
+# Covers Farsi variants and common alternate spellings.
+_DIALECT_MAP = {
+    'farsi':   'fa',
+    'dari':    'fa',
+    'tehrani': 'fa',
+    'kabuli':  'fa',
+    'tajiki':  'tg',
+    'tajik':   'tg',
 }
 
 LANG_NAMES = {
@@ -52,6 +64,14 @@ LANG_NAMES = {
     'my': 'Burmese',        'km': 'Khmer',
     'lo': 'Lao',            'ka': 'Georgian',
     'am': 'Amharic',        'mn': 'Mongolian',
+    'tg': 'Tajik',
+    # Farsi dialect display names
+    'farsi':   'Farsi',
+    'dari':    'Dari',
+    'tehrani': 'Tehrani Persian',
+    'kabuli':  'Kabuli Dari',
+    'tajiki':  'Tajik',
+    'tajik':   'Tajik',
 }
 
 
@@ -67,27 +87,28 @@ class TranslationModule:
         if not text or not text.strip():
             return {"error": "No text provided", "text": ""}
         target = (target_lang or self.target_lang).lower().strip()
-        translator_target = _TRANSLATOR_CODE.get(target, target)
+        resolved = _DIALECT_MAP.get(target, target)
+        translator_target = _TRANSLATOR_CODE.get(resolved, resolved)
         try:
             translated = GoogleTranslator(source="auto", target=translator_target).translate(text)
-            display = self._format(translated, target)
+            display = self._format(text, translated, target)
             self._save_log(text, display, target)
             return {"original": text, "translated": display, "target_lang": target, "error": None}
         except Exception as e:
             return {"error": str(e), "text": text}
 
-    def _format(self, translated: str, target: str) -> str:
-        """Attach romanization for non-Latin scripts: 'Japanese: こんにちは (Konnichiwa)'"""
-        base = target.split('-')[0]
-        if base not in NON_LATIN_LANGS:
+    def _format(self, original: str, translated: str, target: str) -> str:
+        """Produce 'Hello in Japanese: こんにちは (Konnichiwa)' for non-Latin scripts."""
+        rom_base = _DIALECT_MAP.get(target, target.split('-')[0])
+        if rom_base not in NON_LATIN_LANGS:
             return translated
 
-        lang_name = LANG_NAMES.get(target) or LANG_NAMES.get(base, target.title())
-        romanized = self._romanize(translated, base)
+        lang_name = LANG_NAMES.get(target) or LANG_NAMES.get(rom_base, target.title())
+        romanized = self._romanize(translated, rom_base)
 
         if romanized and romanized.strip().lower() != translated.strip().lower():
-            return f"{lang_name}: {translated} ({romanized})"
-        return f"{lang_name}: {translated}"
+            return f"{original} in {lang_name}: {translated} ({romanized})"
+        return f"{original} in {lang_name}: {translated}"
 
     def _romanize(self, text: str, base_lang: str) -> str | None:
         """Convert non-Latin text to a Latin pronunciation approximation."""
