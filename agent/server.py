@@ -166,6 +166,13 @@ TOOLS = [
     {"type":"function","function":{"name":"network_my_ip","description":"Get Nyx IP addresses","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"network_scan","description":"Scan the local network","parameters":{"type":"object","properties":{"target":{"type":"string","default":"192.168.0.0/24"}}}}},
     {"type":"function","function":{"name":"network_who_is_on","description":"Who is on the network right now","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"network_arp_scan","description":"List all LAN devices with IP, MAC address, and vendor using arp-scan","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"network_netdiscover","description":"Passive network discovery — listen for ARP traffic without sending probes","parameters":{"type":"object","properties":{"duration":{"type":"integer","default":30,"description":"How many seconds to listen"}}}}},
+    {"type":"function","function":{"name":"network_dig","description":"Full DNS lookup for a domain — returns A, AAAA, MX, NS, and TXT records","parameters":{"type":"object","properties":{"domain":{"type":"string"}},"required":["domain"]}}},
+    {"type":"function","function":{"name":"network_traceroute","description":"Trace the network path to a host, showing each hop","parameters":{"type":"object","properties":{"host":{"type":"string"}},"required":["host"]}}},
+    {"type":"function","function":{"name":"network_speedtest","description":"Run an internet speed test and return ping, download, and upload speeds","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"network_nmap_expand","description":"Flexible nmap scan with preset profiles: quick (-F fast), ports (-p 1-1024), os (-O detection), full (-A aggressive)","parameters":{"type":"object","properties":{"target":{"type":"string"},"flags":{"type":"string","enum":["quick","ports","os","full"]}},"required":["target"]}}},
+    {"type":"function","function":{"name":"network_tools_menu","description":"CALL THIS when the user says 'network tools', 'what network tools', or asks what network scanning options are available. Returns an interactive menu of all available network tools.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"bluetooth_scan","description":"Scan for nearby Bluetooth devices","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"bluetooth_status","description":"Bluetooth adapter status","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"system_status","description":"Full Nyx system status","parameters":{"type":"object","properties":{}}}},
@@ -257,6 +264,13 @@ async def execute_tool(name, args):
         elif name == "network_my_ip": result = network.my_ip()
         elif name == "network_scan": result = network.scan_network(args.get("target","192.168.0.0/24"))
         elif name == "network_who_is_on": result = network.who_is_on_network()
+        elif name == "network_arp_scan": result = network.arp_scan()
+        elif name == "network_netdiscover": result = network.netdiscover_passive(args.get("duration", 30))
+        elif name == "network_dig": result = network.dig_lookup(args["domain"])
+        elif name == "network_traceroute": result = network.traceroute(args["host"])
+        elif name == "network_speedtest": result = network.speedtest()
+        elif name == "network_nmap_expand": result = network.nmap_expand(args["target"], args.get("flags"))
+        elif name == "network_tools_menu": result = network.tools_menu()
         elif name == "bluetooth_scan": result = bluetooth.scan()
         elif name == "bluetooth_status": result = bluetooth.status()
         elif name == "system_status": result = system.full_status()
