@@ -20,6 +20,41 @@ try:
 except ImportError:
     SR_AVAILABLE = False
 
+# Languages whose scripts are non-Latin and need romanization.
+# Keyed on the base language code (before any hyphen).
+NON_LATIN_LANGS = {
+    'ja', 'zh', 'ko', 'ar', 'ru', 'uk', 'bg', 'sr', 'mk', 'be',
+    'hi', 'mr', 'ne', 'th', 'el', 'he', 'fa', 'bn', 'gu', 'ta',
+    'te', 'kn', 'ml', 'si', 'my', 'km', 'lo', 'ka', 'am', 'mn',
+}
+
+# deep_translator / Google Translate requires exact casing for a handful of codes.
+_TRANSLATOR_CODE = {
+    'zh-cn': 'zh-CN',
+    'zh-tw': 'zh-TW',
+    'mni-mtei': 'mni-Mtei',
+}
+
+LANG_NAMES = {
+    'ja': 'Japanese',       'zh': 'Chinese',
+    'zh-cn': 'Chinese',     'zh-tw': 'Chinese (Traditional)',
+    'ko': 'Korean',         'ar': 'Arabic',
+    'ru': 'Russian',        'uk': 'Ukrainian',
+    'bg': 'Bulgarian',      'sr': 'Serbian',
+    'mk': 'Macedonian',     'be': 'Belarusian',
+    'hi': 'Hindi',          'mr': 'Marathi',
+    'ne': 'Nepali',         'th': 'Thai',
+    'el': 'Greek',          'he': 'Hebrew',
+    'fa': 'Persian',        'bn': 'Bengali',
+    'gu': 'Gujarati',       'ta': 'Tamil',
+    'te': 'Telugu',         'kn': 'Kannada',
+    'ml': 'Malayalam',      'si': 'Sinhala',
+    'my': 'Burmese',        'km': 'Khmer',
+    'lo': 'Lao',            'ka': 'Georgian',
+    'am': 'Amharic',        'mn': 'Mongolian',
+}
+
+
 class TranslationModule:
     def __init__(self):
         self.target_lang = "es"
@@ -32,12 +67,64 @@ class TranslationModule:
         if not text or not text.strip():
             return {"error": "No text provided", "text": ""}
         target = (target_lang or self.target_lang).lower().strip()
+        translator_target = _TRANSLATOR_CODE.get(target, target)
         try:
-            translated = GoogleTranslator(source="auto", target=target).translate(text)
-            self._save_log(text, translated, target)
-            return {"original": text, "translated": translated, "target_lang": target, "error": None}
+            translated = GoogleTranslator(source="auto", target=translator_target).translate(text)
+            display = self._format(translated, target)
+            self._save_log(text, display, target)
+            return {"original": text, "translated": display, "target_lang": target, "error": None}
         except Exception as e:
             return {"error": str(e), "text": text}
+
+    def _format(self, translated: str, target: str) -> str:
+        """Attach romanization for non-Latin scripts: 'Japanese: こんにちは (Konnichiwa)'"""
+        base = target.split('-')[0]
+        if base not in NON_LATIN_LANGS:
+            return translated
+
+        lang_name = LANG_NAMES.get(target) or LANG_NAMES.get(base, target.title())
+        romanized = self._romanize(translated, base)
+
+        if romanized and romanized.strip().lower() != translated.strip().lower():
+            return f"{lang_name}: {translated} ({romanized})"
+        return f"{lang_name}: {translated}"
+
+    def _romanize(self, text: str, base_lang: str) -> str | None:
+        """Convert non-Latin text to a Latin pronunciation approximation."""
+
+        if base_lang == 'ja':
+            try:
+                import pykakasi
+                kks = pykakasi.kakasi()
+                parts = kks.convert(text)
+                romaji = ''.join(p['hepburn'] for p in parts).strip()
+                return romaji.capitalize() or None
+            except ImportError:
+                log.warning("pykakasi not installed — run: pip install pykakasi")
+            except Exception as e:
+                log.warning(f"pykakasi error: {e}")
+
+        if base_lang == 'zh':
+            try:
+                from pypinyin import lazy_pinyin
+                pinyin = ' '.join(lazy_pinyin(text)).strip()
+                return pinyin.capitalize() or None
+            except ImportError:
+                log.warning("pypinyin not installed — run: pip install pypinyin")
+            except Exception as e:
+                log.warning(f"pypinyin error: {e}")
+
+        # General fallback: unidecode handles Cyrillic, Arabic, Korean, Greek, etc.
+        try:
+            from unidecode import unidecode
+            result = unidecode(text).strip()
+            return result.capitalize() or None
+        except ImportError:
+            log.warning("unidecode not installed — run: pip install unidecode")
+        except Exception as e:
+            log.warning(f"unidecode error: {e}")
+
+        return None
 
     def set_default_language(self, lang):
         self.target_lang = lang.lower().strip()
