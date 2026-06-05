@@ -23,3 +23,14 @@ Built in Pennsylvania. Started as a Spotify fix for a robot. Became something la
 Because your conversations are yours. Because privacy matters. Because you shouldn't need a subscription to talk to your own AI.
 
 Ph3b3 is a work in progress. That's the point.
+
+## Responsible Use
+
+Ph3b3 includes network scanning and cybersecurity tools intended for use on networks you own or have explicit permission to scan.
+
+- Never run network scans on networks you don't own
+- nmap OS detection requires root and should only be used on your own network
+- Cybersecurity modules are defensive tools, not offensive ones
+- Voice and camera data stays local — be mindful of others' privacy
+
+This project is a work in progress. Use it responsibly.
