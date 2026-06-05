@@ -1,0 +1,20 @@
+[Unit]
+Description=Ph3b3 AI Assistant Server
+After=network-online.target ollama.service
+Wants=network-online.target
+Requires=ollama.service
+
+[Service]
+Type=simple
+User=astroson
+WorkingDirectory=/home/astroson/Desktop/ph3b3_v2
+EnvironmentFile=/home/astroson/Desktop/ph3b3_v2/.env
+ExecStart=/home/astroson/Desktop/ph3b3_v2/.venv/bin/python agent/server.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ph3b3
+
+[Install]
+WantedBy=multi-user.target
