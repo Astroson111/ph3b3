@@ -7,3 +7,5 @@ __pycache__/
 .env
 firmware/.pio/
 stack-chan/
+*.wav
+voices/*.png
