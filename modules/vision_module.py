@@ -53,7 +53,7 @@ class VisionModule:
     def look(self, prompt=None):
         frame = self._capture_frame()
         if frame is None:
-            return f"Camera unavailable ({self.device_path}) — I cannot see the room right now."
+            return f"[hardware error: could not read a frame from {self.device_path} — device may be busy or disconnected. Try again.]"
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filepath = CAPTURE_DIR / f"capture_{ts}.jpg"
         cv2.imwrite(str(filepath), frame)
