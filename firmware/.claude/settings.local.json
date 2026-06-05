@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(stty -F /dev/ttyACM0 115200 raw -echo)",
+      "Read(//dev/**)",
+      "Bash(ping -c 3 192.168.0.16)",
+      "Bash(curl -sv --max-time 5 http://192.168.0.16:7331/)",
+      "Bash(curl *)"
+    ]
+  }
+}
