@@ -7,7 +7,7 @@ log = logging.getLogger("ph3b3.memory")
 MEMORY_FILE = Path.home() / "ph3b3_data" / "memory.json"
 
 DEFAULT_MEMORY = {
-    "about_astroson": {},
+    "about_user": {},
     "patterns": [],
     "anomalies": [],
     "stream_notes": [],
@@ -37,6 +37,11 @@ class MemoryModule:
                 for key, default in DEFAULT_MEMORY.items():
                     if key not in data:
                         data[key] = default
+                # Migrate old key name from earlier versions
+                if "about_astroson" in data and not data.get("about_user"):
+                    data["about_user"] = data.pop("about_astroson")
+                elif "about_astroson" in data:
+                    data.pop("about_astroson")
                 return data
             except Exception as e:
                 log.warning(f"Could not load memory: {e}")
@@ -51,9 +56,9 @@ class MemoryModule:
 
     def as_context(self):
         lines = ["\n## What I Remember\n"]
-        if self.memory["about_astroson"]:
+        if self.memory["about_user"]:
             lines.append("About my creator:")
-            for key, val in self.memory["about_astroson"].items():
+            for key, val in self.memory["about_user"].items():
                 lines.append(f"  - {key}: {val}")
         if self.memory["ongoing"]:
             lines.append("\nCurrently in progress:")
@@ -75,7 +80,7 @@ class MemoryModule:
         return "\n".join(lines)
 
     def remember_fact(self, key, value):
-        self.memory["about_astroson"][key] = value
+        self.memory["about_user"][key] = value
         self._save()
         return f"Remembered: {key} = {value}"
 
@@ -99,9 +104,9 @@ class MemoryModule:
     def recall(self, topic):
         topic_lower = topic.lower()
         results = []
-        for key, val in self.memory["about_astroson"].items():
+        for key, val in self.memory["about_user"].items():
             if topic_lower in key.lower() or topic_lower in str(val).lower():
-                results.append(f"[About Astroson] {key}: {val}")
+                results.append(f"[About my creator] {key}: {val}")
         for p in self.memory["patterns"]:
             if topic_lower in p.lower():
                 results.append(f"[Pattern] {p}")

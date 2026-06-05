@@ -25,7 +25,7 @@ MODULES_DIR = ROOT / "modules"
 SKILL_LOG = Path.home() / "ph3b3_data" / "skills" / "skill_log.jsonl"
 SKILL_LOG.parent.mkdir(parents=True, exist_ok=True)
 
-AUTH_USER = "REDACTED"
+AUTH_USER = os.getenv("PH3B3_USER", "admin")
 AUTH_PASS = os.getenv("PH3B3_PASSWORD", "")
 if not AUTH_PASS:
     logging.warning("PH3B3_PASSWORD not set in .env — web UI is unprotected")
@@ -40,7 +40,7 @@ log = logging.getLogger("ph3b3")
 
 def load_soul():
     if not SOUL_FILE.exists():
-        return "You are Ph3b3, a local AI on Nyx. Be warm, precise, and loyal."
+        return "You are Ph3b3, a local AI assistant. Be warm, precise, and loyal."
     soul = SOUL_FILE.read_text(encoding="utf-8")
     log.info(f"Soul loaded: {len(soul)} chars")
     return soul
@@ -163,7 +163,7 @@ TOOLS = [
     {"type":"function","function":{"name":"calendar_week","description":"Get this weeks calendar","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"weather_current","description":"Get current weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}},
     {"type":"function","function":{"name":"weather_ghost_hunting","description":"Weather field notes for ghost hunting","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}},
-    {"type":"function","function":{"name":"network_my_ip","description":"Get Nyx IP addresses","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"network_my_ip","description":"Get the host machine's IP addresses","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"network_scan","description":"Scan the local network","parameters":{"type":"object","properties":{"target":{"type":"string","default":"192.168.0.0/24"}}}}},
     {"type":"function","function":{"name":"network_who_is_on","description":"Who is on the network right now","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"network_arp_scan","description":"List all LAN devices with IP, MAC address, and vendor using arp-scan","parameters":{"type":"object","properties":{}}}},
@@ -171,11 +171,11 @@ TOOLS = [
     {"type":"function","function":{"name":"network_dig","description":"Full DNS lookup for a domain — returns A, AAAA, MX, NS, and TXT records","parameters":{"type":"object","properties":{"domain":{"type":"string"}},"required":["domain"]}}},
     {"type":"function","function":{"name":"network_traceroute","description":"Trace the network path to a host, showing each hop","parameters":{"type":"object","properties":{"host":{"type":"string"}},"required":["host"]}}},
     {"type":"function","function":{"name":"network_speedtest","description":"Run an internet speed test and return ping, download, and upload speeds","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"network_nmap_expand","description":"Flexible nmap scan with preset profiles: quick (-F fast), ports (-p 1-1024), os (-O detection), full (-A aggressive). IMPORTANT: only run this against targets on networks Astroson owns or has explicit written permission to scan. Never use the 'os' or 'full' flags against external IPs, public hosts, or any network you do not control — OS detection and aggressive scans are intrusive and may be illegal without authorisation.","parameters":{"type":"object","properties":{"target":{"type":"string"},"flags":{"type":"string","enum":["quick","ports","os","full"]}},"required":["target"]}}},
+    {"type":"function","function":{"name":"network_nmap_expand","description":"Flexible nmap scan with preset profiles: quick (-F fast), ports (-p 1-1024), os (-O detection), full (-A aggressive). IMPORTANT: only run this against targets on networks the operator owns or has explicit written permission to scan. Never use the 'os' or 'full' flags against external IPs, public hosts, or any network you do not control — OS detection and aggressive scans are intrusive and may be illegal without authorisation.","parameters":{"type":"object","properties":{"target":{"type":"string"},"flags":{"type":"string","enum":["quick","ports","os","full"]}},"required":["target"]}}},
     {"type":"function","function":{"name":"network_tools_menu","description":"CALL THIS when the user says 'network tools', 'what network tools', or asks what network scanning options are available. Returns an interactive menu of all available network tools.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"bluetooth_scan","description":"Scan for nearby Bluetooth devices","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"bluetooth_status","description":"Bluetooth adapter status","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"system_status","description":"Full Nyx system status","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"system_status","description":"Full system status","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"gpu_status","description":"RTX 4060 GPU status","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"ollama_status","description":"Check Ollama and loaded models","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"cve_lookup","description":"Look up a CVE vulnerability","parameters":{"type":"object","properties":{"cve_id":{"type":"string"}},"required":["cve_id"]}}},

@@ -23,7 +23,7 @@ JOKES = {
     ],
     "tech": [
         ("How do you know someone uses Linux?", "Do not worry. They will tell you."),
-        ("What is Nyx's favorite movie?", "The Matrix. For reasons she will not explain."),
+        ("What is the machine's favorite movie?", "The Matrix. For reasons she will not explain."),
     ],
 }
 
