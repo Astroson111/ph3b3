@@ -1,0 +1,9 @@
+ph3b3_data/
+*.onnx
+*.onnx.json
+.venv/
+__pycache__/
+*.pyc
+.env
+firmware/.pio/
+stack-chan/
