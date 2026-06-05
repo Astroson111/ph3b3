@@ -19,3 +19,4 @@ sounddevice>=0.4.6
 soundfile>=0.12.1
 openai-whisper>=20231117
 torch>=2.0.0
+speedtest-cli>=2.1.3
