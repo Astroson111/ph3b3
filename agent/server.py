@@ -229,7 +229,7 @@ async def execute_tool(name, args):
         elif name == "film_lookup": result = film.lookup(args["query"], args.get("mode","lookup"))
         elif name == "translate_text":
             r = translation.translate(args["text"], args.get("target_lang"))
-            result = f"Translated: {r.get('translated','')}" if not r.get("error") else f"Error: {r['error']}"
+            result = f"Error: {r['error']}" if r.get("error") else r.get("translated", "")
         elif name == "remember_fact": result = memory.remember_fact(args["key"], args["value"])
         elif name == "log_anomaly": result = memory.log_anomaly(args["description"], args.get("source","camera"))
         elif name == "recall_memory": result = memory.recall(args["topic"])
