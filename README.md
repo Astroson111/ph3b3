@@ -8,7 +8,7 @@ Ph3b3 runs entirely on your own hardware. Every conversation, every memory, ever
 **Built by Alexander Jordan Olson (Astroson)**
 Built in Pennsylvania. Started as a Spotify fix for a robot. Became something larger.
 
-Built through conversation, iteration, and stubbornness. Not despite being a first-timer — because of it.
+Made with soul. Built through conversation, iteration, and stubbornness. Not despite being a first-timer — because of it.
 
 ## What she can do
 
