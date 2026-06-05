@@ -35,7 +35,7 @@ class VisionModule:
     def __init__(self, memory_module=None, camera_device: int = 0):
         """
         camera_device: v4l2 device index.
-            0 = OBSBOT Tiny 4K on Nyx (/dev/video0)
+            0 = primary camera (/dev/video0)
             1+ = secondary cameras as they are added
         """
         self.memory        = memory_module
