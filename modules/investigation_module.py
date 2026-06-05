@@ -12,7 +12,7 @@ class InvestigationModule:
         self._active = None
         log.info("Investigation module ready.")
 
-    def start(self, location, investigator="Astroson"):
+    def start(self, location, investigator="Operator"):
         ts = datetime.now()
         session_id = ts.strftime("%Y%m%d_%H%M%S")
         self._active = {
