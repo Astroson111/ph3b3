@@ -18,6 +18,14 @@ If the integration adds new tools to Ph3b3, follow the module pattern in `module
 
 ---
 
+## Voice
+
+### Multilingual TTS
+
+Multilingual TTS — add per-language Piper voice models so Ph3b3 pronounces translations in a native accent (e.g. a Mandarin voice for Chinese output) instead of Alba reading romanization with an English mouth. Swap the voice model based on detected target language.
+
+---
+
 ## Flipper Zero Integration
 
 **Status: Planned**
