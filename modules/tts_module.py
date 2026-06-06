@@ -2,10 +2,42 @@ import base64
 import io
 import os
 import logging
+import re
 import subprocess
 import threading
 import wave
 from pathlib import Path
+
+
+def _strip_for_piper(text: str) -> str:
+    """Remove characters Piper/Alba cannot pronounce before synthesis.
+
+    Two-pass approach:
+      1. Replace "native_script (romanisation)" → "romanisation" so that
+         e.g. "你好 (nǐ hǎo)" becomes "nǐ hǎo" rather than going silent.
+      2. Drop any remaining code-points outside Piper's Latin/ASCII range.
+
+    Characters kept:
+      - ASCII (U+0000–U+007F)
+      - Latin Extended A/B and IPA (U+00C0–U+024F) — covers diacritics used in
+        pinyin (ǐ ǎ ō …), Cyrillic romanisations, etc.
+      - Latin Extended Additional (U+1E00–U+1EFF) — covers Vietnamese tones
+        and other precomposed Latin forms.
+    """
+    # Pass 1: "non-Latin-word (romanisation)" → "romanisation"
+    text = re.sub(
+        r'[^\x00-\x7FÀ-ɏḀ-ỿ]+\s*\(([^)]+)\)',
+        r'\1',
+        text,
+    )
+    # Pass 2: drop remaining non-speakable code-points
+    kept = [
+        ch for ch in text
+        if ord(ch) <= 0x7F
+        or 0x00C0 <= ord(ch) <= 0x024F
+        or 0x1E00 <= ord(ch) <= 0x1EFF
+    ]
+    return re.sub(r'  +', ' ', ''.join(kept)).strip()
 
 log = logging.getLogger("ph3b3.tts")
 
@@ -27,10 +59,13 @@ class TTSModule:
             return "TTS not available."
         if not text or not text.strip():
             return "Nothing to say."
+        tts_text = _strip_for_piper(text)
+        if not tts_text:
+            return "Nothing to say."
         if blocking:
-            self._speak_now(text)
+            self._speak_now(tts_text)
         else:
-            t = threading.Thread(target=self._speak_now, args=(text,), daemon=True)
+            t = threading.Thread(target=self._speak_now, args=(tts_text,), daemon=True)
             t.start()
         return f"Speaking: {text[:60]}"
 
@@ -46,9 +81,12 @@ class TTSModule:
         """Run Piper and return base64-encoded WAV, or None if unavailable."""
         if not self._available or not text or not text.strip():
             return None
+        tts_text = _strip_for_piper(text)
+        if not tts_text:
+            return None
         with self._lock:
             try:
-                cmd = f'echo {subprocess.list2cmdline([text])} | piper --model {VOICE_MODEL} --output-raw'
+                cmd = f'echo {subprocess.list2cmdline([tts_text])} | piper --model {VOICE_MODEL} --output-raw'
                 proc = subprocess.run(cmd, shell=True, capture_output=True)
                 raw_pcm = proc.stdout
                 if not raw_pcm:
