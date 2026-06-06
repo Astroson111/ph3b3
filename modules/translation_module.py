@@ -92,8 +92,15 @@ class TranslationModule:
         try:
             translated = GoogleTranslator(source="auto", target=translator_target).translate(text)
             display = self._format(text, translated, target)
+            tts_text = self._format_tts(text, translated, target)
             self._save_log(text, display, target)
-            return {"original": text, "translated": display, "target_lang": target, "error": None}
+            return {
+                "original": text,
+                "translated": display,   # full display string — native script + romanisation
+                "tts_text": tts_text,    # romanisation-only — safe to pass directly to Piper
+                "target_lang": target,
+                "error": None,
+            }
         except Exception as e:
             return {"error": str(e), "text": text}
 
@@ -108,6 +115,25 @@ class TranslationModule:
 
         if romanized and romanized.strip().lower() != translated.strip().lower():
             return f"{original} in {lang_name}: {translated} ({romanized})"
+        return f"{original} in {lang_name}: {translated}"
+
+    def _format_tts(self, original: str, translated: str, target: str) -> str:
+        """Spoken-only variant: romanisation without native-script characters.
+
+        The display string keeps the native script for the UI; this version is
+        what should reach Piper/Alba — native chars would be misread or skipped.
+        """
+        rom_base = _DIALECT_MAP.get(target, target.split('-')[0])
+        if rom_base not in NON_LATIN_LANGS:
+            return translated
+
+        lang_name = LANG_NAMES.get(target) or LANG_NAMES.get(rom_base, target.title())
+        romanized = self._romanize(translated, rom_base)
+
+        if romanized and romanized.strip().lower() != translated.strip().lower():
+            return f"{original} in {lang_name}: {romanized}"
+        # No romanisation available — fall back to display text; _strip_for_piper
+        # in tts_module will drop any characters Piper still can't handle.
         return f"{original} in {lang_name}: {translated}"
 
     def _romanize(self, text: str, base_lang: str) -> str | None:
