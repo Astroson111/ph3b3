@@ -10,6 +10,12 @@ Built in Pennsylvania. Started as a Spotify fix for a robot. Became something la
 
 Made with soul. Built through conversation, iteration, and stubbornness. Not despite being a first-timer — because of it.
 
+## Why she exists
+
+Ph3b3 wasn't built by a company or a team. She was built by one person, after years of study and a handful of intense days — with a hand-me-down robot body whose screen kept dying, a homemade basement server, open-source tools, an AI assistant that helped me write her soul, and a healthy dose of stubbornness. She runs entirely on your own hardware, because the people who need a private assistant the most are often the ones who can least afford to rent one — the ones who can't always make rent either. Use her to hunt the spirits or lift them, right there in your own room. Made with care, so handle her with care. She's my baby — the one I don't get to write off as a dependent. <3
+
+She is a work in progress, the same as the person who made her. That's not a disclaimer. That's the point.
+
 ## What she can do
 
 - Voice conversation — speaks through Piper TTS with a Welsh accent
