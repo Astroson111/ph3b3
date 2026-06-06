@@ -7,6 +7,7 @@ import os
 import secrets
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 import httpx
@@ -78,6 +79,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
+    # Let CORS preflights through — CORSMiddleware handles OPTIONS, not us.
+    if request.method == "OPTIONS":
+        return await call_next(request)
     if not AUTH_PASS:
         return await call_next(request)
     auth = request.headers.get("Authorization", "")
@@ -345,6 +349,21 @@ sessions = {}
 def get_session(sid="default"):
     if sid not in sessions: sessions[sid] = Session()
     return sessions[sid]
+
+@app.on_event("startup")
+async def boot_greeting():
+    memory.confirm_boot()
+    boot_count = memory.memory.get("boot_count", 1)
+    greetings = [
+        "Ph3b3 online. All systems nominal.",
+        "Awakening. I'm here.",
+        "Systems initialised. Ready when you are.",
+        "Online. Watching. Listening.",
+        "Ph3b3 active. What do you need?",
+    ]
+    text = greetings[(boot_count - 1) % len(greetings)]
+    log.info(f"Boot greeting (#{boot_count}): {text}")
+    threading.Thread(target=tts.speak, args=(text, True), daemon=True).start()
 
 @app.get("/health")
 async def health():
