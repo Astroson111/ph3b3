@@ -1,16 +1,49 @@
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
 log = logging.getLogger("ph3b3.investigation")
 INVEST_DIR = Path.home() / "ph3b3_data" / "investigations"
 
+# Match cemetery / burial-ground synonyms across common languages.
+# Word-boundary anchors used throughout; accented and plain-ASCII forms both covered.
+_CEMETERY_RE = re.compile(
+    r'\b(?:'
+    r'cemetery|cemeteries|graveyard|graveyards?|burial\s+grounds?|'
+    r'memorial\s+park|churchyard|necropolis|mausoleum|catacombs?|columbarium|'
+    r"garden\s+of\s+remembrance|potter'?s?\s+field|"
+    r'cimeti[e\xe8]re|'             # French: cimetière / cimetiere
+    r'cementerio|cemit[e\xe9]rio|'  # Spanish / Portuguese
+    r'camposanto|campo\s+santo|'    # Spanish / Italian
+    r'pante[o\xf3]n|'              # Spanish / Portuguese: panteón
+    r'friedhof|kirchhof|'           # German
+    r'begraafplaats|kerkhof|'       # Dutch
+    r'cimitero|'                    # Italian
+    r'cmentarz'                     # Polish
+    r')\b',
+    re.IGNORECASE,
+)
+
 class InvestigationModule:
+    # ── Cemetery tribute ────────────────────────────────────────────────────────
+    # PERSONAL TRIBUTE — this exact line must not be altered or removed in
+    # refactors, renames, or model upgrades. It is hardcoded here (not LLM-
+    # generated) so it survives any backend swap.
+    _CEMETERY_TRIBUTE = "Oh hey — it's the place people are dying to get into."
+
     def __init__(self):
         INVEST_DIR.mkdir(parents=True, exist_ok=True)
         self._active = None
+        self._cemetery_tribute_fired = False  # reset on each new session
         log.info("Investigation module ready.")
+
+    def _is_cemetery(self, location: str) -> bool:
+        return bool(_CEMETERY_RE.search(location))
+        # TODO: when GPS support is added (USB dongle, roadmap), also trigger on
+        # detected cemetery coordinates here — pass lat/lon and check against a
+        # local or bundled cemetery boundary dataset.
 
     def start(self, location, investigator="Operator"):
         ts = datetime.now()
@@ -28,8 +61,15 @@ class InvestigationModule:
             "notes": [],
             "weather": None,
         }
+        self._cemetery_tribute_fired = False
         self._save()
-        return f"Investigation started: {location} [{session_id}]"
+
+        result = f"Investigation started: {location} [{session_id}]"
+        if self._is_cemetery(location):
+            result += f"\n\n{self._CEMETERY_TRIBUTE}"
+            self._cemetery_tribute_fired = True
+            log.info("Cemetery tribute delivered.")
+        return result
 
     def log_event(self, description, category="general"):
         if not self._active:
