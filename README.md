@@ -84,3 +84,11 @@ Ph3b3 includes network scanning and cybersecurity tools intended for use on netw
 - Voice and camera data stays local — be mindful of others' privacy
 
 This project is a work in progress. Use it responsibly.
+
+## Constraints
+
+### Spotify Integration (Status: ABANDONED)
+As of June 2026, the Spotify Web API ecosystem has undergone restrictive changes. Due to mandatory Premium subscription requirements for all API access, the implementation of per-user OAuth limitations, and the deprecation of core playback endpoints, Ph3b3 will not support native Spotify integration.
+
+* **Rationale:** The API's current state is volatile and designed to restrict independent agentic development. Pursuing this integration introduces technical debt and a high probability of runtime failure regardless of code quality.
+* **Pivot:** All audio and media functionality for Ph3b3 will be managed via Local Media Architecture, such as direct file access using mpv or Navidrome. This ensures the tactical kit remains resilient, offline-capable, and independent of external API policy changes.
