@@ -31,13 +31,35 @@ AUTH_PASS = os.getenv("PH3B3_PASSWORD", "")
 if not AUTH_PASS:
     logging.warning("PH3B3_PASSWORD not set in .env — web UI is unprotected")
 
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-MODEL = os.getenv("PH3B3_MODEL", "hermes3")
+OLLAMA_HOST  = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+HEAVY_MODEL  = os.getenv("PH3B3_HEAVY_MODEL", os.getenv("PH3B3_MODEL", "hermes3:latest"))
+LIGHT_MODEL  = os.getenv("PH3B3_LIGHT_MODEL", "hermes3:latest")
+MODEL        = HEAVY_MODEL  # legacy alias kept for health endpoint and backward compat
 HOST = os.getenv("PH3B3_HOST", "0.0.0.0")
 PORT = int(os.getenv("PH3B3_PORT", "7331"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Ph3b3] %(message)s")
 log = logging.getLogger("ph3b3")
+
+LIGHT_TOOLS = frozenset({
+    "weather_current", "weather_ghost_hunting",
+    "start_timer", "pomodoro",
+    "tell_joke", "roast",
+    "add_reminder", "list_reminders",
+    "calendar_today", "calendar_week",
+    "spotify_play", "spotify_control", "spotify_now_playing",
+    "network_my_ip", "network_speedtest", "network_tools_menu",
+    "system_status", "gpu_status", "ollama_status",
+    "recall_memory", "remember_fact",
+    "bluetooth_scan", "bluetooth_status",
+    "add_note", "read_last_note", "search_notes",
+})
+
+def _select_model(called: set) -> str:
+    """Return LIGHT_MODEL when all called tools are lightweight; HEAVY_MODEL otherwise."""
+    if called and called.issubset(LIGHT_TOOLS):
+        return LIGHT_MODEL
+    return HEAVY_MODEL
 
 def load_soul():
     if not SOUL_FILE.exists():
@@ -66,10 +88,12 @@ from timer_module import TimerModule
 from reminders_module import RemindersModule
 from calendar_module import CalendarModule
 from weather_module import WeatherModule
+from resume_module import ResumeModule
 from network_module import NetworkModule
 from bluetooth_module import BluetoothModule
 from system_module import SystemModule
 from cybersec_module import CybersecModule
+from scam_detector import ScamDetector
 from investigation_module import InvestigationModule
 from camera_module import CameraModule
 from vision_stream_module import VisionStreamModule
@@ -121,10 +145,12 @@ timer = TimerModule()
 reminders = RemindersModule()
 calendar = CalendarModule()
 weather = WeatherModule()
+resume = ResumeModule()
 network = NetworkModule()
 bluetooth = BluetoothModule()
 system = SystemModule()
 cybersec = CybersecModule()
+scam_detector = ScamDetector()
 investigation = InvestigationModule()
 camera = CameraModule()
 vision_stream = VisionStreamModule()
@@ -137,7 +163,8 @@ TOOLS = [
     {"type":"function","function":{"name":"spotify_now_playing","description":"Get currently playing track","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"dnd_lookup","description":"Look up D&D rules spells monsters lore","parameters":{"type":"object","properties":{"query":{"type":"string"},"category":{"type":"string","default":"any"},"edition":{"type":"string","default":"5e"}},"required":["query"]}}},
     {"type":"function","function":{"name":"film_lookup","description":"Look up obscure films or get recommendations","parameters":{"type":"object","properties":{"query":{"type":"string"},"mode":{"type":"string","default":"lookup"}},"required":["query"]}}},
-    {"type":"function","function":{"name":"translate_text","description":"Translate text to any language","parameters":{"type":"object","properties":{"text":{"type":"string"},"target_lang":{"type":"string"}},"required":["text","target_lang"]}}},
+    {"type":"function","function":{"name":"translate_text","description":"Translate text to any language, fully offline after language pack is installed","parameters":{"type":"object","properties":{"text":{"type":"string"},"target_lang":{"type":"string"},"from_lang":{"type":"string","default":"en","description":"Source language code (default: en)"}},"required":["text","target_lang"]}}},
+    {"type":"function","function":{"name":"translate_install_pack","description":"Download and install a translation language pack one time. Requires network access for the download only — all translation is local after this.","parameters":{"type":"object","properties":{"from_lang":{"type":"string","default":"en"},"to_lang":{"type":"string"}},"required":["to_lang"]}}},
     {"type":"function","function":{"name":"remember_fact","description":"Remember a fact permanently","parameters":{"type":"object","properties":{"key":{"type":"string"},"value":{"type":"string"}},"required":["key","value"]}}},
     {"type":"function","function":{"name":"log_anomaly","description":"Log a detected anomaly","parameters":{"type":"object","properties":{"description":{"type":"string"},"source":{"type":"string","default":"camera"}},"required":["description"]}}},
     {"type":"function","function":{"name":"recall_memory","description":"Search long-term memory","parameters":{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"]}}},
@@ -167,6 +194,15 @@ TOOLS = [
     {"type":"function","function":{"name":"calendar_week","description":"Get this weeks calendar","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"weather_current","description":"Get current weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}},
     {"type":"function","function":{"name":"weather_ghost_hunting","description":"Weather field notes for ghost hunting","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}},
+    {"type":"function","function":{"name":"extract_job_posting","description":"Analyze a job posting from a URL or pasted text. Returns structured breakdown: job title, company, location, salary (only if stated — never hallucinated), hard requirements, soft requirements, red flags, culture signals, and a one-line verdict. Use whenever the user shares a job link or pastes a job description.","parameters":{"type":"object","properties":{"source":{"type":"string","description":"A URL to the job posting page, or the full pasted text of the posting"}},"required":["source"]}}},
+    {"type":"function","function":{"name":"profile_get","description":"Read the candidate's full stored profile: skills, experience, certifications, projects, notes. Call this before match_candidate_to_job to confirm the profile has data.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"profile_add_skill","description":"Add one or more skills to the candidate profile. Accepts a single skill name or a comma-separated list.","parameters":{"type":"object","properties":{"skill":{"type":"string","description":"Skill name or comma-separated list of skills"}},"required":["skill"]}}},
+    {"type":"function","function":{"name":"profile_add_experience","description":"Add a work experience entry to the candidate profile.","parameters":{"type":"object","properties":{"role":{"type":"string"},"org":{"type":"string"},"duration":{"type":"string"},"bullets":{"type":"array","items":{"type":"string"}}},"required":["role","org"]}}},
+    {"type":"function","function":{"name":"profile_add_certification","description":"Add a certification to the candidate profile.","parameters":{"type":"object","properties":{"name":{"type":"string"},"issuer":{"type":"string"},"year":{"type":"integer"}},"required":["name"]}}},
+    {"type":"function","function":{"name":"profile_add_project","description":"Add a project to the candidate profile.","parameters":{"type":"object","properties":{"name":{"type":"string"},"description":{"type":"string"},"tech":{"type":"array","items":{"type":"string"}},"bullets":{"type":"array","items":{"type":"string"}}},"required":["name"]}}},
+    {"type":"function","function":{"name":"profile_add_note","description":"Add a free-text note to the candidate profile — preferences, constraints, target role, salary floor, anything that should inform application strategy.","parameters":{"type":"object","properties":{"note":{"type":"string"}},"required":["note"]}}},
+    {"type":"function","function":{"name":"match_candidate_to_job","description":"Match the stored candidate profile against a job analysis produced by extract_job_posting. Returns: match score (hard reqs met/total), gap analysis per requirement, application angle suggestion, tailored resume bullets, and a WORTH APPLYING/STRETCH/SKIP verdict. Always verify profile_get has data before calling.","parameters":{"type":"object","properties":{"job_analysis":{"type":"string","description":"The full structured text output from extract_job_posting"}},"required":["job_analysis"]}}},
+    {"type":"function","function":{"name":"draft_resume_section","description":"Draft a single polished resume bullet in action-verb, achievement-framed format for a specific job requirement, drawing from a candidate profile entry. No fluff, no filler, no invented metrics.","parameters":{"type":"object","properties":{"requirement":{"type":"string","description":"The specific job requirement to address"},"profile_entry":{"type":"string","description":"The relevant candidate experience, project, or skill to draw from"}},"required":["requirement","profile_entry"]}}},
     {"type":"function","function":{"name":"network_my_ip","description":"Get the host machine's IP addresses","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"network_scan","description":"Scan the local network","parameters":{"type":"object","properties":{"target":{"type":"string","default":"192.168.0.0/24"}}}}},
     {"type":"function","function":{"name":"network_who_is_on","description":"Who is on the network right now","parameters":{"type":"object","properties":{}}}},
@@ -189,6 +225,8 @@ TOOLS = [
     {"type":"function","function":{"name":"dns_records","description":"Get DNS records for a domain","parameters":{"type":"object","properties":{"domain":{"type":"string"}},"required":["domain"]}}},
     {"type":"function","function":{"name":"ssl_check","description":"Check SSL certificate for a host","parameters":{"type":"object","properties":{"host":{"type":"string"}},"required":["host"]}}},
     {"type":"function","function":{"name":"cybersec_study","description":"Study a cybersecurity topic","parameters":{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"]}}},
+    {"type":"function","function":{"name":"analyze_scam","description":"Analyze any text for scam and manipulation tactics — accepts SMS, email, job offers, contracts, voicemail transcripts, anything suspicious. Returns likelihood rating (Clean / Suspicious / Likely Scam / Run. Just run.), tactics detected in plain English, what the sender actually wants, what to do right now, and a plain verdict. Fully offline, nothing leaves Nyx. CALL THIS whenever someone pastes or describes a suspicious message, offer, or demand.","parameters":{"type":"object","properties":{"text":{"type":"string","description":"The suspicious text to analyze — paste the full message"}},"required":["text"]}}},
+    {"type":"function","function":{"name":"check_identity_exposure","description":"Assess risk and build a recovery plan when personal information has been exposed — through a data breach, scam, lost wallet, phishing, or anything else. Tell this tool what was exposed (SSN, email, bank account, date of birth, etc.) and optionally how it happened. Returns risk per item, numbered priority actions, specific agencies and contacts, freeze recommendations, and a calm verdict. Fully offline. Nothing is stored.","parameters":{"type":"object","properties":{"exposed":{"type":"string","description":"What was exposed — comma-separated, e.g. 'SSN, email, bank account number, date of birth'"},"context":{"type":"string","description":"Optional: how or where it happened — e.g. 'data breach', 'phishing scam', 'lost wallet'"}},"required":["exposed"]}}},
     {"type":"function","function":{"name":"investigation_start","description":"Start a ghost hunting investigation session","parameters":{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}}},
     {"type":"function","function":{"name":"investigation_end","description":"End investigation and generate report","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"investigation_log_evp","description":"Log an EVP timestamp","parameters":{"type":"object","properties":{"note":{"type":"string"}}}}},
@@ -206,11 +244,28 @@ TOOLS = [
     {"type":"function","function":{"name":"obsbot_center","description":"Reset OBSBOT pan, tilt, and zoom to center/default","parameters":{"type":"object","properties":{}}}}
 ]
 
+_SENSITIVE_KEY_FRAGMENTS = frozenset({
+    "password", "token", "key", "secret", "credential", "auth", "pin"
+})
+
+
+def _scrub_args(args: dict, tool_name: str = "") -> dict:
+    scrubbed = {}
+    for k, v in args.items():
+        if tool_name == "remember_fact" and k == "key":
+            scrubbed[k] = v
+        elif any(frag in k.lower() for frag in _SENSITIVE_KEY_FRAGMENTS):
+            scrubbed[k] = "[REDACTED]"
+        else:
+            scrubbed[k] = v
+    return scrubbed
+
+
 def _log_skill(name: str, args: dict, result, success: bool) -> None:
     entry = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "tool": name,
-        "args_summary": {k: str(v)[:120] for k, v in args.items()},
+        "args_summary": {k: str(v)[:120] for k, v in _scrub_args(args, name).items()},
         "result_summary": str(result)[:200],
         "success": success,
     }
@@ -232,15 +287,32 @@ async def execute_tool(name, args):
         elif name == "dnd_lookup": result = dnd.lookup(args["query"], args.get("category","any"), args.get("edition","5e"))
         elif name == "film_lookup": result = film.lookup(args["query"], args.get("mode","lookup"))
         elif name == "translate_text":
-            r = translation.translate(args["text"], args.get("target_lang"))
-            result = f"Error: {r['error']}" if r.get("error") else r.get("translated", "")
+            r = translation.translate(args["text"], args.get("target_lang"), args.get("from_lang","en"))
+            if r.get("needs_install"):
+                tts.speak(
+                    f"I need to download the {r['from_code']} to {r['to_code']} language pack. "
+                    "After that, all translation stays on Nyx with no data leaving. Say yes and I'll install it."
+                )
+                result = r["error"]
+            elif r.get("error"):
+                result = f"Error: {r['error']}"
+            else:
+                result = r.get("translated", "")
+        elif name == "translate_install_pack":
+            result = translation.install_language_pack(args.get("from_lang","en"), args.get("to_lang"))
         elif name == "remember_fact": result = memory.remember_fact(args["key"], args["value"])
         elif name == "log_anomaly": result = memory.log_anomaly(args["description"], args.get("source","camera"))
         elif name == "recall_memory": result = memory.recall(args["topic"])
         elif name == "occult_lookup": result = occult.lookup(args["query"], args.get("category","any"))
         elif name == "occult_random": result = occult.random_phenomenon()
-        elif name == "tell_joke": result = jokes.tell_joke(args.get("category","any"))
-        elif name == "roast": result = jokes.roast_security() if args.get("topic") == "security" else jokes.roast_dnd()
+        elif name == "tell_joke":
+            joke = jokes.tell_joke(args.get("category","any"))
+            tts.speak(joke)
+            result = "Joke delivered."
+        elif name == "roast":
+            roast_text = jokes.roast_security() if args.get("topic") == "security" else jokes.roast_dnd()
+            tts.speak(roast_text)
+            result = "Roast delivered."
         elif name == "look": result = vision.look(args.get("prompt"))
         elif name == "set_baseline": result = vision.set_baseline()
         elif name == "check_anomaly": result = vision.check_anomaly()
@@ -249,7 +321,11 @@ async def execute_tool(name, args):
         elif name == "speak": result = tts.speak(args["text"])
         elif name == "listen":
             r = stt.listen(args.get("duration",10))
-            result = f"Heard: {r.get('text','')}" if not r.get("error") else f"Error: {r['error']}"
+            if r.get("error"):
+                tts.speak("I couldn't hear that, my local voice recognition failed.")
+                result = f"Error: {r['error']}"
+            else:
+                result = f"Heard: {r.get('text','')}"
         elif name == "anime_lookup": result = anime.lookup(args["query"], args.get("mode","lookup"))
         elif name == "anime_random": result = anime.random_rec()
         elif name == "add_story": result = stories.add_story_from_person(args["name"], args["story"])
@@ -257,14 +333,23 @@ async def execute_tool(name, args):
         elif name == "add_note": result = notes.add(args["content"], args.get("tag","general"))
         elif name == "read_last_note": result = notes.read_last(args.get("tag"))
         elif name == "search_notes": result = notes.search(args["query"])
-        elif name == "start_timer": result = timer.set_timer(args["name"], args["seconds"])
-        elif name == "pomodoro": result = timer.pomodoro(args.get("minutes",25))
+        elif name == "start_timer": result = timer.set_timer(args["name"], args["seconds"], callback=tts.speak)
+        elif name == "pomodoro": result = timer.pomodoro(args.get("minutes",25), callback=tts.speak)
         elif name == "add_reminder": result = reminders.add(args["text"], args.get("when"), args.get("tag","general"))
         elif name == "list_reminders": result = reminders.list_pending()
         elif name == "calendar_today": result = calendar.today()
         elif name == "calendar_week": result = calendar.week()
         elif name == "weather_current": result = weather.current(args.get("location"))
         elif name == "weather_ghost_hunting": result = weather.good_for_ghost_hunting(args.get("location"))
+        elif name == "extract_job_posting": result = resume.extract_job_posting(args["source"])
+        elif name == "profile_get": result = resume.profile_get()
+        elif name == "profile_add_skill": result = resume.profile_add_skill(args["skill"])
+        elif name == "profile_add_experience": result = resume.profile_add_experience(args["role"], args["org"], args.get("duration", ""), args.get("bullets"))
+        elif name == "profile_add_certification": result = resume.profile_add_certification(args["name"], args.get("issuer", ""), args.get("year"))
+        elif name == "profile_add_project": result = resume.profile_add_project(args["name"], args.get("description", ""), args.get("tech"), args.get("bullets"))
+        elif name == "profile_add_note": result = resume.profile_add_note(args["note"])
+        elif name == "match_candidate_to_job": result = resume.match_candidate_to_job(args["job_analysis"])
+        elif name == "draft_resume_section": result = resume.draft_resume_section(args["requirement"], args["profile_entry"])
         elif name == "network_my_ip": result = network.my_ip()
         elif name == "network_scan": result = network.scan_network(args.get("target","192.168.0.0/24"))
         elif name == "network_who_is_on": result = network.who_is_on_network()
@@ -287,6 +372,27 @@ async def execute_tool(name, args):
         elif name == "dns_records": result = cybersec.dns_records(args["domain"])
         elif name == "ssl_check": result = cybersec.ssl_check(args["host"])
         elif name == "cybersec_study": result = cybersec.study_topic(args["topic"])
+        elif name == "analyze_scam":
+            result = scam_detector.analyze(args["text"])
+            if "Run. Just run." in result:
+                tts.speak(
+                    "Run. Just run. This is a scam. Stop all contact right now. "
+                    "Do not send any money. Do not share any information. "
+                    "Do not give anyone access to your computer.",
+                    blocking=False,
+                )
+        elif name == "check_identity_exposure":
+            result = scam_detector.check_identity_exposure(args["exposed"], args.get("context", ""))
+            exposed_lower = args["exposed"].lower()
+            if any(kw in exposed_lower for kw in ("ssn", "social security")):
+                tts.speak(
+                    "Your Social Security number was exposed. "
+                    "The single most important first step is a credit freeze at all three bureaus: "
+                    "Equifax, Experian, and TransUnion. "
+                    "It is free, it can be done online or by phone today, "
+                    "and it stops almost everything a thief can do with that number.",
+                    blocking=False,
+                )
         elif name == "investigation_start": result = investigation.start(args["location"])
         elif name == "investigation_end": result = investigation.end()
         elif name == "investigation_log_evp": result = investigation.log_evp(args.get("note",""))
@@ -315,23 +421,35 @@ async def execute_tool(name, args):
 
 async def chat_with_tools(messages):
     async with httpx.AsyncClient(timeout=120) as client:
-        payload = {"model":MODEL,"messages":messages,"stream":False,"tools":TOOLS,"options":{"temperature":0.7,"num_ctx":8192}}
-        response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
-        response.raise_for_status()
+        payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":TOOLS,"options":{"temperature":0.7,"num_ctx":8192}}
+        try:
+            response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
+            response.raise_for_status()
+        except Exception as e:
+            log.error(f"Ollama initial request failed: {e}")
+            return f"I can't reach my language model right now ({HEAVY_MODEL}). Is Ollama running?", messages
         msg = response.json()["message"]
+        called_tools: set = set()
         loop = 0
         while msg.get("tool_calls") and loop < 5:
             loop += 1
             messages.append(msg)
             for tc in msg["tool_calls"]:
                 fn = tc["function"]["name"]
+                called_tools.add(fn)
                 args = tc["function"]["arguments"]
                 if isinstance(args, str): args = json.loads(args)
                 result = await execute_tool(fn, args)
                 messages.append({"role":"tool","content":str(result)})
+            follow_model = _select_model(called_tools)
+            payload["model"] = follow_model
             payload["messages"] = messages
-            response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
-            response.raise_for_status()
+            try:
+                response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
+                response.raise_for_status()
+            except Exception as e:
+                log.error(f"Ollama follow-up request failed (model={follow_model}): {e}")
+                return f"I completed the action but couldn't formulate a response — model '{follow_model}' may not be installed.", messages
             msg = response.json()["message"]
         return msg.get("content",""), messages
 
@@ -363,7 +481,11 @@ async def boot_greeting():
     ]
     text = greetings[(boot_count - 1) % len(greetings)]
     log.info(f"Boot greeting (#{boot_count}): {text}")
-    threading.Thread(target=tts.speak, args=(text, True), daemon=True).start()
+    def _greet():
+        tts.speak(text, True)
+        tts.soul_line()
+    threading.Thread(target=_greet, daemon=True).start()
+    reminders.start_delivery_loop(tts.speak)
 
 @app.get("/health")
 async def health():
@@ -385,7 +507,10 @@ async def skills_log():
 @app.post("/chat")
 async def chat_endpoint(body: dict):
     session = get_session(body.get("session_id","default"))
-    session.add("user", body.get("message",""))
+    user_msg = body.get("message","")
+    if "soul" in user_msg.lower():
+        tts.soul_line()
+    session.add("user", user_msg)
     response, updated = await chat_with_tools(session.messages())
     session.history = updated
     session.add("assistant", response)
@@ -407,6 +532,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str = "default"):
             data = await websocket.receive_json()
             user_input = data.get("message","")
             if not user_input: continue
+            if "soul" in user_input.lower():
+                tts.soul_line()
             await websocket.send_json({"status":"thinking"})
             session.add("user", user_input)
             response, updated = await chat_with_tools(session.messages())
