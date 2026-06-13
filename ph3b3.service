@@ -9,6 +9,10 @@ Type=simple
 User=astroson
 WorkingDirectory=$HOME/Desktop/ph3b3_v2
 EnvironmentFile=$HOME/Desktop/ph3b3_v2/.env
+# piper (TTS) and aplay live outside systemd's minimal default PATH — pipx puts
+# piper in ~/.local/bin and pip puts it in the venv. Without this the server
+# starts but TTS silently fails with "piper: command not found".
+Environment=PATH=$HOME/Desktop/ph3b3_v2/.venv/bin:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=$HOME/Desktop/ph3b3_v2/.venv/bin/python agent/server.py
 Restart=on-failure
 RestartSec=10
