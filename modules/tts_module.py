@@ -44,6 +44,33 @@ log = logging.getLogger("ph3b3.tts")
 VOICE_DIR   = Path.home() / "ph3b3_data" / "voices"
 VOICE_MODEL = os.getenv("PH3B3_VOICE_MODEL", str(VOICE_DIR / "en_GB-alba-medium.onnx"))
 
+
+def _resolve_audio_device(fallback: str = "plughw:4,0") -> str:
+    """Return an aplay -D specifier, resolved by card name to survive index renumbers.
+
+    Resolution order:
+      1. PH3B3_AUDIO_DEVICE env var (explicit override)
+      2. First card whose name contains "USB Audio" in `aplay -l` output
+      3. fallback — card index 4 may need updating if USB devices shift
+    """
+    explicit = os.getenv("PH3B3_AUDIO_DEVICE")
+    if explicit:
+        return explicit
+    try:
+        out = subprocess.run(["aplay", "-l"], capture_output=True, text=True).stdout
+        for line in out.splitlines():
+            if "USB Audio" in line:
+                m = re.search(r"card (\d+):", line)
+                if m:
+                    return f"plughw:{m.group(1)},0"
+    except Exception:
+        pass
+    return fallback
+
+
+AUDIO_DEVICE = _resolve_audio_device()
+
+
 class TTSModule:
     def __init__(self):
         self._lock      = threading.Lock()
@@ -72,7 +99,7 @@ class TTSModule:
     def _speak_now(self, text):
         with self._lock:
             try:
-                cmd = f'echo {subprocess.list2cmdline([text])} | piper --model {VOICE_MODEL} --output-raw | aplay -r 22050 -f S16_LE -c 1 -t raw'
+                cmd = f'echo {subprocess.list2cmdline([text])} | piper --model {VOICE_MODEL} --output-raw | aplay -r 22050 -f S16_LE -c 1 -t raw -D {AUDIO_DEVICE}'
                 subprocess.run(cmd, shell=True, check=True)
             except Exception as e:
                 log.error(f"TTS error: {e}")
