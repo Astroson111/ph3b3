@@ -503,7 +503,9 @@ async def boot_greeting():
         tts.speak(text, True)
         tts.soul_line()
     threading.Thread(target=_greet, daemon=True).start()
-    reminders.start_delivery_loop(tts.speak)
+    reminder_msg = reminders.on_boot()
+    if reminder_msg:
+        threading.Thread(target=lambda: tts.speak(reminder_msg), daemon=True).start()
 
 @app.get("/health")
 async def health():
