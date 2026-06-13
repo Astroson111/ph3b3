@@ -42,16 +42,15 @@ JOKES = {
     ],
 }
 
+ALL_JOKES = [joke for jokes in JOKES.values() for joke in jokes]
+
 class JokesModule:
     def __init__(self):
         log.info("Jokes module loaded.")
 
     def tell_joke(self, category="any"):
-        if category == "any" or category not in JOKES:
-            cat = random.choice(list(JOKES.keys()))
-        else:
-            cat = category.lower()
-        setup, punchline = random.choice(JOKES[cat])
+        pool = JOKES.get(category.lower()) if category != "any" else None
+        setup, punchline = random.choice(pool if pool else ALL_JOKES)
         return f"{setup}\n\n{punchline}".strip()
 
     def roast_dnd(self):
