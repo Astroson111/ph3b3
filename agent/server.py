@@ -29,7 +29,7 @@ SKILL_LOG.parent.mkdir(parents=True, exist_ok=True)
 AUTH_USER = os.getenv("PH3B3_USER", "admin")
 AUTH_PASS = os.getenv("PH3B3_PASSWORD", "")
 if not AUTH_PASS:
-    logging.warning("PH3B3_PASSWORD not set in .env — web UI is unprotected")
+    logging.error("PH3B3_PASSWORD not set in .env — all requests will be refused until it is configured")
 
 OLLAMA_HOST  = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 HEAVY_MODEL  = os.getenv("PH3B3_HEAVY_MODEL", os.getenv("PH3B3_MODEL", "hermes3:latest"))
@@ -37,6 +37,12 @@ LIGHT_MODEL  = os.getenv("PH3B3_LIGHT_MODEL", "hermes3:latest")
 MODEL        = HEAVY_MODEL  # legacy alias kept for health endpoint and backward compat
 HOST = os.getenv("PH3B3_HOST", "0.0.0.0")
 PORT = int(os.getenv("PH3B3_PORT", "7331"))
+
+_raw_origins = os.getenv(
+    "PH3B3_ALLOWED_ORIGINS",
+    f"http://localhost:{PORT},http://127.0.0.1:{PORT}",
+)
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Ph3b3] %(message)s")
 log = logging.getLogger("ph3b3")
@@ -99,7 +105,7 @@ from camera_module import CameraModule
 from vision_stream_module import VisionStreamModule
 
 app = FastAPI(title="Ph3b3 Agent", version="2.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
@@ -107,7 +113,10 @@ async def basic_auth(request: Request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
     if not AUTH_PASS:
-        return await call_next(request)
+        return Response(
+            content="Ph3b3 is not configured for access — set PH3B3_PASSWORD in .env",
+            status_code=503,
+        )
     auth = request.headers.get("Authorization", "")
     authed = False
     if auth.startswith("Basic "):
@@ -226,7 +235,7 @@ TOOLS = [
     {"type":"function","function":{"name":"ssl_check","description":"Check SSL certificate for a host","parameters":{"type":"object","properties":{"host":{"type":"string"}},"required":["host"]}}},
     {"type":"function","function":{"name":"cybersec_study","description":"Study a cybersecurity topic","parameters":{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"]}}},
     {"type":"function","function":{"name":"analyze_scam","description":"Analyze any text for scam and manipulation tactics — accepts SMS, email, job offers, contracts, voicemail transcripts, anything suspicious. Returns likelihood rating (Clean / Suspicious / Likely Scam / Run. Just run.), tactics detected in plain English, what the sender actually wants, what to do right now, and a plain verdict. Fully offline, nothing leaves Nyx. CALL THIS whenever someone pastes or describes a suspicious message, offer, or demand.","parameters":{"type":"object","properties":{"text":{"type":"string","description":"The suspicious text to analyze — paste the full message"}},"required":["text"]}}},
-    {"type":"function","function":{"name":"check_identity_exposure","description":"Assess risk and build a recovery plan when personal information has been exposed — through a data breach, scam, lost wallet, phishing, or anything else. Tell this tool what was exposed (SSN, email, bank account, date of birth, etc.) and optionally how it happened. Returns risk per item, numbered priority actions, specific agencies and contacts, freeze recommendations, and a calm verdict. Fully offline. Nothing is stored.","parameters":{"type":"object","properties":{"exposed":{"type":"string","description":"What was exposed — comma-separated, e.g. 'SSN, email, bank account number, date of birth'"},"context":{"type":"string","description":"Optional: how or where it happened — e.g. 'data breach', 'phishing scam', 'lost wallet'"}},"required":["exposed"]}}},
+    {"type":"function","function":{"name":"check_identity_exposure","description":"Assess risk and build a recovery plan when personal information has been exposed — through a data breach, scam, lost wallet, phishing, or anything else. Tell this tool what was exposed (SSN, email, bank account, date of birth, etc.) and optionally how it happened. Returns risk per item, numbered priority actions, specific agencies and contacts, freeze recommendations, and a calm verdict. Fully offline. Input is not logged to disk.","parameters":{"type":"object","properties":{"exposed":{"type":"string","description":"What was exposed — comma-separated, e.g. 'SSN, email, bank account number, date of birth'"},"context":{"type":"string","description":"Optional: how or where it happened — e.g. 'data breach', 'phishing scam', 'lost wallet'"}},"required":["exposed"]}}},
     {"type":"function","function":{"name":"investigation_start","description":"Start a ghost hunting investigation session","parameters":{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}}},
     {"type":"function","function":{"name":"investigation_end","description":"End investigation and generate report","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"investigation_log_evp","description":"Log an EVP timestamp","parameters":{"type":"object","properties":{"note":{"type":"string"}}}}},
@@ -245,7 +254,8 @@ TOOLS = [
 ]
 
 _SENSITIVE_KEY_FRAGMENTS = frozenset({
-    "password", "token", "key", "secret", "credential", "auth", "pin"
+    "password", "token", "key", "secret", "credential", "auth", "pin",
+    "exposed", "context",
 })
 
 
@@ -419,6 +429,8 @@ async def execute_tool(name, args):
     _log_skill(name, args, result, success)
     return result
 
+ONE_SHOT_TOOLS = frozenset({"tell_joke", "roast"})
+
 async def chat_with_tools(messages):
     async with httpx.AsyncClient(timeout=120) as client:
         payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":TOOLS,"options":{"temperature":0.7,"num_ctx":8192}}
@@ -430,16 +442,22 @@ async def chat_with_tools(messages):
             return f"I can't reach my language model right now ({HEAVY_MODEL}). Is Ollama running?", messages
         msg = response.json()["message"]
         called_tools: set = set()
+        tool_cache: dict = {}
         loop = 0
         while msg.get("tool_calls") and loop < 5:
             loop += 1
             messages.append(msg)
             for tc in msg["tool_calls"]:
                 fn = tc["function"]["name"]
-                called_tools.add(fn)
                 args = tc["function"]["arguments"]
                 if isinstance(args, str): args = json.loads(args)
-                result = await execute_tool(fn, args)
+                if fn in ONE_SHOT_TOOLS and fn in tool_cache:
+                    result = tool_cache[fn]
+                else:
+                    result = await execute_tool(fn, args)
+                    called_tools.add(fn)
+                    if fn in ONE_SHOT_TOOLS:
+                        tool_cache[fn] = result
                 messages.append({"role":"tool","content":str(result)})
             follow_model = _select_model(called_tools)
             payload["model"] = follow_model
