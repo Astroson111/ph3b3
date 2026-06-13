@@ -42,6 +42,11 @@ PORT = int(os.getenv("PH3B3_PORT", "7331"))
 _DEFAULT_CORS = "http://localhost:7331,http://127.0.0.1:7331"
 CORS_ORIGINS = [o.strip() for o in os.getenv("PH3B3_CORS_ORIGINS", _DEFAULT_CORS).split(",") if o.strip()]
 
+# WebSocket auth — optional shared secret required on the /ws handshake.
+# Leave unset to keep native clients (Stack-chan) connecting without a token;
+# the Origin check on the handshake still blocks browser-based WS hijacking.
+WS_TOKEN = os.getenv("PH3B3_WS_TOKEN", "")
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Ph3b3] %(message)s")
 log = logging.getLogger("ph3b3")
 
@@ -391,8 +396,24 @@ async def clear_session(session_id: str):
     if session_id in sessions: sessions[session_id].reset()
     return {"status":"cleared"}
 
+def _ws_authorized(websocket: WebSocket) -> bool:
+    """Gate WebSocket handshakes. Browsers send an Origin header (native clients
+    like Stack-chan do not); reject browser origins outside the CORS allowlist to
+    stop cross-site WebSocket hijacking. If PH3B3_WS_TOKEN is set, also require a
+    matching ?token= query param so non-browser clients must authenticate too."""
+    origin = websocket.headers.get("origin")
+    if origin is not None and origin not in CORS_ORIGINS:
+        return False
+    if WS_TOKEN and not secrets.compare_digest(websocket.query_params.get("token", ""), WS_TOKEN):
+        return False
+    return True
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str = "default"):
+    if not _ws_authorized(websocket):
+        log.warning(f"Rejected WS handshake (origin={websocket.headers.get('origin')!r})")
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     session = get_session(session_id)
     log.info(f"Stack-chan connected: {session_id}")
