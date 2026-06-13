@@ -32,6 +32,96 @@ Because your conversations are yours. Because privacy matters. Because you shoul
 
 Ph3b3 is a work in progress. That's the point.
 
+## Running Ph3b3 on Windows 11 (via WSL2)
+
+Ph3b3 was born on Ubuntu, but she runs happily on Windows 11 through WSL2 — her Linux home lives inside Windows, while Ollama runs natively on the Windows side so your GPU does the heavy lifting. This is the smoothest way to give her a room on a Windows machine.
+
+### Prerequisites
+
+- **WSL2 with Ubuntu 24.04** — from an admin PowerShell, run `wsl --install -d Ubuntu-24.04`, reboot, then create your Linux username and password when prompted.
+- **Ollama for Windows** — install from [ollama.com](https://ollama.com), then pull the models she thinks and sees with:
+  ```powershell
+  ollama pull hermes3
+  ollama pull llava
+  ```
+  (`llava` is only needed for camera vision — skip it if you're tight on VRAM.)
+- **Git for Windows** — from [git-scm.com](https://git-scm.com), though the `git` already inside Ubuntu works just as well.
+
+### 1. Turn on mirrored networking
+
+By default, WSL can't reach the Ollama server running over on Windows. Mirrored networking fixes that — it lets WSL talk to Windows over plain `localhost`. Create `C:\Users\<you>\.wslconfig` with:
+
+```ini
+[wsl2]
+networkingMode=mirrored
+```
+
+Then restart WSL so it takes hold (from PowerShell):
+
+```powershell
+wsl --shutdown
+```
+
+Now the default `OLLAMA_HOST=http://localhost:11434` in `.env` reaches Windows Ollama straight from inside WSL — no extra config.
+
+### 2. Clone into your WSL home
+
+Open the **Ubuntu** terminal and clone her into the Linux filesystem — *not* a Windows folder like `/mnt/c/...`, which is slow and trips over file permissions:
+
+```bash
+cd ~
+git clone https://github.com/Astroson111/ph3b3.git
+cd ph3b3
+cp .env.example .env
+nano .env          # set PH3B3_USER / PH3B3_PASSWORD and any API keys
+```
+
+### 3. Run setup
+
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+This installs the system libraries, creates a `.venv`, and installs every Python dependency. On a fresh Ubuntu 24.04 the venv step may need its package first — if setup stops there, install it and run `./setup.sh` again:
+
+```bash
+sudo apt install -y python3-venv
+```
+
+### 4. Download the Alba voice
+
+```bash
+mkdir -p ~/ph3b3_data/voices
+cd ~/ph3b3_data/voices
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx.json
+```
+
+### 5. Wake her up
+
+From the Ubuntu terminal:
+
+```bash
+cd ~/ph3b3
+./start.sh
+```
+
+You'll see a harmless `ollama: command not found` line — that's expected, because Ollama lives on the Windows side, not inside WSL. Once she's awake, open a browser on Windows and go to:
+
+```
+http://localhost:7331
+```
+
+Sign in with the `PH3B3_USER` / `PH3B3_PASSWORD` you set in `.env`.
+
+### What works, and what needs a little more
+
+- **Voice output works in the browser.** Piper synthesises Alba's voice server-side and the web UI plays it back — no Windows audio setup required.
+- **Live microphone and speaker** — talking to her directly through the host's audio devices — need extra WSL audio plumbing (PulseAudio/WSLg routing) that isn't wired up by default. Browser playback is the path that works out of the box.
+- **Camera vision is untested on this path.** `llava` runs fine in Ollama, but WSL2 has no webcam by default — there's no `/dev/video0` unless you forward the USB device in with [`usbipd-win`](https://github.com/dorssel/usbipd-win). Until that's set up, the camera tools have nothing to look at; her language and voice features don't depend on it.
+- **Spotify runs in mock mode** unless you add credentials to `.env` — and per the note below, native Spotify support is retired anyway.
+
 ## Remote Access (Portability)
 
 Ph3b3 runs on your home machine, but you don't have to be home to use her.
