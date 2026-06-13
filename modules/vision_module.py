@@ -6,7 +6,7 @@ import time
 import logging
 import threading
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 log = logging.getLogger("ph3b3.vision")
@@ -15,6 +15,11 @@ OLLAMA_API_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434") + "/api/gene
 VISION_MODEL   = os.getenv("PH3B3_VISION_MODEL", "llava")
 CAPTURE_DIR    = Path.home() / "ph3b3_data" / "captures"
 ANOMALY_DIR    = Path.home() / "ph3b3_data" / "anomalies"
+
+# Camera-capture retention: saved frames/anomaly snapshots older than this are
+# deleted on capture and at startup. Room imagery, so the privacy default is 7
+# days. Set PH3B3_CAPTURE_TTL_DAYS=0 to keep captures forever.
+CAPTURE_TTL_DAYS = int(os.getenv("PH3B3_CAPTURE_TTL_DAYS", "7"))
 
 ANALYSIS_PROMPT = (
     "You are Ph3b3. This is what your camera sees right now. "
@@ -46,7 +51,23 @@ class VisionModule:
         self._monitor_thread = None
         CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
         ANOMALY_DIR.mkdir(parents=True, exist_ok=True)
+        self._prune_captures()
         log.info(f"Vision module ready — device {self.device_path} — vision model: {VISION_MODEL}")
+
+    def _prune_captures(self) -> None:
+        """Delete saved frames/anomaly snapshots older than CAPTURE_TTL_DAYS."""
+        if CAPTURE_TTL_DAYS <= 0:
+            return
+        cutoff = (datetime.now() - timedelta(days=CAPTURE_TTL_DAYS)).timestamp()
+        for d, pattern in ((CAPTURE_DIR, "capture_*.jpg"), (ANOMALY_DIR, "anomaly_*.jpg")):
+            if not d.exists():
+                continue
+            for f in d.glob(pattern):
+                try:
+                    if f.stat().st_mtime < cutoff:
+                        f.unlink()
+                except OSError as e:
+                    log.warning(f"Capture prune failed for {f.name}: {e}")
 
     # ── Core capture / analysis ───────────────────────────────────────────────
 
@@ -57,6 +78,7 @@ class VisionModule:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filepath = CAPTURE_DIR / f"capture_{ts}.jpg"
         cv2.imwrite(str(filepath), frame)
+        self._prune_captures()
         return self._analyze_frame(frame, prompt or ANALYSIS_PROMPT)
 
     def set_baseline(self):
@@ -79,6 +101,7 @@ class VisionModule:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         savepath = ANOMALY_DIR / f"anomaly_{ts}.jpg"
         cv2.imwrite(str(savepath), current)
+        self._prune_captures()
         analysis = self._analyze_frame(current, ANALYSIS_PROMPT)
         if self.memory:
             self.memory.log_anomaly(
