@@ -35,6 +35,13 @@ MODEL = os.getenv("PH3B3_MODEL", "hermes3")
 HOST = os.getenv("PH3B3_HOST", "0.0.0.0")
 PORT = int(os.getenv("PH3B3_PORT", "7331"))
 
+# CORS — explicit allowlist of browser origins permitted to call the API.
+# The web UI is served by this app (same-origin) and needs no entry here;
+# add LAN/Tailscale/HTTPS origins only if a *separate* front-end calls in.
+# Comma-separated, e.g. "https://nyx.tailnet:7331,http://192.168.x.x:7331".
+_DEFAULT_CORS = "http://localhost:7331,http://127.0.0.1:7331"
+CORS_ORIGINS = [o.strip() for o in os.getenv("PH3B3_CORS_ORIGINS", _DEFAULT_CORS).split(",") if o.strip()]
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Ph3b3] %(message)s")
 log = logging.getLogger("ph3b3")
 
@@ -74,7 +81,13 @@ from camera_module import CameraModule
 from vision_stream_module import VisionStreamModule
 
 app = FastAPI(title="Ph3b3 Agent", version="2.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
+)
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
