@@ -1,13 +1,19 @@
 import subprocess
 import logging
+import os
 import socket
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 log = logging.getLogger("ph3b3.network")
 SCAN_DIR = Path.home() / "ph3b3_data" / "scans"
 NET_LOG  = Path.home() / "ph3b3_data" / "network" / "scan_log.jsonl"
+
+# Scan retention: the scan log (scan_log.jsonl) and raw scan files (scans/scan_*.txt)
+# both record device IPs/MACs, so entries/files older than this are purged on write
+# and at startup. Privacy default is 7 days; set PH3B3_SCAN_LOG_TTL_DAYS=0 to disable.
+SCAN_LOG_TTL_DAYS = int(os.getenv("PH3B3_SCAN_LOG_TTL_DAYS", "7"))
 
 NMAP_PRESETS = {
     "quick": ["-F"],
@@ -37,6 +43,8 @@ class NetworkModule:
     def __init__(self):
         SCAN_DIR.mkdir(parents=True, exist_ok=True)
         NET_LOG.parent.mkdir(parents=True, exist_ok=True)
+        self._prune_log()
+        self._prune_scans()
         log.info("Network module ready.")
 
     # ── Logging ───────────────────────────────────────────────────────────────
@@ -53,6 +61,47 @@ class NetworkModule:
                 f.write(json.dumps(entry) + "\n")
         except OSError as e:
             log.warning(f"Network log write failed: {e}")
+        self._prune_log()
+
+    def _prune_log(self) -> None:
+        """Drop scan-log entries older than SCAN_LOG_TTL_DAYS (privacy retention).
+
+        Rewrites scan_log.jsonl keeping only datable, in-window entries. Lines
+        that aren't valid JSON or lack a parseable timestamp are dropped, since
+        an undatable entry can't be proven to fall within the retention window.
+        """
+        if SCAN_LOG_TTL_DAYS <= 0 or not NET_LOG.exists():
+            return
+        cutoff = datetime.utcnow() - timedelta(days=SCAN_LOG_TTL_DAYS)
+        kept = []
+        try:
+            for line in NET_LOG.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    ts = datetime.strptime(json.loads(line)["timestamp"], "%Y-%m-%dT%H:%M:%SZ")
+                except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                    continue
+                if ts >= cutoff:
+                    kept.append(line)
+            NET_LOG.write_text("".join(l + "\n" for l in kept), encoding="utf-8")
+        except OSError as e:
+            log.warning(f"Network log prune failed: {e}")
+
+    def _prune_scans(self) -> None:
+        """Delete raw scan files (scans/scan_*.txt) older than the retention window."""
+        if SCAN_LOG_TTL_DAYS <= 0 or not SCAN_DIR.exists():
+            return
+        cutoff = (datetime.now() - timedelta(days=SCAN_LOG_TTL_DAYS)).timestamp()
+        try:
+            for f in SCAN_DIR.glob("scan_*.txt"):
+                try:
+                    if f.stat().st_mtime < cutoff:
+                        f.unlink()
+                except OSError as e:
+                    log.warning(f"Scan file prune failed for {f.name}: {e}")
+        except OSError as e:
+            log.warning(f"Scan dir prune failed: {e}")
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -97,6 +146,7 @@ class NetworkModule:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             save = SCAN_DIR / f"scan_{ts}.txt"
             save.write_text(result.stdout)
+            self._prune_scans()
             lines = [l for l in result.stdout.split("\n")
                      if "report" in l.lower() or "open" in l.lower()]
             summary = "\n".join(lines[:30])
