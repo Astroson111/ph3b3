@@ -45,13 +45,16 @@ VOICE_DIR   = Path.home() / "ph3b3_data" / "voices"
 VOICE_MODEL = os.getenv("PH3B3_VOICE_MODEL", str(VOICE_DIR / "en_GB-alba-medium.onnx"))
 
 
-def _resolve_audio_device(fallback: str = "plughw:4,0") -> str:
-    """Return an aplay -D specifier, resolved by card name to survive index renumbers.
+def _resolve_audio_device(fallback: str = "plughw:4,1") -> str:
+    """Return an aplay -D specifier, resolved by card long-name to survive index renumbers.
 
     Resolution order:
       1. PH3B3_AUDIO_DEVICE env var (explicit override)
-      2. First card whose name contains "USB Audio" in `aplay -l` output
-      3. fallback — card index 4 may need updating if USB devices shift
+      2. Scan `aplay -l` for a card whose ALSA long-name (in brackets) is exactly
+         'USB Audio', device 1 — matches only the card name portion of the line so
+         the fifine microphone (card 3, long-name 'fifine Microphone') is not selected.
+         Device 1 confirmed as the working stereo output; device 0 is silent.
+      3. fallback — card index 4 may need updating if USB devices renumber
     """
     explicit = os.getenv("PH3B3_AUDIO_DEVICE")
     if explicit:
@@ -59,10 +62,11 @@ def _resolve_audio_device(fallback: str = "plughw:4,0") -> str:
     try:
         out = subprocess.run(["aplay", "-l"], capture_output=True, text=True).stdout
         for line in out.splitlines():
-            if "USB Audio" in line:
-                m = re.search(r"card (\d+):", line)
-                if m:
-                    return f"plughw:{m.group(1)},0"
+            # Format: "card N: ShortName [Long Name], device D: ..."
+            # Capture card long-name and require device 1 to avoid device 0 (silent).
+            m = re.match(r"card (\d+):[^[]+\[([^\]]+)\],\s*device 1:", line)
+            if m and m.group(2) == "USB Audio":
+                return f"plughw:{m.group(1)},1"
     except Exception:
         pass
     return fallback
