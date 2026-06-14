@@ -24,10 +24,15 @@ class MemoryModule:
         self.memory = self._load()
         if not self.memory["first_boot"]:
             self.memory["first_boot"] = datetime.now().isoformat()
+            self._save()
+        log.info(f"Memory loaded. Last confirmed boot #{self.memory['boot_count']}")
+
+    def confirm_boot(self):
+        """Call only after the server has successfully bound its port and finished init."""
         self.memory["boot_count"] += 1
         self.memory["last_seen"] = datetime.now().isoformat()
         self._save()
-        log.info(f"Memory loaded. Boot #{self.memory['boot_count']}")
+        log.info(f"Boot confirmed. Boot #{self.memory['boot_count']}")
 
     def _load(self):
         if MEMORY_FILE.exists():
