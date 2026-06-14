@@ -122,6 +122,18 @@ Sign in with the `PH3B3_USER` / `PH3B3_PASSWORD` you set in `.env`.
 - **Camera vision is untested on this path.** `llava` runs fine in Ollama, but WSL2 has no webcam by default — there's no `/dev/video0` unless you forward the USB device in with [`usbipd-win`](https://github.com/dorssel/usbipd-win). Until that's set up, the camera tools have nothing to look at; her language and voice features don't depend on it.
 - **Spotify runs in mock mode** unless you add credentials to `.env` — and per the note below, native Spotify support is retired anyway.
 
+## Launchers
+
+A few ways to wake her up, depending on the machine and how hands-on you want to be:
+
+- **`start_ph3b3.sh`** — the recommended day-to-day starter on Linux/Ubuntu. Verifies Ollama is serving the model, activates the venv, frees port 7331 if it's stuck, and runs the server under uvicorn. This is what the desktop icon calls.
+- **`ph3b3.desktop`** — double-click launcher for the Ubuntu app menu or desktop; runs `start_ph3b3.sh` in a terminal. Edit its `Exec=`/`Path=` to match where the repo lives, then copy it to `~/.local/share/applications/`.
+- **`start.sh`** — the original full boot. Same idea, but also brings up WireGuard (if `WG_INTERFACE` is set) and starts `ollama serve` itself. Use this if you rely on its WireGuard step; otherwise `start_ph3b3.sh` is leaner.
+- **`ph3b3.service`** — run her headless as a systemd service that starts on boot. Best for the always-on host. See [INSTALL.md](INSTALL.md).
+- **`launch_ui.sh`** — opens the local desktop chat window (`chat_ui.py`). This is a client for an already-running server, not a way to start the server itself.
+
+On Windows, start her from the Ubuntu side under WSL2 — see [Running Ph3b3 on Windows 11 (via WSL2)](#running-ph3b3-on-windows-11-via-wsl2).
+
 ## Remote Access (Portability)
 
 Ph3b3 runs on your home machine, but you don't have to be home to use her.
