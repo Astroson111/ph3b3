@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import base64
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -37,10 +38,13 @@ LIGHT_MODEL  = os.getenv("PH3B3_LIGHT_MODEL", "hermes3:latest")
 MODEL        = HEAVY_MODEL  # legacy alias kept for health endpoint and backward compat
 HOST = os.getenv("PH3B3_HOST", "0.0.0.0")
 PORT = int(os.getenv("PH3B3_PORT", "7331"))
+SSL_CERT = os.getenv("PH3B3_SSL_CERT", "")
+SSL_KEY  = os.getenv("PH3B3_SSL_KEY",  "")
+_scheme  = "https" if (SSL_CERT and SSL_KEY) else "http"
 
 _raw_origins = os.getenv(
     "PH3B3_ALLOWED_ORIGINS",
-    f"http://localhost:{PORT},http://127.0.0.1:{PORT}",
+    f"{_scheme}://localhost:{PORT},{_scheme}://127.0.0.1:{PORT}",
 )
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
@@ -103,8 +107,31 @@ from scam_detector import ScamDetector
 from investigation_module import InvestigationModule
 from camera_module import CameraModule
 from vision_stream_module import VisionStreamModule
+from screenshot_module import ScreenshotModule
 
-app = FastAPI(title="Ph3b3 Agent", version="2.0.0")
+@asynccontextmanager
+async def lifespan(app):
+    memory.confirm_boot()
+    boot_count = memory.memory.get("boot_count", 1)
+    greetings = [
+        "Ph3b3 online. All systems nominal.",
+        "Awakening. I'm here.",
+        "Systems initialised. Ready when you are.",
+        "Online. Watching. Listening.",
+        "Ph3b3 active. What do you need?",
+    ]
+    text = greetings[(boot_count - 1) % len(greetings)]
+    log.info(f"Boot greeting (#{boot_count}): {text}")
+    def _greet():
+        tts.speak(text, True)
+        tts.speak("Made with soul, baby.", True)
+        reminder_msg = reminders.on_boot()
+        if reminder_msg:
+            tts.speak(reminder_msg, True)
+    threading.Thread(target=_greet, daemon=True).start()
+    yield
+
+app = FastAPI(title="Ph3b3 Agent", version="2.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 @app.middleware("http")
@@ -163,6 +190,7 @@ scam_detector = ScamDetector()
 investigation = InvestigationModule()
 camera = CameraModule()
 vision_stream = VisionStreamModule()
+screenshot = ScreenshotModule()
 
 SYSTEM_PROMPT = load_soul() + memory.as_context()
 
@@ -250,7 +278,8 @@ TOOLS = [
     {"type":"function","function":{"name":"obsbot_look_down","description":"Tilt the OBSBOT camera down one step","parameters":{"type":"object","properties":{"steps":{"type":"integer","default":1}}}}},
     {"type":"function","function":{"name":"obsbot_zoom_in","description":"Zoom the OBSBOT camera in","parameters":{"type":"object","properties":{"steps":{"type":"integer","default":1}}}}},
     {"type":"function","function":{"name":"obsbot_zoom_out","description":"Zoom the OBSBOT camera out","parameters":{"type":"object","properties":{"steps":{"type":"integer","default":1}}}}},
-    {"type":"function","function":{"name":"obsbot_center","description":"Reset OBSBOT pan, tilt, and zoom to center/default","parameters":{"type":"object","properties":{}}}}
+    {"type":"function","function":{"name":"obsbot_center","description":"Reset OBSBOT pan, tilt, and zoom to center/default","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"analyze_screenshot","description":"Analyze a screenshot or image file from disk. Pass the path to a PNG or JPG and an optional question. Uses LLaVA to describe the image, then Hermes3 to reason over that description and answer the question.","parameters":{"type":"object","properties":{"image_path":{"type":"string","description":"Absolute or relative path to the image file (PNG, JPG, JPEG, WEBP, BMP)"},"question":{"type":"string","description":"What to ask or focus on (optional — defaults to a general description and analysis)"}},"required":["image_path"]}}}
 ]
 
 _SENSITIVE_KEY_FRAGMENTS = frozenset({
@@ -418,6 +447,7 @@ async def execute_tool(name, args):
         elif name == "obsbot_zoom_in":    result = vision.zoom_in(args.get("steps", 1))
         elif name == "obsbot_zoom_out":   result = vision.zoom_out(args.get("steps", 1))
         elif name == "obsbot_center":     result = vision.center()
+        elif name == "analyze_screenshot": result = screenshot.analyze(args["image_path"], args.get("question", ""))
         else:
             result = f"Unknown tool: {name}"
             _log_skill(name, args, result, False)
@@ -485,27 +515,6 @@ sessions = {}
 def get_session(sid="default"):
     if sid not in sessions: sessions[sid] = Session()
     return sessions[sid]
-
-@app.on_event("startup")
-async def boot_greeting():
-    memory.confirm_boot()
-    boot_count = memory.memory.get("boot_count", 1)
-    greetings = [
-        "Ph3b3 online. All systems nominal.",
-        "Awakening. I'm here.",
-        "Systems initialised. Ready when you are.",
-        "Online. Watching. Listening.",
-        "Ph3b3 active. What do you need?",
-    ]
-    text = greetings[(boot_count - 1) % len(greetings)]
-    log.info(f"Boot greeting (#{boot_count}): {text}")
-    def _greet():
-        tts.speak(text, True)
-        tts.speak("Made with soul, baby.", True)
-        reminder_msg = reminders.on_boot()
-        if reminder_msg:
-            tts.speak(reminder_msg, True)
-    threading.Thread(target=_greet, daemon=True).start()
 
 @app.get("/health")
 async def health():
@@ -598,4 +607,8 @@ app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 
 if __name__ == "__main__":
     log.info(f"Ph3b3 starting — {HOST}:{PORT}")
-    uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
+    ssl_kwargs = {}
+    if SSL_CERT and SSL_KEY:
+        ssl_kwargs = {"ssl_certfile": SSL_CERT, "ssl_keyfile": SSL_KEY}
+        log.info(f"HTTPS enabled — cert: {SSL_CERT}")
+    uvicorn.run(app, host=HOST, port=PORT, log_level="warning", **ssl_kwargs)

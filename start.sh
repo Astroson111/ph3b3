@@ -45,7 +45,14 @@ source "$VENV/bin/activate"
 
 HOST_IP=$(hostname -I | awk '{print $1}')
 PORT="${PH3B3_PORT:-7331}"
-echo "Ph3b3 running at $HOST_IP:$PORT"
+SCHEME="http"
+if [ -n "${PH3B3_SSL_CERT:-}" ] && [ -n "${PH3B3_SSL_KEY:-}" ]; then
+    SCHEME="https"
+fi
+echo "Ph3b3 running at $SCHEME://$HOST_IP:$PORT"
+if [ "$SCHEME" = "https" ]; then
+    echo "  (self-signed cert — browser will warn once; click Advanced → Proceed)"
+fi
 
 cd "$PH3B3_DIR"
 exec python agent/server.py
