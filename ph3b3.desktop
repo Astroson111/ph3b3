@@ -1,0 +1,14 @@
+[Desktop Entry]
+# Edit Exec= and Path= below if the repo lives somewhere other than
+# $HOME/ph3b3 (e.g. on Nyx: $HOME/Desktop/ph3b3_v2).
+Type=Application
+Version=1.0
+Name=Ph3b3
+GenericName=Local AI Assistant
+Comment=Start Ph3b3 (Ollama check, venv, uvicorn on :7331)
+Exec=$HOME/ph3b3/start_ph3b3.sh
+Path=$HOME/ph3b3
+Icon=utilities-terminal
+Terminal=true
+Categories=Utility;Network;
+Keywords=AI;assistant;ph3b3;phoebe;
