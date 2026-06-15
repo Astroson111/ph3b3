@@ -814,11 +814,26 @@
 
     async function initApp() {
         try {
-            const res = await fetch('/health', { headers: { 'Authorization': authHeader } });
+            const res = await fetch('/ready', { headers: { 'Authorization': authHeader } });
             if (res.status === 401) { _clearAuth(); _showLogin('Access denied.'); return; }
             const d = await res.json();
             document.title = `Ph3b3 — Boot #${d.boot}`;
             addSys(`Connected · Boot #${d.boot} · ${d.model}`);
+            if (d.suggestions && d.suggestions.length) {
+                const wrap = document.createElement('div');
+                wrap.style.cssText = 'display:flex;gap:6px;overflow-x:auto;padding:6px 0 4px;flex-wrap:nowrap;scrollbar-width:none;';
+                for (const s of d.suggestions) {
+                    const btn = document.createElement('button');
+                    btn.textContent = s;
+                    btn.style.cssText = 'background:#13132c;color:#a78bfa;border:1px solid #2a1f4a;border-radius:12px;padding:5px 14px;font-family:"Courier New",monospace;font-size:12px;cursor:pointer;white-space:nowrap;flex-shrink:0;transition:border-color 0.15s,background 0.15s;';
+                    btn.addEventListener('mouseenter', () => { btn.style.borderColor='#7c3aed'; btn.style.background='#1a1240'; });
+                    btn.addEventListener('mouseleave', () => { btn.style.borderColor='#2a1f4a'; btn.style.background='#13132c'; });
+                    btn.addEventListener('click', () => { if (!busy) { inputEl.value = s; send(); } });
+                    wrap.appendChild(btn);
+                }
+                chatEl.appendChild(wrap);
+                chatEl.scrollTop = chatEl.scrollHeight;
+            }
         } catch {
             addSys('Server offline — launch Ph3b3 first');
         }
