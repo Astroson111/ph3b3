@@ -463,10 +463,13 @@ async def execute_tool(name, args):
             tts.speak(_analysis, blocking=False)
             result = "Screenshot analysis delivered."
         elif name == "start_evening_capture":
+            _ec_source = args.get("source", "opencv:0@3840x2160")
+            if not (_ec_source.startswith("opencv:") or _ec_source.startswith("http")):
+                _ec_source = "opencv:0@3840x2160"
             result = _ec_mod.tool_start_evening_capture(
                 args.get("label", "evening"),
                 args.get("interval", 120),
-                args.get("source", "opencv:0@3840x2160"),
+                _ec_source,
             )
         elif name == "stop_evening_capture":
             result = _ec_mod.tool_stop_evening_capture()
