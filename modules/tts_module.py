@@ -46,63 +46,33 @@ VOICE_MODEL = os.getenv("PH3B3_VOICE_MODEL", str(VOICE_DIR / "en_GB-alba-medium.
 
 
 def _resolve_audio_device(fallback: str = "default") -> str:
-    """Resolve the TTS playback device, PipeWire-native where possible.
+    """Resolve the TTS playback device.
 
     Resolution order:
       1. PH3B3_AUDIO_DEVICE env var — used verbatim if set.
-      2. pactl list short sinks — find the first sink whose name contains
-         'USB_Audio' (the stable fragment in PipeWire sink names for Generic
-         USB Audio devices) while excluding 'fifine' / 'Microphone' entries.
-         Pins it as the PipeWire session default via `pactl set-default-sink`
-         so every subsequent `aplay -D default` call routes there automatically.
-         Returns 'default' (ALSA default device → PipeWire default sink).
-      3. aplay -l scan — legacy ALSA fallback when pactl is absent.
-         Matches card long-name 'USB Audio', device 1.
-      4. fallback ('default') — let the system decide; logs a warning.
+      2. PipeWire default sink — trust WirePlumber's configured default
+         (HDMI locked at priority 1300 via /etc/wireplumber/main.lua.d/).
+         aplay -D default routes there automatically.
+      3. fallback ('default') — should never reach here under normal operation.
     """
     explicit = os.getenv("PH3B3_AUDIO_DEVICE")
     if explicit:
         log.info(f"TTS audio: {explicit!r} (PH3B3_AUDIO_DEVICE override)")
         return explicit
 
-    # ── PipeWire-native: stable sink name, survives card-index renumbers ──
+    # ── Trust WirePlumber's default — HDMI is locked at high priority ──
     try:
-        out = subprocess.run(
-            ["pactl", "list", "short", "sinks"],
+        sink = subprocess.run(
+            ["pactl", "get-default-sink"],
             capture_output=True, text=True, timeout=5,
-        ).stdout
-        for line in out.splitlines():
-            # format: "<idx>\t<name>\t<driver>\t<sample_spec>\t<state>"
-            parts = line.split("\t")
-            if len(parts) < 2:
-                continue
-            name = parts[1].strip()
-            if "USB_Audio" in name and "fifine" not in name.lower() and "Microphone" not in name:
-                subprocess.run(
-                    ["pactl", "set-default-sink", name],
-                    capture_output=True, timeout=5,
-                )
-                log.info(f"TTS audio: default → PipeWire sink {name!r}")
-                return "default"
+        ).stdout.strip()
+        if sink:
+            log.info(f"TTS audio: default → PipeWire default sink ({sink!r})")
+            return "default"
     except Exception:
         pass
 
-    # ── Legacy ALSA fallback: scan aplay -l by card long-name ─────────────
-    try:
-        out = subprocess.run(
-            ["aplay", "-l"], capture_output=True, text=True, timeout=5,
-        ).stdout
-        for line in out.splitlines():
-            # "card N: ShortName [Long Name], device D: ..."
-            m = re.match(r"card (\d+):[^[]+\[([^\]]+)\],\s*device 1:", line)
-            if m and m.group(2) == "USB Audio":
-                dev = f"plughw:{m.group(1)},1"
-                log.info(f"TTS audio: {dev!r} (ALSA scan fallback)")
-                return dev
-    except Exception:
-        pass
-
-    log.warning(f"TTS audio: {fallback!r} (system default — USB sink not found)")
+    log.warning(f"TTS audio: {fallback!r} (pactl unavailable — using system default)")
     return fallback
 
 
