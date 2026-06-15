@@ -129,6 +129,8 @@ async def lifespan(app):
             tts.speak(reminder_msg, blocking=False)
     threading.Thread(target=_greet, daemon=True).start()
     yield
+    if _ec_mod._session and _ec_mod._session.is_running():
+        _ec_mod.tool_stop_evening_capture()
 
 app = FastAPI(title="Ph3b3 Agent", version="2.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"])
@@ -190,6 +192,14 @@ investigation = InvestigationModule()
 camera = CameraModule()
 vision_stream = VisionStreamModule()
 screenshot = ScreenshotModule()
+import evening_capture as _ec_mod
+_ec_mod.alba_say = lambda t: _tts_announce(t)
+
+def _tts_announce(text: str) -> None:
+    try:
+        tts.speak(text, blocking=False)
+    except Exception:
+        pass
 
 SYSTEM_PROMPT = load_soul() + memory.as_context()
 
@@ -278,7 +288,9 @@ TOOLS = [
     {"type":"function","function":{"name":"obsbot_zoom_in","description":"Zoom the OBSBOT camera in","parameters":{"type":"object","properties":{"steps":{"type":"integer","default":1}}}}},
     {"type":"function","function":{"name":"obsbot_zoom_out","description":"Zoom the OBSBOT camera out","parameters":{"type":"object","properties":{"steps":{"type":"integer","default":1}}}}},
     {"type":"function","function":{"name":"obsbot_center","description":"Reset OBSBOT pan, tilt, and zoom to center/default","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"analyze_screenshot","description":"Analyze a screenshot or image file from disk. Pass the path to a PNG or JPG and an optional question. Uses LLaVA to describe the image, then Hermes3 to reason over that description and answer the question.","parameters":{"type":"object","properties":{"image_path":{"type":"string","description":"Absolute or relative path to the image file (PNG, JPG, JPEG, WEBP, BMP)"},"question":{"type":"string","description":"What to ask or focus on (optional — defaults to a general description and analysis)"}},"required":["image_path"]}}}
+    {"type":"function","function":{"name":"analyze_screenshot","description":"Analyze a screenshot or image file from disk. Pass the path to a PNG or JPG and an optional question. Uses LLaVA to describe the image, then Hermes3 to reason over that description and answer the question.","parameters":{"type":"object","properties":{"image_path":{"type":"string","description":"Absolute or relative path to the image file (PNG, JPG, JPEG, WEBP, BMP)"},"question":{"type":"string","description":"What to ask or focus on (optional — defaults to a general description and analysis)"}},"required":["image_path"]}}},
+    {"type":"function","function":{"name":"start_evening_capture","description":"Start capturing photos of the evening to the Desktop at a timed interval using the 4K AI webcam. Say 'start capturing the evening' or 'start evening capture' to trigger this.","parameters":{"type":"object","properties":{"label":{"type":"string","default":"evening","description":"Folder label — becomes part of the directory name on the Desktop"},"interval":{"type":"number","default":120,"description":"Seconds between shots"},"source":{"type":"string","default":"opencv:0@3840x2160","description":"Camera source spec — leave as default for the 4K webcam"}}}}},
+    {"type":"function","function":{"name":"stop_evening_capture","description":"Stop the evening photo capture session and report how many photos were saved to the Desktop.","parameters":{"type":"object","properties":{}}}}
 ]
 
 _SENSITIVE_KEY_FRAGMENTS = frozenset({
@@ -450,6 +462,14 @@ async def execute_tool(name, args):
             _analysis = screenshot.analyze(args["image_path"], args.get("question", ""))
             tts.speak(_analysis, blocking=False)
             result = "Screenshot analysis delivered."
+        elif name == "start_evening_capture":
+            result = _ec_mod.tool_start_evening_capture(
+                args.get("label", "evening"),
+                args.get("interval", 120),
+                args.get("source", "opencv:0@3840x2160"),
+            )
+        elif name == "stop_evening_capture":
+            result = _ec_mod.tool_stop_evening_capture()
         else:
             result = f"Unknown tool: {name}"
             _log_skill(name, args, result, False)
