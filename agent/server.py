@@ -120,14 +120,13 @@ async def lifespan(app):
         "Online. Watching. Listening.",
         "Ph3b3 active. What do you need?",
     ]
-    text = greetings[(boot_count - 1) % len(greetings)]
+    text = greetings[(boot_count - 1) % len(greetings)] + " Made with Soul, baby."
     log.info(f"Boot greeting (#{boot_count}): {text}")
     def _greet():
-        tts.speak(text, True)
-        tts.speak("Made with soul, baby.", True)
+        tts.speak(text, blocking=False)
         reminder_msg = reminders.on_boot()
         if reminder_msg:
-            tts.speak(reminder_msg, True)
+            tts.speak(reminder_msg, blocking=False)
     threading.Thread(target=_greet, daemon=True).start()
     yield
 
@@ -346,18 +345,18 @@ async def execute_tool(name, args):
         elif name == "occult_random": result = occult.random_phenomenon()
         elif name == "tell_joke":
             joke = jokes.tell_joke(args.get("category","any"))
-            tts.speak(joke)
+            tts.speak(joke, blocking=False)
             result = "Joke delivered."
         elif name == "roast":
             roast_text = jokes.roast_security() if args.get("topic") == "security" else jokes.roast_dnd()
-            tts.speak(roast_text)
+            tts.speak(roast_text, blocking=False)
             result = "Roast delivered."
         elif name == "look": result = vision.look(args.get("prompt"))
         elif name == "set_baseline": result = vision.set_baseline()
         elif name == "check_anomaly": result = vision.check_anomaly()
         elif name == "start_monitoring": result = vision.start_monitoring(args.get("interval",30))
         elif name == "web_search": result = search.news(args["query"]) if args.get("type") == "news" else search.search(args["query"])
-        elif name == "speak": result = tts.speak(args["text"])
+        elif name == "speak": result = tts.speak(args["text"], blocking=False)
         elif name == "listen":
             r = stt.listen(args.get("duration",10))
             if r.get("error"):
@@ -447,7 +446,10 @@ async def execute_tool(name, args):
         elif name == "obsbot_zoom_in":    result = vision.zoom_in(args.get("steps", 1))
         elif name == "obsbot_zoom_out":   result = vision.zoom_out(args.get("steps", 1))
         elif name == "obsbot_center":     result = vision.center()
-        elif name == "analyze_screenshot": result = screenshot.analyze(args["image_path"], args.get("question", ""))
+        elif name == "analyze_screenshot":
+            _analysis = screenshot.analyze(args["image_path"], args.get("question", ""))
+            tts.speak(_analysis, blocking=False)
+            result = "Screenshot analysis delivered."
         else:
             result = f"Unknown tool: {name}"
             _log_skill(name, args, result, False)
@@ -499,7 +501,30 @@ async def chat_with_tools(messages):
                 log.error(f"Ollama follow-up request failed (model={follow_model}): {e}")
                 return f"I completed the action but couldn't formulate a response — model '{follow_model}' may not be installed.", messages
             msg = response.json()["message"]
-        return msg.get("content",""), messages
+        content = msg.get("content", "")
+        if not content and loop > 0:
+            # hermes3 exited the tool loop without synthesising — rebuild context without
+            # tool_call/tool messages so the model can produce plain text
+            last_tool_result = next(
+                (m["content"] for m in reversed(messages) if m.get("role") == "tool"),
+                "",
+            )
+            if last_tool_result:
+                synth_messages = [
+                    messages[0],  # system prompt
+                    {"role": "user", "content": f"Tool result: {last_tool_result[:600]}\n\nSummarise this for the user in one clear paragraph."},
+                ]
+                payload["tools"] = []
+                payload["messages"] = synth_messages
+                payload["model"] = HEAVY_MODEL
+                try:
+                    r = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
+                    r.raise_for_status()
+                    raw = r.json()["message"].get("content", "")
+                    content = raw if "<tool_call>" not in raw else ""
+                except Exception as e:
+                    log.error(f"Synthesis fallback failed: {e}")
+        return content, messages
 
 class Session:
     def __init__(self):
@@ -518,7 +543,31 @@ def get_session(sid="default"):
 
 @app.get("/health")
 async def health():
-    return {"status":"alive","model":MODEL,"soul":SOUL_FILE.exists(),"boot":memory.memory.get("boot_count",0)}
+    # Intentionally touches nothing — responds immediately even mid-startup.
+    return {"status": "alive"}
+
+
+@app.get("/ready")
+async def ready():
+    # Richer status — only call this after startup is confirmed complete.
+    return {
+        "status": "alive",
+        "model": MODEL,
+        "soul": SOUL_FILE.exists(),
+        "boot": memory.memory.get("boot_count", 0),
+        "whisper": stt.status(),
+        "tts": tts.status(),
+        "suggestions": [
+            "What can you do?",
+            "What's the weather?",
+            "List my reminders",
+            "Tell me a joke",
+            "System status",
+            "GPU status",
+            "What's playing on Spotify?",
+            "Scan the network",
+        ],
+    }
 
 @app.get("/skills")
 async def skills_log():
