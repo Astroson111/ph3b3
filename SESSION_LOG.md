@@ -33,7 +33,16 @@
 
 ### OPEN / UNRESOLVED
 
-**Boot-time audio sink hijack — NOT FIXED**
+**Boot-time audio sink hijack — FIXED (2026-06-15, post-reboot confirmed)**
+
+`pactl get-default-sink` → `alsa_output.pci-0000_01_00.1.hdmi-stereo` after cold reboot. ✅
+
+Fix that worked: `/etc/wireplumber/main.lua.d/51-default-sink.lua` (requires sudo write).
+Key lesson: WirePlumber 0.4.17 on Ubuntu 24.04 **ignores** `~/.config/wireplumber/main.lua.d/` entirely. The `/etc/wireplumber/` path is the correct user-override location.
+
+Systemd service audio dependency is now unblocked. Next: tackle C2 (Piper not in PATH).
+
+~~**Boot-time audio sink hijack — NOT FIXED**~~
 
 Problem: USB "Generic USB Audio" IEC958 (S/PDIF) device grabs the PipeWire default sink at every boot. HDMI sink (`alsa_output.pci-0000_01_00.1.hdmi-stereo`) is correct; S/PDIF is silent. User must manually flip the sink back in Sound Settings after every reboot.
 
