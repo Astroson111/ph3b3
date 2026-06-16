@@ -133,7 +133,12 @@ async def lifespan(app):
         _ec_mod.tool_stop_evening_capture()
 
 app = FastAPI(title="Ph3b3 Agent", version="2.0.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
