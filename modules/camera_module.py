@@ -16,6 +16,14 @@ class CameraModule:
         PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
         VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
         log.info(f"Camera module ready — device /dev/video{camera_device}")
+        self._prune()
+
+    def _prune(self, days: int = 30) -> None:
+        cutoff = time.time() - days * 86400
+        for d in (PHOTOS_DIR, VIDEOS_DIR):
+            for f in d.iterdir():
+                if f.is_file() and f.stat().st_mtime < cutoff:
+                    f.unlink(missing_ok=True)
 
     def take_photo(self) -> str:
         """Open camera, capture one frame, save timestamped JPG, close camera."""

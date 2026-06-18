@@ -4,6 +4,7 @@ import os
 import logging
 import re
 import subprocess
+import sys
 import threading
 import wave
 from pathlib import Path
@@ -44,39 +45,34 @@ log = logging.getLogger("ph3b3.tts")
 VOICE_DIR   = Path.home() / "ph3b3_data" / "voices"
 VOICE_MODEL = os.getenv("PH3B3_VOICE_MODEL", str(VOICE_DIR / "en_GB-alba-medium.onnx"))
 
+AUDIO_DEVICE = os.getenv("PH3B3_AUDIO_DEVICE", "default")
 
-def _resolve_audio_device(fallback: str = "default") -> str:
-    """Resolve the TTS playback device.
+_VENV_BIN   = Path(sys.executable).parent
+_PIPER_VENV = str(_VENV_BIN / "piper")
+PIPER_BIN   = os.getenv("PIPER_BIN") or (_PIPER_VENV if Path(_PIPER_VENV).exists() else "piper")
 
-    Resolution order:
-      1. PH3B3_AUDIO_DEVICE env var — used verbatim if set.
-      2. PipeWire default sink — trust WirePlumber's configured default
-         (HDMI locked at priority 1300 via /etc/wireplumber/main.lua.d/).
-         aplay -D default routes there automatically.
-      3. fallback ('default') — should never reach here under normal operation.
-    """
-    explicit = os.getenv("PH3B3_AUDIO_DEVICE")
-    if explicit:
-        log.info(f"TTS audio: {explicit!r} (PH3B3_AUDIO_DEVICE override)")
-        return explicit
+# Stable node.name for the intended TTS output — used only for sink-mismatch warnings.
+_EXPECTED_SINK = "alsa_output.pci-0000_01_00.1.hdmi-stereo"
 
-    # ── Trust WirePlumber's default — HDMI is locked at high priority ──
+log.info(f"TTS audio device: {AUDIO_DEVICE!r}  piper: {PIPER_BIN!r}")
+
+
+def _warn_if_sink_wrong() -> None:
+    """Log a warning if WirePlumber's default sink is not the expected HDMI output."""
     try:
-        sink = subprocess.run(
+        result = subprocess.run(
             ["pactl", "get-default-sink"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
-        if sink:
-            log.info(f"TTS audio: default → PipeWire default sink ({sink!r})")
-            return "default"
+            capture_output=True, text=True, timeout=2,
+            env={**os.environ, "XDG_RUNTIME_DIR": os.getenv("XDG_RUNTIME_DIR", "/run/user/1000")},
+        )
+        current = result.stdout.strip()
+        if current and current != _EXPECTED_SINK:
+            log.warning(
+                f"TTS sink mismatch — expected {_EXPECTED_SINK!r}, "
+                f"got {current!r}. Audio will go to the wrong output."
+            )
     except Exception:
         pass
-
-    log.warning(f"TTS audio: {fallback!r} (pactl unavailable — using system default)")
-    return fallback
-
-
-AUDIO_DEVICE = _resolve_audio_device()
 
 
 class TTSModule:
@@ -105,9 +101,10 @@ class TTSModule:
         return f"Speaking: {text[:60]}"
 
     def _speak_now(self, text):
+        _warn_if_sink_wrong()
         with self._lock:
             try:
-                cmd = f'echo {subprocess.list2cmdline([text])} | piper --model {VOICE_MODEL} --output-raw | aplay -r 22050 -f S16_LE -c 1 -t raw -D {AUDIO_DEVICE}'
+                cmd = f'echo {subprocess.list2cmdline([text])} | {PIPER_BIN} --model {VOICE_MODEL} --output-raw | aplay -r 22050 -f S16_LE -c 1 -t raw -D {AUDIO_DEVICE}'
                 subprocess.run(cmd, shell=True, check=True, timeout=30)
             except subprocess.TimeoutExpired:
                 log.warning("TTS timed out after 30 s — audio device may not be ready")
@@ -123,7 +120,7 @@ class TTSModule:
             return None
         with self._lock:
             try:
-                cmd = f'echo {subprocess.list2cmdline([tts_text])} | piper --model {VOICE_MODEL} --output-raw'
+                cmd = f'echo {subprocess.list2cmdline([tts_text])} | {PIPER_BIN} --model {VOICE_MODEL} --output-raw'
                 proc = subprocess.run(cmd, shell=True, capture_output=True)
                 raw_pcm = proc.stdout
                 if not raw_pcm:
