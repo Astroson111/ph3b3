@@ -2,6 +2,7 @@ import subprocess
 import logging
 import socket
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -38,6 +39,15 @@ class NetworkModule:
         SCAN_DIR.mkdir(parents=True, exist_ok=True)
         NET_LOG.parent.mkdir(parents=True, exist_ok=True)
         log.info("Network module ready.")
+        self._prune()
+
+    def _prune(self, days: int = 30) -> None:
+        cutoff = time.time() - days * 86400
+        for f in SCAN_DIR.iterdir():
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink(missing_ok=True)
+        if NET_LOG.exists() and NET_LOG.stat().st_mtime < cutoff:
+            NET_LOG.unlink(missing_ok=True)
 
     # ── Logging ───────────────────────────────────────────────────────────────
 
