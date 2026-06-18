@@ -48,6 +48,8 @@ _raw_origins = os.getenv(
 )
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
+RECIPE_DB_PATH = os.getenv("RECIPE_DB_PATH", str(Path.home() / "ph3b3_data" / "recipes.db"))
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Ph3b3] %(message)s")
 log = logging.getLogger("ph3b3")
 
@@ -108,6 +110,7 @@ from investigation_module import InvestigationModule
 from camera_module import CameraModule
 from vision_stream_module import VisionStreamModule
 from screenshot_module import ScreenshotModule
+from recipes import RecipeStore
 
 @asynccontextmanager
 async def lifespan(app):
@@ -197,6 +200,7 @@ investigation = InvestigationModule()
 camera = CameraModule()
 vision_stream = VisionStreamModule()
 screenshot = ScreenshotModule()
+recipe_store = RecipeStore(RECIPE_DB_PATH)
 import evening_capture as _ec_mod
 _ec_mod.alba_say = lambda t: _tts_announce(t)
 
@@ -295,7 +299,8 @@ TOOLS = [
     {"type":"function","function":{"name":"obsbot_center","description":"Reset OBSBOT pan, tilt, and zoom to center/default","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"analyze_screenshot","description":"Analyze a screenshot or image file from disk. Pass the path to a PNG or JPG and an optional question. Uses LLaVA to describe the image, then Hermes3 to reason over that description and answer the question.","parameters":{"type":"object","properties":{"image_path":{"type":"string","description":"Absolute or relative path to the image file (PNG, JPG, JPEG, WEBP, BMP)"},"question":{"type":"string","description":"What to ask or focus on (optional — defaults to a general description and analysis)"}},"required":["image_path"]}}},
     {"type":"function","function":{"name":"start_evening_capture","description":"Start capturing photos of the evening to the Desktop at a timed interval using the 4K AI webcam. Say 'start capturing the evening' or 'start evening capture' to trigger this.","parameters":{"type":"object","properties":{"label":{"type":"string","default":"evening","description":"Folder label — becomes part of the directory name on the Desktop"},"interval":{"type":"number","default":120,"description":"Seconds between shots"},"source":{"type":"string","default":"opencv:0@3840x2160","description":"Camera source spec — leave as default for the 4K webcam"}}}}},
-    {"type":"function","function":{"name":"stop_evening_capture","description":"Stop the evening photo capture session and report how many photos were saved to the Desktop.","parameters":{"type":"object","properties":{}}}}
+    {"type":"function","function":{"name":"stop_evening_capture","description":"Stop the evening photo capture session and report how many photos were saved to the Desktop.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"find_recipe","description":"Search 2+ million local recipes from the RecipeNLG corpus — fully offline, zero network, zero GPU. Three modes: 'text' for free-text search (e.g. 'carbonara', 'Thai noodles'), 'strict' to find recipes that use ALL listed ingredients, 'pantry' (default) to find the best matches from what you have on hand — results are ranked by fewest missing ingredients. You will receive structured recipe rows: narrate them to the user (title, key ingredients, directions summary, what they're missing in pantry mode). Do NOT fabricate or invent recipe details — report exactly what the tool returns.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Free-text search term — used in 'text' mode (e.g. 'carbonara', 'banana bread')"},"ingredients":{"type":"array","items":{"type":"string"},"description":"List of ingredient names — used in 'strict' and 'pantry' modes (e.g. ['chicken', 'rice', 'lime'])"},"mode":{"type":"string","enum":["text","strict","pantry"],"default":"pantry","description":"'text': free-text FTS search. 'strict': recipes using ALL listed ingredients. 'pantry': best matches from what you have, ranked by fewest missing."},"limit":{"type":"integer","default":5,"description":"Number of results to return (1–20)"}},"required":[]}}}
 ]
 
 _SENSITIVE_KEY_FRAGMENTS = frozenset({
@@ -329,6 +334,60 @@ def _log_skill(name: str, args: dict, result, success: bool) -> None:
             f.write(json.dumps(entry) + "\n")
     except OSError as e:
         log.warning(f"Skill log write failed: {e}")
+
+
+def _format_recipes(
+    rows: list,
+    mode: str,
+    query: str = "",
+    ingredients: list | None = None,
+) -> str:
+    """Render recipe rows into a structured text block for Hermes3 to narrate."""
+    if not rows:
+        if mode == "text":
+            return f"No recipes found matching '{query}'."
+        return f"No recipes found for ingredients: {', '.join(ingredients or [])}."
+
+    header = {
+        "text":   f"Found {len(rows)} recipe(s) for '{query}':",
+        "strict": f"Found {len(rows)} recipe(s) using all of: {', '.join(ingredients or [])}:",
+        "pantry": f"Found {len(rows)} recipe(s) ranked by fewest missing ingredients:",
+    }[mode]
+
+    parts = [header]
+    for i, r in enumerate(rows, 1):
+        title = r.get("title", "Untitled")
+        ingr  = r.get("ingredients", [])
+        dirs  = r.get("directions",  [])
+        link  = r.get("link", "")
+
+        steps = dirs[:2]
+        steps_text = " ".join(f"({j+1}) {s}" for j, s in enumerate(steps))
+        if len(dirs) > 2:
+            steps_text += f" ... ({len(dirs) - 2} more steps)"
+
+        entry = [f"\n{i}. {title}"]
+        entry.append(f"   Ingredients ({len(ingr)}): {', '.join(ingr[:12])}" +
+                     (f" ... (+{len(ingr)-12} more)" if len(ingr) > 12 else ""))
+        entry.append(f"   Directions: {steps_text}")
+
+        if mode == "pantry":
+            missing  = r.get("missing", [])
+            coverage = r.get("coverage", 0.0)
+            pct      = int(coverage * 100)
+            if missing:
+                entry.append(f"   You're missing: {', '.join(missing[:8])}" +
+                              (f" (+{len(missing)-8} more)" if len(missing) > 8 else ""))
+            else:
+                entry.append("   You have everything needed.")
+            entry.append(f"   Coverage: {pct}%")
+
+        if link:
+            entry.append(f"   Source: {link}")
+
+        parts.append("\n".join(entry))
+
+    return "\n".join(parts)
 
 
 async def execute_tool(name, args):
@@ -478,6 +537,30 @@ async def execute_tool(name, args):
             )
         elif name == "stop_evening_capture":
             result = _ec_mod.tool_stop_evening_capture()
+        elif name == "find_recipe":
+            _mode  = args.get("mode", "pantry")
+            _limit = max(1, min(int(args.get("limit", 5)), 20))
+            if _mode == "text":
+                _q = args.get("query", "").strip()
+                if not _q:
+                    result = "find_recipe: 'text' mode requires a query string."
+                else:
+                    _rows = recipe_store.search_text(_q, limit=_limit)
+                    result = _format_recipes(_rows, mode="text", query=_q)
+            elif _mode == "strict":
+                _ing = [i.strip() for i in args.get("ingredients", []) if i.strip()]
+                if not _ing:
+                    result = "find_recipe: 'strict' mode requires an ingredients list."
+                else:
+                    _rows = recipe_store.search_by_ingredients(_ing, strict=True, limit=_limit)
+                    result = _format_recipes(_rows, mode="strict", ingredients=_ing)
+            else:  # pantry (default)
+                _ing = [i.strip() for i in args.get("ingredients", []) if i.strip()]
+                if not _ing:
+                    result = "find_recipe: 'pantry' mode requires an ingredients list."
+                else:
+                    _rows = recipe_store.search_by_ingredients(_ing, strict=False, limit=_limit)
+                    result = _format_recipes(_rows, mode="pantry", ingredients=_ing)
         else:
             result = f"Unknown tool: {name}"
             _log_skill(name, args, result, False)
