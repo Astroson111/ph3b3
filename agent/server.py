@@ -141,6 +141,7 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
 )
 
 @app.middleware("http")
@@ -314,6 +315,10 @@ def _scrub_args(args: dict, tool_name: str = "") -> dict:
     for k, v in args.items():
         if tool_name == "remember_fact" and k == "key":
             scrubbed[k] = v
+        elif tool_name == "analyze_screenshot" and k == "question":
+            scrubbed[k] = "[REDACTED]"
+        elif tool_name == "analyze_scam" and k == "text":
+            scrubbed[k] = "[REDACTED]"
         elif any(frag in k.lower() for frag in _SENSITIVE_KEY_FRAGMENTS):
             scrubbed[k] = "[REDACTED]"
         else:
@@ -361,6 +366,7 @@ def _format_recipes(
         dirs  = r.get("directions",  [])
         link  = r.get("link", "")
 
+        # Summarise directions to first 2 steps to keep context manageable
         steps = dirs[:2]
         steps_text = " ".join(f"({j+1}) {s}" for j, s in enumerate(steps))
         if len(dirs) > 2:
@@ -523,8 +529,14 @@ async def execute_tool(name, args):
         elif name == "obsbot_zoom_out":   result = vision.zoom_out(args.get("steps", 1))
         elif name == "obsbot_center":     result = vision.center()
         elif name == "analyze_screenshot":
-            _analysis = screenshot.analyze(args["image_path"], args.get("question", ""))
+            _img_path = args["image_path"]
+            _analysis = screenshot.analyze(_img_path, args.get("question", ""))
             tts.speak(_analysis, blocking=False)
+            if str(_img_path).startswith("/tmp/"):
+                try:
+                    Path(_img_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
             result = "Screenshot analysis delivered."
         elif name == "start_evening_capture":
             _ec_source = args.get("source", "opencv:0@3840x2160")
@@ -713,6 +725,20 @@ async def clear_session(session_id: str):
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str = "default"):
+    auth = websocket.headers.get("Authorization", "")
+    authed = False
+    if auth.startswith("Basic ") and AUTH_PASS:
+        try:
+            creds = base64.b64decode(auth[6:]).decode("utf-8", errors="replace")
+            user, _, pw = creds.partition(":")
+            if (secrets.compare_digest(user.encode(), AUTH_USER.encode()) and
+                    secrets.compare_digest(pw.encode(), AUTH_PASS.encode())):
+                authed = True
+        except Exception:
+            pass
+    if not authed:
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     session = get_session(session_id)
     log.info(f"Stack-chan connected: {session_id}")
