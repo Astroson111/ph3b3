@@ -136,6 +136,9 @@ class TTSModule:
                 log.error(f"TTS synthesize error: {e}")
                 return None
 
+    def soul_line(self):
+        self.speak("Made with Soul, baby.", blocking=False)
+
     def status(self):
         if self._available:
             return f"Piper TTS ready — {Path(VOICE_MODEL).stem}"
