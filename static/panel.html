@@ -218,6 +218,22 @@
     }
     .btn-send:disabled { opacity: .4; cursor: not-allowed; }
     .btn-send:active { opacity: .8; }
+    .btn-mic {
+      background: rgba(43,15,95,.6);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--dim);
+      padding: .6rem .7rem;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    .btn-mic.recording {
+      background: linear-gradient(135deg,#4c1d95,#6d28d9);
+      border-color: var(--magenta);
+      color: var(--magenta);
+    }
+    .btn-mic:disabled { opacity: .4; cursor: not-allowed; }
 
     /* ── Device roster ── */
     .dev-list { display: flex; flex-direction: column; gap: .45rem; }
@@ -305,6 +321,9 @@
       <div class="chat-foot">
         <input class="cin" id="cin" type="text" placeholder="Message Ph3b3…" autocomplete="off" autocorrect="off">
         <button class="btn-send" id="sendBtn">Send</button>
+        <button class="btn-mic" id="micBtn" title="Hold to speak">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
+        </button>
       </div>
     </div>
   </section>
@@ -394,6 +413,7 @@ const chatHist  = document.getElementById('chatHist');
 const cin       = document.getElementById('cin');
 const sendBtn   = document.getElementById('sendBtn');
 const audioRow  = document.getElementById('audioRow');
+const micBtn    = document.getElementById('micBtn');
 
 function addMsg(role, text) {
   const d = document.createElement('div');
@@ -484,6 +504,116 @@ async function refreshRoster() {
 refreshRoster();
 setInterval(refreshRoster, 30_000);
 document.getElementById('rosterBtn').addEventListener('click', refreshRoster);
+
+// ── WAV encoding ─────────────────────────────────────────────────────────────
+function encodeWAV(chunks, sampleRate) {
+  let total = chunks.reduce((n, c) => n + c.length, 0);
+  const flat = new Float32Array(total);
+  let off = 0;
+  for (const c of chunks) { flat.set(c, off); off += c.length; }
+  const pcm = new Int16Array(flat.length);
+  for (let i = 0; i < flat.length; i++)
+    pcm[i] = Math.max(-32768, Math.min(32767, flat[i] * 32768));
+  const buf = new ArrayBuffer(44 + pcm.byteLength);
+  const v   = new DataView(buf);
+  const ws  = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0,'RIFF'); v.setUint32(4, 36 + pcm.byteLength, true);
+  ws(8,'WAVE'); ws(12,'fmt ');
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,sampleRate,true); v.setUint32(28,sampleRate*2,true);
+  v.setUint16(32,2,true); v.setUint16(34,16,true);
+  ws(36,'data'); v.setUint32(40,pcm.byteLength,true);
+  new Uint8Array(buf,44).set(new Uint8Array(pcm.buffer));
+  return buf;
+}
+
+function chunksToB64(chunks, sr) {
+  const wav = encodeWAV(chunks, sr);
+  const b = new Uint8Array(wav);
+  let s = '';
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+  return btoa(s);
+}
+
+// ── Hold-to-speak ─────────────────────────────────────────────────────────────
+const MIC_OK = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+let holdRecording = false;
+let holdChunks    = [];
+let micStream = null, micCtx = null, micSource = null, micProc = null, micSR = 44100;
+
+function teardownMic() {
+  if (micProc)   { micProc.disconnect();   micProc   = null; }
+  if (micSource) { micSource.disconnect(); micSource = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  if (micCtx)    { micCtx.close();         micCtx    = null; }
+}
+
+async function transcribeAndChat(chunks, sr) {
+  const b64 = chunksToB64(chunks, sr);
+  let text = '';
+  try {
+    const res  = await fetch('/transcribe', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({audio: b64}),
+    });
+    const data = await res.json();
+    text = (data.text || '').trim();
+  } catch { return; }
+  if (!text) return;
+  cin.value = text;
+  send();
+}
+
+async function startHold() {
+  if (!MIC_OK || holdRecording) return;
+  holdRecording = true;
+  holdChunks = [];
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {channelCount:1, echoCancellation:true, noiseSuppression:true},
+    });
+    micCtx    = new AudioContext();
+    micSR     = micCtx.sampleRate;
+    micSource = micCtx.createMediaStreamSource(micStream);
+    micProc   = micCtx.createScriptProcessor(4096, 1, 1);
+    micProc.onaudioprocess = e => {
+      if (holdRecording) holdChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    };
+    micSource.connect(micProc);
+    micProc.connect(micCtx.destination);
+  } catch {
+    holdRecording = false;
+    teardownMic();
+    return;
+  }
+  micBtn.classList.add('recording');
+}
+
+async function stopHold() {
+  if (!holdRecording) return;
+  holdRecording = false;
+  micBtn.classList.remove('recording');
+  const chunks = holdChunks.splice(0);
+  const sr     = micSR;
+  teardownMic();
+  if (!chunks.length) return;
+  micBtn.disabled = true;
+  await transcribeAndChat(chunks, sr);
+  micBtn.disabled = false;
+}
+
+if (!MIC_OK) {
+  micBtn.disabled = true;
+  micBtn.title = 'Microphone unavailable (HTTPS required)';
+} else {
+  micBtn.addEventListener('mousedown', startHold);
+  micBtn.addEventListener('mouseup',   stopHold);
+  micBtn.addEventListener('mouseleave', () => { if (holdRecording) stopHold(); });
+  document.addEventListener('mouseup',  () => { if (holdRecording) stopHold(); });
+  micBtn.addEventListener('touchstart', e => { e.preventDefault(); startHold(); }, {passive:false});
+  micBtn.addEventListener('touchend',   e => { e.preventDefault(); stopHold();  }, {passive:false});
+}
 
 // ── service worker ────────────────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
