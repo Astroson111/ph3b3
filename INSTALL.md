@@ -105,6 +105,8 @@ chmod +x setup.sh
 
 This creates a `.venv`, installs all Python dependencies, and installs system packages via `apt`.
 
+It also seeds `soul/soul.md` from `soul_public.md` if the file doesn't already exist. `soul/soul.md` is Ph3b3's identity document — her name, voice, purpose, and personality. It is gitignored and never committed; edit it freely to give her an identity specific to your installation. Re-running `setup.sh` will not overwrite a `soul.md` you have already customised.
+
 ### 4. Download the voice model
 
 Ph3b3 uses Piper with the `en_GB-alba-medium` voice.
@@ -221,3 +223,9 @@ The robot connects to Ph3b3 over WebSocket at `ws://<nyx-ip>:7331/ws/stackchan`.
 **Spotify tools not working** — Spotify credentials must be set in `.env`. On first use, a browser window will open to complete OAuth. Run the server in a terminal with a display available (`DISPLAY=:0`).
 
 **Permission denied on `wg-quick`** — WireGuard needs sudo. Either run `start.sh` with sudo or add a sudoers rule for `wg-quick`.
+
+**Soul: missing on the status panel** — `soul/soul.md` is gitignored and not included in the repo. Run `./setup.sh` to seed it automatically, or copy it manually:
+
+```bash
+cp soul/soul_public.md soul/soul.md
+```
