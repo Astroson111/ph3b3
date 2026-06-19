@@ -126,6 +126,7 @@ async def lifespan(app):
     text = greetings[(boot_count - 1) % len(greetings)] + " Made with Soul, baby."
     log.info(f"Boot greeting (#{boot_count}): {text}")
     def _greet():
+        time.sleep(4)  # wait for ALSA to be ready under systemd
         tts.speak(text, blocking=False)
         reminder_msg = reminders.on_boot()
         if reminder_msg:
