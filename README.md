@@ -74,6 +74,30 @@ Replace `100.x.x.x` with the address returned by `tailscale ip -4` on the server
 
 Tailscale's coordination servers broker the initial connection and handle key exchange, but **traffic between your devices is encrypted end-to-end** and never passes through Tailscale's infrastructure. If you want zero third-party involvement, [NetBird](https://netbird.io) is a fully self-hostable alternative built on the same WireGuard foundation.
 
+## Control Panel (`/panel`)
+
+Ph3b3 ships a mobile-first PWA served at `https://<nyx>:7331/panel`. It is the local control plane — designed to live on your phone's home screen so you can reach Ph3b3 without opening a terminal.
+
+**What it is:**
+The panel is a single self-contained HTML page (CSS and JS fully inline, zero external CDNs or fonts). Everything runs inside your LAN. Nothing phones home. The page is served behind the same basic auth as the rest of Ph3b3.
+
+**Three panes:**
+- **Status** — polls `/health` and `/ready` every 10 s. Shows live model name, soul load state, TTS/STT readiness, and boot count.
+- **Chat + Voice** — text box → `POST /chat` → displays Ph3b3's reply text and decodes + plays the base64 WAV audio (Alba's voice via Piper). One endpoint, one tap.
+- **Devices** — lightweight in-memory last-seen roster. Any authenticated request carrying an `X-Ph3b3-Device` header (e.g. `iris`, `stackchan`) updates the roster. Header-less traffic lands in the `unidentified` bucket. Raw UTC timestamps are shown — no fake "online" badge.
+
+**PWA / Add to Home Screen:**
+The panel ships a web manifest (`/static/panel.webmanifest`) and a service worker (`/sw.js`) so Android Chrome will offer "Add to Home Screen". The SW uses network-first for API routes and cache-first for static assets.
+
+**How to open it:**
+```
+https://<nyx-ip>:7331/panel
+```
+Accept the self-signed cert warning on first open. Enter your `astroson` credentials when the browser prompts. The browser caches those credentials for the origin, so all subsequent panel fetches are transparent — no credentials hardcoded in the page.
+
+**Service worker note:**
+SW registration requires HTTPS. Over a self-signed LAN cert it will register in most Android Chrome versions but may be blocked in stricter browser profiles. The panel loads and works fully even if the SW fails to register — it just won't be installable as a home-screen app in that case.
+
 ## Responsible Use
 
 Ph3b3 includes network scanning and cybersecurity tools intended for use on networks you own or have explicit permission to scan.

@@ -1,0 +1,14 @@
+{
+  "name": "Ph3b3 Control",
+  "short_name": "Ph3b3",
+  "description": "Local AI control plane for Ph3b3 on Nyx — fully offline, no cloud",
+  "start_url": "/panel",
+  "display": "standalone",
+  "background_color": "#0f0624",
+  "theme_color": "#0f0624",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

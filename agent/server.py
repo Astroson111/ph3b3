@@ -171,6 +171,8 @@ async def basic_auth(request: Request, call_next):
             status_code=401,
             headers={"WWW-Authenticate": 'Basic realm="Ph3b3"'},
         )
+    device = request.headers.get("X-Ph3b3-Device", "unidentified")
+    _device_roster[device] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return await call_next(request)
 
 spotify = SpotifyModule()
@@ -664,6 +666,9 @@ def get_session(sid="default"):
     if sid not in sessions: sessions[sid] = Session()
     return sessions[sid]
 
+# In-memory device roster: { device_name -> ISO-UTC last-seen timestamp }
+_device_roster: dict = {}
+
 @app.get("/health")
 async def health():
     # Intentionally touches nothing — responds immediately even mid-startup.
@@ -781,6 +786,26 @@ async def transcribe_audio(body: dict):
         except OSError:
             pass
 
+
+@app.get("/panel")
+async def panel():
+    return Response(
+        content=(ROOT / "static" / "panel.html").read_text(encoding="utf-8"),
+        media_type="text/html",
+    )
+
+@app.get("/sw.js")
+async def service_worker():
+    content = (ROOT / "static" / "sw.js").read_text(encoding="utf-8")
+    return Response(
+        content=content,
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/"},
+    )
+
+@app.get("/devices")
+async def devices():
+    return {"devices": dict(_device_roster)}
 
 @app.get("/")
 async def index():
