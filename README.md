@@ -82,7 +82,7 @@ From any phone on the network it gives you:
 - **Chat + voice in one** — type to her; she answers in text *and* speaks the reply in Alba's voice. Both come back from a single `/chat` call (`{response, audio}`), so the voice you hear is her real reply running through Hermes3, not a parrot reading your own words back.
 - **Device roster** — a lightweight last-seen registry keyed on an `X-Ph3b3-Device` header. Iris and Stack-chan surface here as they check in; unidentified traffic lands in its own bucket. It shows the raw last-seen timestamp rather than overclaiming a hard "online" state — passive last-seen means *last active*, not *powered-on-right-now*.
 
-It installs to your home screen as a PWA (manifest + service worker), themed in Ph3b3's identity — violet face, magenta-pink accents, cyan-and-magenta circuit lines.
+It installs as a real standalone PWA (manifest + service worker), with Ph3b3's face as the app icon — themed in her identity: violet face, magenta-pink accents, cyan-and-magenta circuit lines.
 
 ---
 
@@ -131,17 +131,27 @@ sudo systemctl enable --now ph3b3
 
 ### Open the panel
 
-Once she's running, open the control panel in a browser on the same network:
+Once she's running, the recommended path is via [Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve):
+
+```
+https://<your-tailnet-name>.ts.net/panel
+```
+
+Tailscale Serve provides a trusted HTTPS certificate and a clean, stable hostname — the service worker registers cleanly, the PWA installs as a real standalone app (full-screen, Ph3b3's face as the icon), and there are no port numbers or cert warnings. Tailscale's stable name means she's reachable across networks without reconfiguration — tested working from outside home WiFi with no changes needed.
+
+**On the LAN (without Tailscale)?** Direct access also works:
 
 ```
 https://<ph3b3-host>:7331/panel
 ```
 
-On a phone, use your browser's **Add to Home Screen** to install it as a standalone app. Over a trusted certificate (e.g. fronted by Tailscale Serve) the service worker registers and you get a real install; over the LAN self-signed cert it still loads fully, though some browsers won't register the service worker for offline use.
+The panel loads fully; your browser warns once about the self-signed cert. The service worker may not register in all browsers over a self-signed cert, so the PWA install experience is better via Tailscale Serve.
+
+On a phone, use your browser's **Add to Home Screen** or install prompt to add the panel as a standalone app.
 
 Auth is the existing basic auth — the browser holds it once you've loaded the page, so the panel never stores credentials of its own.
 
-**Away from home?** Ph3b3 stays on your network by default. For remote access she's reachable over [Tailscale](https://tailscale.com), which keeps her private while letting your own devices reach her from anywhere — see `INSTALL.md` for setup.
+For Tailscale Serve setup, see `INSTALL.md`.
 
 ---
 
