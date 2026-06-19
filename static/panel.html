@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f0624">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Ph3b3">
+  <link rel="manifest" href="/static/panel.webmanifest">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
+  <title>Ph3b3</title>
+  <style>
+    :root {
+      --bg:       #0f0624;
+      --surface:  rgba(43, 15, 95, 0.75);
+      --border:   rgba(124, 58, 237, 0.32);
+      --purple:   #7c3aed;
+      --magenta:  #e91e8c;
+      --cyan:     #00e5ff;
+      --text:     #e8d5ff;
+      --dim:      #9d7eca;
+      --ok:       #4ade80;
+      --warn:     #fbbf24;
+      --err:      #f87171;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background-color: var(--bg);
+      background-image:
+        linear-gradient( 45deg, transparent 48%, rgba(0,229,255,.045) 49%, rgba(0,229,255,.045) 51%, transparent 52%),
+        linear-gradient(-45deg, transparent 48%, rgba(247,37,133,.045) 49%, rgba(247,37,133,.045) 51%, transparent 52%);
+      background-size: 28px 28px;
+      color: var(--text);
+      height: 100vh;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    .hdr {
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+      padding: .65rem 1rem;
+      background: rgba(15,6,36,.92);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .hdr img { width: 28px; height: 28px; border-radius: 7px; }
+    .hdr-title {
+      font-size: 1rem;
+      font-weight: 700;
+      background: linear-gradient(90deg, var(--magenta), var(--cyan));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hdr-pulse {
+      margin-left: auto;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 6px var(--ok);
+      animation: blink 2s ease-in-out infinite;
+    }
+    .hdr-pulse.dead { background: var(--err); box-shadow: 0 0 6px var(--err); animation: none; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+    /* ── Content ── */
+    .content {
+      flex: 1;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Panes ── */
+    .pane { display: none; flex-direction: column; gap: .7rem; flex: 1; overflow-y: auto; padding: .85rem .85rem 0; }
+    .pane.active { display: flex; }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: .9rem;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      flex-shrink: 0;
+    }
+    .card-title {
+      font-size: .7rem;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: .7rem;
+      display: flex;
+      align-items: center;
+      gap: .45rem;
+    }
+    .card-title::before {
+      content: '';
+      display: inline-block;
+      width: 3px; height: 11px;
+      background: linear-gradient(180deg, var(--magenta), var(--cyan));
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    /* ── Stat rows ── */
+    .sr {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: .38rem 0;
+      border-bottom: 1px solid rgba(255,255,255,.05);
+      font-size: .82rem;
+    }
+    .sr:last-child { border-bottom: none; }
+    .sr-l { color: var(--dim); }
+    .sr-v { color: var(--text); font-weight: 500; font-family: 'SF Mono','Cascadia Code','Consolas',monospace; font-size:.78rem; }
+    .badge {
+      display: inline-flex; align-items: center; gap: .28rem;
+      padding: .12rem .44rem;
+      border-radius: 20px;
+      font-size: .72rem; font-weight: 700;
+    }
+    .ok  { background: rgba(74,222,128,.15); color: var(--ok);  border: 1px solid rgba(74,222,128,.3); }
+    .err { background: rgba(248,113,113,.15); color: var(--err); border: 1px solid rgba(248,113,113,.3); }
+    .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+    .ts  { font-size: .68rem; color: var(--dim); text-align: right; padding: .3rem .1rem .5rem; }
+
+    /* ── Chat pane ── */
+    #paneChat { gap: 0; padding: 0; }
+    .chat-wrap {
+      display: flex; flex-direction: column; flex: 1; min-height: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .chat-title {
+      font-size: .7rem; font-weight: 700;
+      letter-spacing: .08em; text-transform: uppercase;
+      color: var(--dim);
+      padding: .75rem .9rem .5rem;
+      display: flex; align-items: center; gap: .45rem;
+      flex-shrink: 0;
+    }
+    .chat-title::before {
+      content: ''; display: inline-block;
+      width: 3px; height: 11px;
+      background: linear-gradient(180deg, var(--magenta), var(--cyan));
+      border-radius: 2px;
+    }
+    .chat-hist {
+      flex: 1; overflow-y: auto;
+      display: flex; flex-direction: column; gap: .45rem;
+      padding: .4rem .9rem .6rem;
+    }
+    .msg {
+      max-width: 82%; padding: .55rem .8rem;
+      border-radius: 12px; font-size: .88rem; line-height: 1.45;
+      word-break: break-word;
+    }
+    .msg-user {
+      align-self: flex-end;
+      background: linear-gradient(135deg,#4c1d95,#6d28d9);
+      border: 1px solid rgba(124,58,237,.5);
+    }
+    .msg-asst {
+      align-self: flex-start;
+      background: rgba(20,8,52,.85);
+      border: 1px solid rgba(0,229,255,.18);
+    }
+    .msg-hint {
+      align-self: flex-start; font-style: italic;
+      font-size: .76rem; color: var(--dim);
+      padding: .2rem .4rem;
+    }
+    .audio-row {
+      display: none; align-items: center; gap: .4rem;
+      padding: .3rem .9rem; font-size: .72rem; color: var(--cyan); flex-shrink: 0;
+    }
+    .audio-row.on { display: flex; }
+    .bars { display: flex; align-items: flex-end; gap: 2px; height: 13px; }
+    .bar { width: 3px; background: var(--cyan); border-radius: 2px; animation: ba .8s ease-in-out infinite; }
+    .bar:nth-child(2){animation-delay:.12s} .bar:nth-child(3){animation-delay:.24s}
+    @keyframes ba { 0%,100%{height:3px} 50%{height:13px} }
+    .chat-foot {
+      display: flex; gap: .5rem;
+      padding: .65rem .75rem calc(.65rem + env(safe-area-inset-bottom,0px));
+      border-top: 1px solid var(--border);
+      background: rgba(15,6,36,.7); flex-shrink: 0;
+    }
+    .cin {
+      flex: 1;
+      background: rgba(43,15,95,.6);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: .6rem .8rem;
+      color: var(--text); font-size: .88rem;
+      outline: none; font-family: inherit;
+    }
+    .cin:focus { border-color: var(--purple); }
+    .btn-send {
+      background: linear-gradient(135deg, var(--magenta), #b5006e);
+      border: none; border-radius: 8px;
+      color: #fff; padding: .6rem 1rem;
+      font-size: .88rem; font-weight: 700;
+      cursor: pointer; font-family: inherit; flex-shrink: 0;
+      transition: opacity .15s;
+    }
+    .btn-send:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-send:active { opacity: .8; }
+
+    /* ── Device roster ── */
+    .dev-list { display: flex; flex-direction: column; gap: .45rem; }
+    .dev-row {
+      display: grid; grid-template-columns: 10px 1fr; gap: .3rem .65rem;
+      align-items: center; padding: .5rem .7rem;
+      border-radius: 8px;
+      background: rgba(15,6,36,.55);
+      border: 1px solid rgba(124,58,237,.2);
+    }
+    .dev-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--cyan); box-shadow: 0 0 5px var(--cyan);
+    }
+    .dev-dot.unid { background: var(--dim); box-shadow: none; }
+    .dev-name { font-size: .84rem; font-weight: 700; color: var(--cyan); }
+    .dev-name.unid { color: var(--dim); }
+    .dev-ts {
+      grid-column: 2; font-size: .7rem; color: var(--dim);
+      font-family: 'SF Mono','Cascadia Code','Consolas',monospace;
+    }
+    .dev-empty { text-align: center; color: var(--dim); font-size: .84rem; padding: 1.25rem 0; }
+    .btn-sm {
+      margin-left: auto;
+      background: rgba(124,58,237,.18); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--dim);
+      padding: .22rem .6rem; font-size: .7rem;
+      cursor: pointer; font-family: inherit;
+    }
+
+    /* ── Bottom tabs ── */
+    .tabs {
+      display: flex;
+      background: rgba(10,3,26,.96);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    .tab {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: .55rem 0; gap: .2rem;
+      border: none; background: none;
+      color: var(--dim); cursor: pointer;
+      font-size: .6rem; font-weight: 700;
+      letter-spacing: .06em; text-transform: uppercase;
+      font-family: inherit; transition: color .15s;
+    }
+    .tab.active { color: var(--magenta); }
+    .tab svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+  </style>
+</head>
+<body>
+
+<header class="hdr">
+  <img src="/static/icon-192.png" alt="">
+  <span class="hdr-title">Ph3b3</span>
+  <span id="hPulse" class="hdr-pulse dead"></span>
+</header>
+
+<main class="content">
+
+  <!-- STATUS -->
+  <section id="paneStatus" class="pane active">
+    <div class="card">
+      <div class="card-title">Health</div>
+      <div id="healthRows"><div class="sr"><span class="sr-l">Status</span><span class="sr-v">checking…</span></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Runtime</div>
+      <div id="readyRows"><div class="sr"><span class="sr-l">Model</span><span class="sr-v">—</span></div></div>
+    </div>
+    <div class="ts" id="statusTs"></div>
+  </section>
+
+  <!-- CHAT -->
+  <section id="paneChat" class="pane">
+    <div class="chat-wrap">
+      <div class="chat-title">Conversation</div>
+      <div class="chat-hist" id="chatHist"></div>
+      <div class="audio-row" id="audioRow">
+        <div class="bars"><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>
+        Alba speaking…
+      </div>
+      <div class="chat-foot">
+        <input class="cin" id="cin" type="text" placeholder="Message Ph3b3…" autocomplete="off" autocorrect="off">
+        <button class="btn-send" id="sendBtn">Send</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- DEVICES -->
+  <section id="paneDevices" class="pane">
+    <div class="card">
+      <div class="card-title">
+        Device Roster
+        <button class="btn-sm" id="rosterBtn">Refresh</button>
+      </div>
+      <div class="dev-list" id="devList"><div class="dev-empty">Loading…</div></div>
+    </div>
+    <div class="ts" id="rosterTs"></div>
+  </section>
+
+</main>
+
+<nav class="tabs">
+  <button class="tab active" data-pane="Status">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    Status
+  </button>
+  <button class="tab" data-pane="Chat">
+    <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    Chat
+  </button>
+  <button class="tab" data-pane="Devices">
+    <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+    Devices
+  </button>
+</nav>
+
+<script>
+// ── session id ────────────────────────────────────────────────────────────────
+const SID = (() => {
+  let id = localStorage.getItem('ph3b3_sid');
+  if (!id) { id = 'panel-' + Math.random().toString(36).slice(2,10); localStorage.setItem('ph3b3_sid', id); }
+  return id;
+})();
+
+// ── tab nav ───────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  document.getElementById('pane' + t.dataset.pane).classList.add('active');
+}));
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+const hPulse = document.getElementById('hPulse');
+const now = () => new Date().toLocaleTimeString();
+
+function row(label, val) {
+  return `<div class="sr"><span class="sr-l">${label}</span><span class="sr-v">${val}</span></div>`;
+}
+function badge(ok, label) {
+  return `<span class="badge ${ok?'ok':'err'}"><span class="dot"></span>${label}</span>`;
+}
+
+// ── status ────────────────────────────────────────────────────────────────────
+async function refreshStatus() {
+  try {
+    const [h, r] = await Promise.all([fetch('/health'), fetch('/ready')]);
+    const hd = await h.json();
+    const rd = await r.json();
+    hPulse.className = 'hdr-pulse';
+    document.getElementById('healthRows').innerHTML =
+      row('Status', badge(hd.status === 'alive', hd.status));
+    document.getElementById('readyRows').innerHTML =
+      row('Model', rd.model || '—') +
+      row('Soul', badge(rd.soul, rd.soul ? 'loaded' : 'missing')) +
+      row('TTS',  badge(rd.tts && rd.tts.startsWith('Piper'), rd.tts || '—')) +
+      row('STT',  badge(rd.whisper && rd.whisper.toLowerCase().includes('ready'), rd.whisper || '—')) +
+      row('Boot', '#' + (rd.boot || 0));
+    document.getElementById('statusTs').textContent = 'Updated ' + now();
+  } catch {
+    hPulse.className = 'hdr-pulse dead';
+    document.getElementById('healthRows').innerHTML = row('Status', badge(false, 'unreachable'));
+  }
+}
+refreshStatus();
+setInterval(refreshStatus, 10_000);
+
+// ── chat + audio ──────────────────────────────────────────────────────────────
+const chatHist  = document.getElementById('chatHist');
+const cin       = document.getElementById('cin');
+const sendBtn   = document.getElementById('sendBtn');
+const audioRow  = document.getElementById('audioRow');
+
+function addMsg(role, text) {
+  const d = document.createElement('div');
+  d.className = 'msg msg-' + role;
+  d.textContent = text;
+  chatHist.appendChild(d);
+  chatHist.scrollTop = chatHist.scrollHeight;
+  return d;
+}
+
+async function playAudio(b64) {
+  if (!b64) return;
+  audioRow.classList.add('on');
+  try {
+    const bin = atob(b64);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    const blob = new Blob([buf], {type: 'audio/wav'});
+    const url  = URL.createObjectURL(blob);
+    const aud  = new Audio(url);
+    await new Promise((res, rej) => { aud.onended = res; aud.onerror = rej; aud.play().catch(rej); });
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    console.warn('[Ph3b3] audio:', e);
+  } finally {
+    audioRow.classList.remove('on');
+  }
+}
+
+async function send() {
+  const msg = cin.value.trim();
+  if (!msg) return;
+  cin.value = '';
+  sendBtn.disabled = true;
+  addMsg('user', msg);
+  const hint = document.createElement('div');
+  hint.className = 'msg-hint';
+  hint.textContent = 'thinking…';
+  chatHist.appendChild(hint);
+  chatHist.scrollTop = chatHist.scrollHeight;
+  try {
+    const res  = await fetch('/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id: SID, message: msg}),
+    });
+    const data = await res.json();
+    hint.remove();
+    addMsg('asst', data.response || '(no response)');
+    playAudio(data.audio); // fire-and-forget — don't block next message
+  } catch(e) {
+    hint.remove();
+    addMsg('asst', 'Error: ' + e.message);
+  } finally {
+    sendBtn.disabled = false;
+    cin.focus();
+  }
+}
+
+sendBtn.addEventListener('click', send);
+cin.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+
+// ── device roster ─────────────────────────────────────────────────────────────
+const devList = document.getElementById('devList');
+
+async function refreshRoster() {
+  try {
+    const data = await fetch('/devices').then(r => r.json());
+    const entries = Object.entries(data.devices || {});
+    if (!entries.length) {
+      devList.innerHTML = '<div class="dev-empty">No devices seen yet.</div>';
+    } else {
+      entries.sort(([a],[b]) => a === 'unidentified' ? 1 : b === 'unidentified' ? -1 : a.localeCompare(b));
+      devList.innerHTML = entries.map(([name, ts]) => {
+        const u = name === 'unidentified';
+        return `<div class="dev-row">
+          <span class="dev-dot${u?' unid':''}"></span>
+          <span class="dev-name${u?' unid':''}">${name}</span>
+          <span class="dev-ts">${ts}</span>
+        </div>`;
+      }).join('');
+    }
+    document.getElementById('rosterTs').textContent = 'Updated ' + now();
+  } catch {
+    devList.innerHTML = '<div class="dev-empty">Error loading roster.</div>';
+  }
+}
+refreshRoster();
+setInterval(refreshRoster, 30_000);
+document.getElementById('rosterBtn').addEventListener('click', refreshRoster);
+
+// ── service worker ────────────────────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', {scope: '/'})
+      .then(r  => console.log('[Ph3b3] SW registered — scope:', r.scope))
+      .catch(e => console.warn('[Ph3b3] SW registration failed:', e.message));
+  });
+}
+</script>
+</body>
+</html>
