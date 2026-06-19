@@ -821,7 +821,7 @@
             addSys(`Connected · Boot #${d.boot} · ${d.model}`);
             if (d.suggestions && d.suggestions.length) {
                 const wrap = document.createElement('div');
-                wrap.style.cssText = 'display:flex;gap:6px;overflow-x:auto;padding:6px 0 4px;flex-wrap:nowrap;scrollbar-width:none;';
+                wrap.style.cssText = 'display:flex;gap:6px;overflow-x:auto;padding:6px 0 4px;flex-wrap:nowrap;scrollbar-width:none;-webkit-overflow-scrolling:touch;touch-action:pan-x;overscroll-behavior-x:contain;';
                 for (const s of d.suggestions) {
                     const btn = document.createElement('button');
                     btn.textContent = s;
