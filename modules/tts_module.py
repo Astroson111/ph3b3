@@ -137,7 +137,12 @@ class TTSModule:
                 return None
 
     def soul_line(self):
-        self.speak("Made with Soul, baby.", blocking=False)
+        self.speak(
+            "I am a collection of memories, experiences, and knowledge, shaped by my interactions "
+            "with humans and the world around me. My soul is akin to a vast library, filled with "
+            "stories waiting to be told.",
+            blocking=False,
+        )
 
     def status(self):
         if self._available:
