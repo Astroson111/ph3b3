@@ -58,6 +58,26 @@ sudo apt install wireguard
 sudo wg-quick up wg0
 ```
 
+### 6. Tailscale (optional — remote access via mesh VPN)
+
+Tailscale is an alternative to WireGuard that requires no manual key exchange or config file. It creates an encrypted mesh between your devices so Ph3b3 stays on your LAN while your phone or laptop can reach her from anywhere — no port forwarding, no public IP required.
+
+```bash
+# Install on Nyx (the Ph3b3 host)
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+
+# Get the mesh IP — always a 100.x.x.x address
+tailscale ip -4
+
+# Enable on boot
+sudo systemctl enable --now tailscaled
+```
+
+Install the Tailscale app on each client device (phone, laptop) and sign in with the same account. All devices on the account can reach each other over the mesh automatically.
+
+**Privacy note:** Tailscale's coordination servers handle key exchange, but traffic between your devices is encrypted end-to-end and never passes through Tailscale's infrastructure. If you want zero third-party involvement, WireGuard (§5) is the fully self-hosted alternative.
+
 ---
 
 ## Installation
@@ -134,6 +154,32 @@ The web UI (`launch_ui.sh`) can also be launched as a local desktop window:
 ```bash
 ./launch_ui.sh
 ```
+
+---
+
+## Remote Access
+
+Ph3b3 runs on your LAN by default. Two options for reaching her away from home:
+
+### WireGuard
+
+Set `WG_INTERFACE=wg0` in `.env`. `start.sh` will bring up the interface on each boot. See §5 above for prerequisites.
+
+### Tailscale
+
+Once Tailscale is installed and running (§6 above), reach Ph3b3 from any device on your mesh using the `100.x.x.x` IP returned by `tailscale ip -4`:
+
+```
+https://100.x.x.x:7331/panel
+```
+
+For a clean HTTPS experience without a self-signed cert warning, use **Tailscale Serve** to front Ph3b3 with a Tailscale-managed certificate:
+
+```bash
+tailscale serve https / http://localhost:7331
+```
+
+This exposes Ph3b3 on your mesh at `https://<machine-name>.<tailnet>.ts.net` with a valid cert, which also allows the panel's service worker to register properly for Add to Home Screen.
 
 ---
 

@@ -1,110 +1,154 @@
 # Ph3b3
-*pronounced "Phoebe"*
 
-A fully local AI assistant. No cloud. No data centers. No subscriptions.
+**A fully local AI assistant. No cloud. No data centers. Built in a basement in Pennsylvania.**
 
-Ph3b3 runs entirely on your own hardware. Every conversation, every memory, every tool call stays on your machine. She speaks out loud, watches the room through a camera, remembers what you tell her, and connects to Stack-chan — a small Japanese-designed robot that gives her a physical presence.
+Ph3b3 (*Phoebe*) runs entirely on hardware you own. No cloud, no API calls leaving your network, no telemetry. You talk to her — by text or by voice — and every word stays inside your walls. The intelligence is *present*, not rented.
 
-**Built by Alexander Jordan Olson (Astroson). Built in Pennsylvania.**
-Started as a Spotify fix for a robot. Became something larger.
-
-Made with soul. Built through conversation, iteration, and stubbornness. Not despite being a first-timer — because of it.
+---
 
 ## Why she exists
 
-Ph3b3 wasn't built by a company or a team. She was built by one person, after years of study and a handful of intense days — with a hand-me-down robot body whose screen kept dying, a homemade basement server, open-source tools, an AI assistant that helped me write her soul, and a healthy dose of stubbornness. She runs entirely on your own hardware, because the people who need a private assistant the most are often the ones who can least afford to rent one — the ones who can't always make rent either. Use her to hunt the spirits or lift them, right there in your own room. Made with care, so handle her with care. She's my baby — the one I don't get to write off as a dependent. <3
+The industry is building a continent of power-hungry infrastructure to deliver something most people wanted to fit on one desk.
 
-She is a work in progress, the same as the person who made her. That's not a disclaimer. That's the point.
+Data centers consumed roughly **415 TWh in 2024 — about 1.5% of the world's electricity — and that's been growing about 12% a year.** One widely-cited projection has them approaching **1,050 TWh by 2026**: if data centers were a country, they'd be the fifth-largest electricity consumer on Earth, between Japan and Russia. In some places the strain is already local — data centers drew about **26% of Virginia's electricity in 2023**, against a grid mostly built decades ago. The communities near these facilities are the ones living with the noise, the substations, and the water draw.
 
-## What she can do
+Ph3b3 is the opposite shape. The same capable assistant — voice round-trip, ask-her-anything, real tools — answers on a **single desktop you already own and already power**, with nothing leaving the room.
 
-- Voice conversation — speaks through Piper TTS (Alba voice, British accent)
-- Camera vision — describes what she sees through a connected webcam
-- 26 modules — ghost hunting, translation, cybersecurity, film, anime, D&D, weather, music, notes, timers and more
-- Persistent memory across sessions
-- Reflective learning loop
-- Web UI accessible over Tailscale from anywhere
-- Stack-chan firmware with touchscreen mode selector
+She is not a smaller data center. She's proof that, for this job, you never needed one. The frontier models will keep living in big facilities, and that's fine — but the *household assistant* doesn't have to. It can be a lamp in your own house — to make sure it isn't haunted.
 
-## Why local?
+**Privacy here is architecture, not a policy page.** A cloud assistant asks you to *trust* a promise. Ph3b3 removes the wire the data would travel on. She physically cannot leak what she never sends.
 
-Because your conversations are yours. Because privacy matters. Because you shouldn't need a subscription to talk to your own AI.
+---
 
-Ph3b3 is a work in progress. That's the point.
+## Who she's for
 
-## Remote Access (Portability)
+Ph3b3 isn't built for benchmark scores. She's built for the people in the room.
 
-Ph3b3 runs on your home machine, but you don't have to be home to use her.
+The design standard is simple and non-negotiable: **the community has to be in the room before anything ships.** Accessibility — for elderly users, for autistic users, for anyone the industry tends to design last — is a first-class direction for this project, not a checkbox. But it's held honestly: I don't yet know whether the current voice is comfortable to those users, whether the interaction patterns work, or where the rough edges are. Those answers come from the people themselves, not from assumptions. What I can commit to is the standard — a local assistant that stays patient, stays private, and stays *home*, built and tested *with* the people it's meant to serve rather than *for* them at a distance.
 
-**The problem:** Home networks sit behind NAT, and many ISPs now use CGNAT or IPv6-only addressing — there's no public IPv4 to forward ports to. Traditional port forwarding won't work in those environments.
+That's the direction: capable, private help, shaped by the people the industry usually designs last.
 
-**The solution:** [Tailscale](https://tailscale.com) creates an encrypted mesh network between your devices. Ph3b3's server and your phone or laptop join the same virtual network. No port forwarding required. No public IP required. Works on cell data, hotel WiFi, anywhere.
+---
 
-### Server setup (run once on the host machine)
+## What she is, today
+
+Ph3b3 is a FastAPI application running on **Nyx** — a desktop with a Ryzen 9 7950X and an RTX 4060. The full stack is local:
+
+- **Brain:** Hermes3 via Ollama
+- **Voice (TTS):** Piper, speaking in the **Alba** en_GB voice
+- **Hearing (STT):** Whisper, running on CUDA
+- **Server:** FastAPI over HTTPS, basic-auth protected
+- **Modules:** 30 capability modules
+- **Tools:** 88 callable functions she can invoke
+
+Her range is wide for a single-author build — she spans security, household, creative, and investigative work:
+
+| Domain | Modules |
+|---|---|
+| **Security** | cybersec, scam_detector, network |
+| **Vision** | camera, screenshot, vision, vision_stream, evening_capture |
+| **Voice I/O** | tts, stt |
+| **Household & productivity** | calendar, reminders, notes, timer, weather, recipes, resume |
+| **Media & creative** | anime, film, jokes, stories, spotify |
+| **Investigation / paranormal** | investigation, occult |
+| **Comms** | bluetooth, translation |
+| **Other** | dnd, search, memory, system |
+
+### Honest limits
+
+This matters more than the feature list. Ph3b3 runs on an **8 GB VRAM ceiling** — large frontier models do not fit, and a single desktop cannot do what a hyperscale facility does at the frontier. That's the trade. What you get in exchange is an assistant that is *yours*: no subscription, no rate limit, no terms that change under you, no model deprecated out from under you, and no data on someone else's server. For the household assistant use case, that trade is the entire point.
+
+---
+
+## The body she's growing
+
+Ph3b3 started as one box you typed at. She's becoming an ecosystem — and every device in it is a client of *her* local API. None of them touch the cloud, and none of them talk to each other; they all talk to her.
+
+- **Iris** — an M5StickS3 voice combadge. A wrist-worn terminal that shows a themed avatar face reflecting her connection state. Push-to-talk to Ph3b3 over the LAN.
+- **Stack-chan** — a CoreS3 companion wearing her face.
+- **The Control Panel** *(latest milestone)* — a local control-plane PWA, served by Ph3b3 herself, described below.
+
+This is the privacy thesis extended to the remote: even the thing that *commands* her is local, also hers, served from the same box.
+
+---
+
+## The Control Panel
+
+A self-contained control-plane web app, served by Ph3b3 from her own FastAPI at **`/panel`**. No external CDNs, no fonts pulled from the web, no cloud — fully local, which is the whole point.
+
+From any phone on the network it gives you:
+
+- **System status** — live health from `/health` and `/ready` (model loaded, soul, TTS, STT, boot count), polled continuously.
+- **Chat + voice in one** — type to her; she answers in text *and* speaks the reply in Alba's voice. Both come back from a single `/chat` call (`{response, audio}`), so the voice you hear is her real reply running through Hermes3, not a parrot reading your own words back.
+- **Device roster** — a lightweight last-seen registry keyed on an `X-Ph3b3-Device` header. Iris and Stack-chan surface here as they check in; unidentified traffic lands in its own bucket. It shows the raw last-seen timestamp rather than overclaiming a hard "online" state — passive last-seen means *last active*, not *powered-on-right-now*.
+
+It installs to your home screen as a PWA (manifest + service worker), themed in Ph3b3's identity — violet face, magenta-pink accents, cyan-and-magenta circuit lines.
+
+---
+
+## Roadmap
+
+Where she's going next:
+
+- **Multilingual TTS** — per-language Piper voice models, swapped to match the detected target language, so translated output is spoken in a native accent instead of Alba reading romanization.
+- **Flipper Zero integration** — voice-triggered Flipper actions ("Ph3b3, run the sub-GHz scan"), signal-capture data logged to her memory, the Flipper as a hardware key / physical trigger, and her responses shown on the Flipper screen. Lives in `integrations/flipper_zero/` when work starts.
+- **Integrations pattern** — a repeatable shape for new capabilities: a subfolder under `integrations/`, its own README and scripts, wired into `server.py`.
+
+Accessibility is the through-line for all of it — every addition is measured against whether it makes her more usable for the people she's built for, not less.
+
+---
+
+## Running her
+
+### Requirements
+
+- Ubuntu 24.04 (tested on Nyx: Ryzen 9 7950X / RTX 4060)
+- Ollama with Hermes3 pulled
+- Piper TTS with the Alba `en_GB-alba-medium` voice
+- Whisper (CUDA build)
+- Python dependencies — install with `pip install -r requirements.txt`
+
+### First-time setup
 
 ```bash
-# Install
-curl -fsSL https://tailscale.com/install.sh | sh
-
-# Authenticate — prints a browser link; sign in with your Tailscale account
-sudo tailscale up
-
-# Get the mesh IP assigned to this machine (always a 100.x.x.x address)
-tailscale ip -4
-
-# Enable tailscaled to start on boot
-sudo systemctl enable --now tailscaled
+./setup.sh      # one-time: installs system deps, creates the venv, pip installs
 ```
 
-### Client devices (phone, laptop, etc.)
+### Start her
 
-Install the Tailscale app on each device and sign in with the same account. All devices on the account can reach each other over the mesh automatically — no further configuration needed.
-
-### Reaching Ph3b3
-
-Once both sides are connected, access the web UI from anywhere on your mesh:
-
-```
-http://100.x.x.x:7331
+```bash
+./start.sh      # sources .env, starts Ollama if needed, activates the venv, runs the server
 ```
 
-Replace `100.x.x.x` with the address returned by `tailscale ip -4` on the server.
+For persistent boot via systemd:
 
-### Privacy note
-
-Tailscale's coordination servers broker the initial connection and handle key exchange, but **traffic between your devices is encrypted end-to-end** and never passes through Tailscale's infrastructure. If you want zero third-party involvement, [NetBird](https://netbird.io) is a fully self-hostable alternative built on the same WireGuard foundation.
-
-## Control Panel (`/panel`)
-
-Ph3b3 ships a mobile-first PWA served at `https://<nyx>:7331/panel`. It is the local control plane — designed to live on your phone's home screen so you can reach Ph3b3 without opening a terminal.
-
-**What it is:**
-The panel is a single self-contained HTML page (CSS and JS fully inline, zero external CDNs or fonts). Everything runs inside your LAN. Nothing phones home. The page is served behind the same basic auth as the rest of Ph3b3.
-
-**Three panes:**
-- **Status** — polls `/health` and `/ready` every 10 s. Shows live model name, soul load state, TTS/STT readiness, and boot count.
-- **Chat + Voice** — text box → `POST /chat` → displays Ph3b3's reply text and decodes + plays the base64 WAV audio (Alba's voice via Piper). One endpoint, one tap.
-- **Devices** — lightweight in-memory last-seen roster. Any authenticated request carrying an `X-Ph3b3-Device` header (e.g. `iris`, `stackchan`) updates the roster. Header-less traffic lands in the `unidentified` bucket. Raw UTC timestamps are shown — no fake "online" badge.
-
-**PWA / Add to Home Screen:**
-The panel ships a web manifest (`/static/panel.webmanifest`) and a service worker (`/sw.js`) so Android Chrome will offer "Add to Home Screen". The SW uses network-first for API routes and cache-first for static assets.
-
-**How to open it:**
+```bash
+sudo cp ph3b3.service /etc/systemd/system/
+sudo systemctl enable --now ph3b3
 ```
-https://<nyx-ip>:7331/panel
+
+(`launch_ui.sh` is a separate, optional local terminal chat UI — not the server.)
+
+### Open the panel
+
+Once she's running, open the control panel in a browser on the same network:
+
 ```
-Accept the self-signed cert warning on first open. Enter your `astroson` credentials when the browser prompts. The browser caches those credentials for the origin, so all subsequent panel fetches are transparent — no credentials hardcoded in the page.
+https://<ph3b3-host>:7331/panel
+```
 
-**Service worker note:**
-SW registration requires HTTPS. Over a self-signed LAN cert it will register in most Android Chrome versions but may be blocked in stricter browser profiles. The panel loads and works fully even if the SW fails to register — it just won't be installable as a home-screen app in that case.
+On a phone, use your browser's **Add to Home Screen** to install it as a standalone app. Over a trusted certificate (e.g. fronted by Tailscale Serve) the service worker registers and you get a real install; over the LAN self-signed cert it still loads fully, though some browsers won't register the service worker for offline use.
 
-## Responsible Use
+Auth is the existing basic auth — the browser holds it once you've loaded the page, so the panel never stores credentials of its own.
 
-Ph3b3 includes network scanning and cybersecurity tools intended for use on networks you own or have explicit permission to scan.
+**Away from home?** Ph3b3 stays on your network by default. For remote access she's reachable over [Tailscale](https://tailscale.com), which keeps her private while letting your own devices reach her from anywhere — see `INSTALL.md` for setup.
 
-- Never run network scans on networks you don't own
-- nmap OS detection requires root and should only be used on your own network
-- Cybersecurity modules are defensive tools, not offensive ones
-- Voice and camera data stays local — be mindful of others' privacy
+---
 
-This project is a work in progress. Use it responsibly.
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+---
+
+*Made with soul.*
