@@ -1,7 +1,7 @@
-// iris_firmware.ino — Rung A: connectivity menu + wifi provisioning
+// iris_firmware.ino — Rung A+: factory reset + repeatable onboarding
 // Iris — M5StickS3 voice combadge.
-// Adds over the face-engine rung: view-mode layer, BtnB menu, NVS wifi
-// persistence, captive-portal provisioning, non-blocking auto-reconnect.
+// Adds over the connectivity rung: boot BtnB hold → factory reset countdown,
+// menu "Forget WiFi" (timed confirm → NVS wipe), portal /rescan route.
 // Core /chat round-trip and Ph3b3Face engine unchanged.
 //
 // Build:
@@ -46,8 +46,8 @@ int    menuSel  = 0;
 bool   menuDirty     = true;
 bool   wifiSetupDirty = true;
 
-const char* MENU_ITEMS[] = { "WiFi Setup", "Reconnect", "Info", "Back" };
-const int   MENU_COUNT   = 4;
+const char* MENU_ITEMS[] = { "WiFi Setup", "Reconnect", "Forget WiFi", "Info", "Back" };
+const int   MENU_COUNT   = 5;
 
 bool     wifiWasConnected = false;
 uint32_t lastReconnectMs  = 0;
@@ -189,6 +189,8 @@ String buildPortalPage() {
   html += "<input type='password' name='pass' placeholder='password' autocomplete='off'>";
   // NOTE: portal creds sent over local AP in cleartext
   html += "<button type='submit'>CONNECT</button></form>";
+  html += "<a href='/rescan' style='color:#0ff;font-family:monospace;"
+          "display:block;margin-top:14px;text-align:center'>&#8635; Rescan networks</a>";
   html += portalMsg;
   html += "</body></html>";
   return html;
@@ -248,6 +250,11 @@ void startPortal() {
   portalMsg = "";
   httpServer.on("/",        HTTP_GET,  handlePortalRoot);
   httpServer.on("/connect", HTTP_POST, handlePortalConnect);
+  httpServer.on("/rescan",  HTTP_GET,  []() {
+    doScan();
+    httpServer.sendHeader("Location", "/");
+    httpServer.send(302, "text/plain", "");
+  });
   httpServer.onNotFound([]() {
     httpServer.sendHeader("Location", "http://192.168.4.1/");
     httpServer.send(302, "text/plain", "");
@@ -303,10 +310,11 @@ void drawMenu() {
   M5.Display.fillScreen(TFT_BLACK);
   M5.Display.setTextSize(2);
   M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
-  M5.Display.setCursor(4, 6);
+  M5.Display.setCursor(4, 4);
   M5.Display.println("-- MENU --");
+  // 5 items, spacing 22px (textSize 2 = 16px tall, 6px gap)
   for (int i = 0; i < MENU_COUNT; i++) {
-    M5.Display.setCursor(4, 38 + i * 28);
+    M5.Display.setCursor(0, 26 + i * 22);
     if (i == menuSel) {
       M5.Display.setTextColor(TFT_BLACK, TFT_CYAN);
     } else {
@@ -314,11 +322,11 @@ void drawMenu() {
     }
     M5.Display.print(" ");
     M5.Display.print(MENU_ITEMS[i]);
-    M5.Display.println("    ");   // clear highlight tail
+    M5.Display.println("     ");   // trailing spaces clear highlight tail
   }
   M5.Display.setTextSize(1);
   M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  M5.Display.setCursor(4, 158);
+  M5.Display.setCursor(4, 148);
   M5.Display.println("B:next  hold B:pick");
 }
 
@@ -398,12 +406,41 @@ void activateMenuItem() {
       }
       break;
 
-    case 2:  // Info
+    case 2:  // Forget WiFi — must stay held for 1.5s to confirm
+      {
+        M5.Display.fillScreen(TFT_BLACK);
+        M5.Display.setTextSize(2);
+        M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+        M5.Display.setCursor(4, 14);
+        M5.Display.println("FORGET");
+        M5.Display.println("WiFi?");
+        M5.Display.setTextSize(1);
+        M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+        M5.Display.setCursor(4, 66);
+        M5.Display.println("Keep holding BtnB");
+        M5.Display.setCursor(4, 82);
+        M5.Display.println("to wipe and restart.");
+        M5.Display.setCursor(4, 98);
+        M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+        M5.Display.println("Release = cancel.");
+        uint32_t t0 = millis();
+        bool confirmed = true;
+        while (millis() - t0 < 1500) {
+          M5.update();
+          if (!M5.BtnB.isPressed()) { confirmed = false; break; }
+          delay(30);
+        }
+        if (confirmed) factoryReset();   // never returns — wipes + restarts
+        // Released before timeout: return to menu, creds intact
+      }
+      break;
+
+    case 3:  // Info
       drawInfo();
       uiMode = INFO;
       break;
 
-    case 3:  // Back
+    case 4:  // Back
       uiMode = FACE;
       break;
   }
@@ -445,11 +482,75 @@ void handleBtnB() {
 }
 
 // ----------------------------------------------------------------------------
+// Factory reset helpers (shared by boot gesture and Forget WiFi menu path)
+// ----------------------------------------------------------------------------
+void drawResetScreen(int secsLeft) {
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setTextSize(2);
+  M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+  M5.Display.setCursor(4, 14);
+  M5.Display.println("HOLD BtnB");
+  M5.Display.println("to reset");
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Display.setCursor(4, 62);
+  M5.Display.println("release = cancel");
+  M5.Display.setTextSize(3);
+  M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+  M5.Display.setCursor(54, 90);
+  M5.Display.println(String(secsLeft));
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  M5.Display.setCursor(4, 138);
+  M5.Display.println("seconds remaining");
+}
+
+void factoryReset() {
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setTextSize(2);
+  M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+  M5.Display.setCursor(4, 80);
+  M5.Display.println("FACTORY");
+  M5.Display.setCursor(4, 106);
+  M5.Display.println("  RESET");
+  prefs.begin("iris", false);
+  prefs.clear();
+  prefs.end();
+  delay(1200);
+  ESP.restart();
+}
+
+// ----------------------------------------------------------------------------
 void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
   M5.Display.setRotation(0);   // portrait (135×240) — face engine reads W/H here
   face.begin();
+
+  // ── Boot factory-reset gesture ──────────────────────────────────────────
+  // One-time window at power-on only; does not interfere with runtime BtnB.
+  // Hold BtnB through the 3s countdown → wipe NVS + restart into portal.
+  // Release at any point during countdown → cancel, continue normal boot.
+  M5.update();
+  if (M5.BtnB.isPressed()) {
+    uint32_t t0 = millis();
+    int lastSec = -1;
+    bool held = true;
+    while (millis() - t0 < 3000) {
+      M5.update();
+      if (!M5.BtnB.isPressed()) { held = false; break; }
+      int secsLeft = 3 - (int)((millis() - t0) / 1000);
+      if (secsLeft != lastSec) {
+        lastSec = secsLeft;
+        drawResetScreen(secsLeft);
+      }
+      delay(30);
+    }
+    if (held) factoryReset();   // never returns — wipes NVS, restarts
+    M5.Display.fillScreen(TFT_BLACK);   // clear countdown on cancel
+  }
+  // ───────────────────────────────────────────────────────────────────────
+
   face.setState(Ph3b3Face::BOOT);
   face.update();
   delay(400);
