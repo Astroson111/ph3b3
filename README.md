@@ -64,11 +64,31 @@ This matters more than the feature list. Ph3b3 runs on an **8 GB VRAM ceiling** 
 
 Ph3b3 started as one box you typed at. She's becoming an ecosystem — and every device in it is a client of *her* local API. None of them touch the cloud, and none of them talk to each other; they all talk to her.
 
-- **Iris** — an M5StickS3 voice combadge. A wrist-worn terminal that shows a themed avatar face reflecting her connection state. Push-to-talk to Ph3b3 over the LAN.
+- **Iris** — an M5StickS3 voice combadge, described below.
 - **Stack-chan** — a CoreS3 companion wearing her face.
-- **The Control Panel** *(latest milestone)* — a local control-plane PWA, served by Ph3b3 herself, described below.
+- **The Control Panel** — a local control-plane PWA, served by Ph3b3 herself, described below.
 
 This is the privacy thesis extended to the remote: even the thing that *commands* her is local, also hers, served from the same box.
+
+---
+
+## Iris
+
+Iris is a wearable voice combadge built on the **M5StickS3** — a device smaller than a lighter, worn like a Star Trek badge. She is a fully autonomous client of Ph3b3: she connects to the network, manages her own WiFi, speaks, listens, and responds, all through Ph3b3's local API.
+
+### What Iris does
+
+**Push-to-talk voice round-trip.** Hold BtnA and speak. Iris records in 16 kHz mono PCM, wraps it in a WAV header, and POSTs it to Ph3b3's `/transcribe` endpoint (Whisper on CUDA). The transcript flows directly to `/chat` (Hermes3 + her soul). Ph3b3 responds in text *and* streams back a TTS audio payload (Piper, Alba voice). Iris decodes and plays it in real time.
+
+**Double-buffered audio streaming.** Audio arrives as a base64 WAV stream over HTTPS. Iris decodes it in chunks using a double-buffer: buffer A plays while buffer B is being filled from the TLS stream, then they swap. This eliminates the race condition that caused audio cuts, producing clean continuous speech even over a hotspot.
+
+**Interrupt.** Press BtnA mid-sentence and she stops immediately. She listens; she can be interrupted. The decode loop and the playback tail both respond to the button.
+
+**Animated face.** A custom M5GFX renderer draws her face on the 135×240 display — blinking, gaze-drift, breath bob, lip-sync tied to speaking amplitude, state-colored eyes. No `m5avatar` library: the renderer is built from scratch and fits entirely in SRAM.
+
+**Multi-network WiFi.** Iris stores up to five SSIDs in NVS. At boot she scans and connects to whichever known network has the strongest signal. If she loses the connection, a non-blocking supervisor ticks every 12 seconds and tries each network in rotation — no blocking scan, buttons stay responsive. When she reconnects, she defers a sync call to Ph3b3 to pull the latest network list, so the server is always the source of truth for her credentials.
+
+**No captive portal in the field.** Networks are managed entirely through the Control Panel's **Iris tab** (see below) and synced to the device automatically. The portal exists as a fallback for first-time setup; in practice you never touch it again.
 
 ---
 
@@ -81,6 +101,7 @@ From any phone on the network it gives you:
 - **System status** — live health from `/health` and `/ready` (model loaded, soul, TTS, STT, boot count), polled continuously.
 - **Chat + voice in one** — type to her; she answers in text *and* speaks the reply in Alba's voice. Both come back from a single `/chat` call (`{response, audio}`), so the voice you hear is her real reply running through Hermes3, not a parrot reading your own words back.
 - **Device roster** — a lightweight last-seen registry keyed on an `X-Ph3b3-Device` header. Iris and Stack-chan surface here as they check in; unidentified traffic lands in its own bucket. It shows the raw last-seen timestamp rather than overclaiming a hard "online" state — passive last-seen means *last active*, not *powered-on-right-now*.
+- **Iris networks** — add, remove, and manage the WiFi credentials stored on Iris. Changes are synced to the device automatically on next connect; no USB cable, no portal page, no reflash.
 
 It installs as a real standalone PWA (manifest + service worker), with Ph3b3's face as the app icon — themed in her identity: violet face, magenta-pink accents, cyan-and-magenta circuit lines.
 
