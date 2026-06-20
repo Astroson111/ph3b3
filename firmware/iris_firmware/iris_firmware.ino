@@ -169,11 +169,15 @@ String ph3b3Chat(const String& message) {
   }
 
   // Filter to "response" only — keeps the base64 "audio" blob off the heap.
+  // Stream::read() returns -1 after setTimeout ms with no bytes; default 1000 ms
+  // is too short to drain a large audio blob over HTTPS, causing IncompleteInput.
+  // Raise to 15 s so the parser can skip the full base64 field without timing out.
   // TODO: add filter["audio"]=true, decode WAV, feed ES8311 over I2S,
   //       then call face.setSpeakingLevel(rms01) from each decoded chunk.
   JsonDocument filter;
   filter["response"] = true;
 
+  http.getStream().setTimeout(15000);
   JsonDocument doc;
   DeserializationError err = deserializeJson(
       doc, http.getStream(), DeserializationOption::Filter(filter));
