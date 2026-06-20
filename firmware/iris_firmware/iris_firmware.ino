@@ -86,6 +86,21 @@ bool   wifiSetupDirty = true;
 const char* MENU_ITEMS[] = { "WiFi Setup", "Reconnect", "Forget WiFi", "Info", "Back" };
 const int   MENU_COUNT   = 5;
 
+// Reply text overlay — persists across face.update() calls until next BtnA press
+String gLastReply  = "";
+bool   gShowReply  = false;
+
+void drawReplyOverlay() {
+  const int Y0 = 148;   // bottom 92 px of 135×240 portrait screen
+  M5.Display.fillRect(0, Y0, M5.Display.width(), M5.Display.height() - Y0, TFT_BLACK);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Display.setTextSize(1);
+  M5.Display.setCursor(4, Y0 + 4);
+  M5.Display.setTextWrap(true);
+  M5.Display.print(gLastReply.substring(0, 300));
+  M5.Display.setTextWrap(false);
+}
+
 bool     wifiWasConnected = false;
 uint32_t lastReconnectMs  = 0;
 const uint32_t RECONNECT_INTERVAL = 5000;
@@ -170,12 +185,16 @@ String ph3b3Chat(const String& message) {
   String payload;
   serializeJson(body, payload);
 
+  face.setStatusLine("asking ph3b3...");
+  face.update();
   int code = http.POST(payload);
   if (code != HTTP_CODE_OK) {
     http.end();
     return "HTTP " + String(code);
   }
 
+  face.setStatusLine("reading reply...");
+  face.update();
   // Read the first 6 KB of the body via readBytes() — blocking I/O with
   // Stream::_timeout and SO_RCVTIMEO both set above. "response" always
   // precedes the 171 KB base64 "audio" field so 6 KB captures it fully.
@@ -626,9 +645,22 @@ void loop() {
   // ── BtnA: single-click = /chat ping | hold = PTT reserved ────────────────
   // PTT: hold BtnA reserved
   if (M5.BtnA.wasPressed() && uiMode == FACE && WiFi.status() == WL_CONNECTED) {
+    static const char* PROMPTS[] = {
+      "Iris online. Comms check.",
+      "Ph3b3, what's on your mind today?",
+      "Any updates for me?",
+      "Tell me something interesting.",
+    };
+    static int promptIdx = 0;
+    const char* prompt = PROMPTS[promptIdx % 4];
+    promptIdx++;
+
+    gShowReply = false;   // clear previous reply overlay
     face.setState(Ph3b3Face::THINKING);
-    face.update();   // draw immediately — ph3b3Chat() blocks and update won't run until it returns
-    String reply = ph3b3Chat("Iris online. Comms check.");
+    face.setStatusLine("connecting...");
+    face.update();
+
+    String reply = ph3b3Chat(prompt);
     Serial.printf("[btnA] reply: %s\n", reply.c_str());
 
     bool ok = !reply.startsWith("ERR") &&
@@ -636,8 +668,12 @@ void loop() {
               !reply.startsWith("JSON") &&
               !reply.startsWith("(no");
     if (ok) {
+      gLastReply = reply;
+      gShowReply = true;
       face.setState(Ph3b3Face::SPEAKING);
+      face.setStatusLine("ph3b3 says:");
       face.update();
+      drawReplyOverlay();
       delay(2000);   // TODO: replace with real audio duration once ES8311 is wired
       face.setState(Ph3b3Face::IDLE);
     } else {
@@ -650,6 +686,7 @@ void loop() {
   if (uiMode == FACE) {
     supervisorTick();      // non-blocking reconnect + state updates
     face.update();         // face owns the display in this mode
+    if (gShowReply) drawReplyOverlay();   // overlay reply text on top of face
   } else if (uiMode == MENU) {
     drawMenu();            // dirty-flagged; redraws only on change
   } else if (uiMode == WIFI_SETUP) {
