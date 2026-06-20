@@ -168,25 +168,47 @@ String ph3b3Chat(const String& message) {
     return "HTTP " + String(code);
   }
 
-  // getString() drives the TLS session to completion before returning —
-  // unlike getStream(), which exposes the raw mbedtls socket where readBytes()
-  // returns 0 (WANT_READ) at TLS record boundaries, causing IncompleteInput
-  // when ArduinoJson skips the large base64 "audio" field.
-  // Filter discards "audio" from the parsed tree; body String is freed on return.
+  // Poll the raw stream in chunks rather than using getStream() or getString().
+  // getStream() hits MBEDTLS_ERR_SSL_WANT_READ at TLS record boundaries →
+  //   ArduinoJson sees premature EOF → IncompleteInput.
+  // getString() mallocs the entire body (135 KB+ for typical TTS) → heap
+  //   exhaustion on a device with ~200 KB free after TLS buffers.
+  // Solution: poll available() in a loop, read in ≤64-byte chunks, cap at
+  //   PEEK_MAX bytes. The "response" field always precedes "audio" in Ph3b3's
+  //   JSON, so 6 KB is sufficient. ArduinoJson will return IncompleteInput
+  //   (audio truncated) but doc["response"] is populated before that point.
   // TODO: add filter["audio"]=true, decode WAV, feed ES8311 over I2S,
   //       then call face.setSpeakingLevel(rms01) from each decoded chunk.
-  String respBody = http.getString();
+  static const int PEEK_MAX = 6144;
+  static char peek[PEEK_MAX + 1];
+  int peekLen = 0;
+  WiFiClient* raw = http.getStreamPtr();
+  uint32_t tOut = millis() + 20000;
+  char tmp[64];
+  while (peekLen < PEEK_MAX && millis() < tOut) {
+    int avail = raw->available();
+    if (avail > 0) {
+      int want = min(avail, (int)(PEEK_MAX - peekLen));
+      want = min(want, (int)sizeof(tmp));
+      int got = raw->read((uint8_t*)tmp, want);
+      if (got > 0) { memcpy(peek + peekLen, tmp, got); peekLen += got; }
+    } else if (!raw->connected()) {
+      break;
+    } else {
+      delay(1);
+    }
+  }
+  peek[peekLen] = '\0';
   http.end();
 
   JsonDocument filter;
   filter["response"] = true;
-
   JsonDocument doc;
-  DeserializationError err = deserializeJson(
-      doc, respBody, DeserializationOption::Filter(filter));
+  deserializeJson(doc, peek, peekLen, DeserializationOption::Filter(filter));
 
-  if (err) return String("JSON: ") + err.c_str();
-  return String(doc["response"] | "(no response field)");
+  const char* resp = doc["response"];
+  if (resp && *resp) return String(resp);
+  return "(no response)";
 }
 
 // ----------------------------------------------------------------------------
@@ -619,6 +641,7 @@ void loop() {
   // PTT: hold BtnA reserved
   if (M5.BtnA.wasPressed() && uiMode == FACE && WiFi.status() == WL_CONNECTED) {
     face.setState(Ph3b3Face::THINKING);
+    face.update();   // draw immediately — ph3b3Chat() blocks and update won't run until it returns
     String reply = ph3b3Chat("Iris online. Comms check.");
     Serial.println(reply);
 
