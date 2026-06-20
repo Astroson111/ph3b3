@@ -152,7 +152,14 @@ String ph3b3Chat(const String& message) {
   if (!http.begin(tls, PH3B3_HOST, PH3B3_PORT, PH3B3_CHAT, true))
     return String("ERR: begin failed");
 
-  http.setTimeout(30000);   // LLM inference + Piper TTS can take 10-20 s
+  // http.setTimeout() only sets the HTTPClient's own elapsed-time check; it does NOT
+  // update NetworkClientSecure::_timeout, which controls SO_RCVTIMEO on the socket.
+  // SO_RCVTIMEO is set from the _connectTimeout passed to connect() and defaults to
+  // 5 s — exactly the Ph3b3 LLM+TTS round-trip time, causing intermittent timeouts.
+  // setConnectTimeout() updates _connectTimeout so connect() sets _timeout = 30 s,
+  // making SO_RCVTIMEO 30 s; available() then blocks long enough for the response.
+  http.setConnectTimeout(30000);  // SO_RCVTIMEO = 30 s (Ph3b3 responds in ~5-6 s)
+  http.setTimeout(60000);         // HTTPClient idle-data guard = 60 s
   http.setAuthorization(PH3B3_USER, PH3B3_PASS);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Ph3b3-Device", DEVICE_HDR);
