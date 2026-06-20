@@ -168,20 +168,22 @@ String ph3b3Chat(const String& message) {
     return "HTTP " + String(code);
   }
 
-  // Filter to "response" only — keeps the base64 "audio" blob off the heap.
-  // Stream::read() returns -1 after setTimeout ms with no bytes; default 1000 ms
-  // is too short to drain a large audio blob over HTTPS, causing IncompleteInput.
-  // Raise to 15 s so the parser can skip the full base64 field without timing out.
+  // getString() drives the TLS session to completion before returning —
+  // unlike getStream(), which exposes the raw mbedtls socket where readBytes()
+  // returns 0 (WANT_READ) at TLS record boundaries, causing IncompleteInput
+  // when ArduinoJson skips the large base64 "audio" field.
+  // Filter discards "audio" from the parsed tree; body String is freed on return.
   // TODO: add filter["audio"]=true, decode WAV, feed ES8311 over I2S,
   //       then call face.setSpeakingLevel(rms01) from each decoded chunk.
+  String respBody = http.getString();
+  http.end();
+
   JsonDocument filter;
   filter["response"] = true;
 
-  http.getStream().setTimeout(15000);
   JsonDocument doc;
   DeserializationError err = deserializeJson(
-      doc, http.getStream(), DeserializationOption::Filter(filter));
-  http.end();
+      doc, respBody, DeserializationOption::Filter(filter));
 
   if (err) return String("JSON: ") + err.c_str();
   return String(doc["response"] | "(no response field)");
