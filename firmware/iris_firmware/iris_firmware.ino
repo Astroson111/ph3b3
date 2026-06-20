@@ -170,49 +170,33 @@ String ph3b3Chat(const String& message) {
   String payload;
   serializeJson(body, payload);
 
+  Serial.printf("[chat] POST %s:%d%s\n", PH3B3_HOST, PH3B3_PORT, PH3B3_CHAT);
   int code = http.POST(payload);
+  Serial.printf("[chat] POST returned HTTP %d\n", code);
   if (code != HTTP_CODE_OK) {
     http.end();
     return "HTTP " + String(code);
   }
 
-  // Poll the raw stream in chunks rather than using getStream() or getString().
-  // getStream() hits MBEDTLS_ERR_SSL_WANT_READ at TLS record boundaries →
-  //   ArduinoJson sees premature EOF → IncompleteInput.
-  // getString() mallocs the entire body (135 KB+ for typical TTS) → heap
-  //   exhaustion on a device with ~200 KB free after TLS buffers.
-  // Solution: poll available() in a loop, read in ≤64-byte chunks, cap at
-  //   PEEK_MAX bytes. The "response" field always precedes "audio" in Ph3b3's
-  //   JSON, so 6 KB is sufficient. ArduinoJson will return IncompleteInput
-  //   (audio truncated) but doc["response"] is populated before that point.
-  // TODO: add filter["audio"]=true, decode WAV, feed ES8311 over I2S,
-  //       then call face.setSpeakingLevel(rms01) from each decoded chunk.
+  // Read the first 6 KB of the body directly via readBytes() so blocking is
+  // handled by Stream::timedRead() → NetworkClientSecure::read() → SO_RCVTIMEO.
+  // The "response" field always precedes "audio" in Ph3b3's JSON so 6 KB is
+  // sufficient; audio is skipped.
   static const int PEEK_MAX = 6144;
   static char peek[PEEK_MAX + 1];
-  int peekLen = 0;
   WiFiClient* raw = http.getStreamPtr();
-  uint32_t tOut = millis() + 20000;
-  char tmp[64];
-  while (peekLen < PEEK_MAX && millis() < tOut) {
-    int avail = raw->available();
-    if (avail > 0) {
-      int want = min(avail, (int)(PEEK_MAX - peekLen));
-      want = min(want, (int)sizeof(tmp));
-      int got = raw->read((uint8_t*)tmp, want);
-      if (got > 0) { memcpy(peek + peekLen, tmp, got); peekLen += got; }
-    } else if (!raw->connected()) {
-      break;
-    } else {
-      delay(1);
-    }
-  }
+  raw->setTimeout(60000);   // Stream-level timeout for readBytes
+  int peekLen = raw->readBytes(peek, PEEK_MAX);
+  Serial.printf("[chat] readBytes got %d bytes\n", peekLen);
+  if (peekLen > 0) Serial.printf("[chat] first 80: %.80s\n", peek);
   peek[peekLen] = '\0';
   http.end();
 
   JsonDocument filter;
   filter["response"] = true;
   JsonDocument doc;
-  deserializeJson(doc, peek, peekLen, DeserializationOption::Filter(filter));
+  DeserializationError jerr = deserializeJson(doc, peek, peekLen, DeserializationOption::Filter(filter));
+  Serial.printf("[chat] deserialize: %s\n", jerr.c_str());
 
   const char* resp = doc["response"];
   if (resp && *resp) return String(resp);
@@ -594,6 +578,7 @@ void factoryReset() {
 
 // ----------------------------------------------------------------------------
 void setup() {
+  Serial.begin(115200);
   auto cfg = M5.config();
   M5.begin(cfg);
 
@@ -651,13 +636,26 @@ void loop() {
     face.setState(Ph3b3Face::THINKING);
     face.update();   // draw immediately — ph3b3Chat() blocks and update won't run until it returns
     String reply = ph3b3Chat("Iris online. Comms check.");
-    Serial.println(reply);
+    Serial.printf("[btnA] reply: %s\n", reply.c_str());
+
+    // Debug overlay: show exact reply text on screen for 4 s so we can see it
+    // without a serial monitor. Remove once round-trip is confirmed working.
+    M5.Display.fillScreen(TFT_BLACK);
+    M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+    M5.Display.setTextSize(1);
+    M5.Display.setCursor(4, 4);
+    M5.Display.println("REPLY:");
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Display.println(reply.substring(0, 200));
+    delay(4000);
 
     bool ok = !reply.startsWith("ERR") &&
               !reply.startsWith("HTTP") &&
-              !reply.startsWith("JSON");
+              !reply.startsWith("JSON") &&
+              !reply.startsWith("(no");
     if (ok) {
       face.setState(Ph3b3Face::SPEAKING);
+      face.update();
       delay(2000);   // TODO: replace with real audio duration once ES8311 is wired
       face.setState(Ph3b3Face::IDLE);
     } else {
