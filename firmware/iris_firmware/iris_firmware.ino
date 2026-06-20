@@ -1,7 +1,8 @@
-// iris_firmware.ino
+// iris_firmware.ino — Rung A: connectivity menu + wifi provisioning
 // Iris — M5StickS3 voice combadge.
-// Ph3b3Face integration: replaces the border-color state display with the
-// full M5GFX face engine. /chat round-trip preserved intact.
+// Adds over the face-engine rung: view-mode layer, BtnB menu, NVS wifi
+// persistence, captive-portal provisioning, non-blocking auto-reconnect.
+// Core /chat round-trip and Ph3b3Face engine unchanged.
 //
 // Build:
 //   arduino-cli compile --fqbn m5stack:esp32:m5stack_sticks3 iris_firmware/
@@ -13,53 +14,98 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
+#include <DNSServer.h>
+#include <WebServer.h>
 #include "ph3b3_face.h"
 
 // ----------------------------------------------------------------------------
-// CONFIG — fill these in
-// ----------------------------------------------------------------------------
-const char* WIFI_SSID = "YOUR_SSID";
-const char* WIFI_PASS = "YOUR_PASS";
+// CONFIG
+// Dev bench fallback — uncomment when NVS is empty and you need a quick test:
+// #define LAB_SSID "YOUR_SSID"
+// #define LAB_PASS "YOUR_PASS"
 
-// Ph3b3 over Tailscale. If Funnel: public host, port 443, real LE cert.
-//   e.g. "ph3b3.tailXXXXXX.ts.net"
-const char* PH3B3_HOST = "ph3b3.tailXXXXXX.ts.net";
+const char*    PH3B3_HOST = "ph3b3.tailXXXXXX.ts.net";
 const uint16_t PH3B3_PORT = 443;
-const char* PH3B3_CHAT  = "/chat";
-
-// Basic auth — HTTPClient builds the header for us, no manual base64.
-const char* PH3B3_USER = "REDACTED";
-const char* PH3B3_PASS = "REDACTED";   // <- rotate before this goes over Funnel
-
-const char* DEVICE_HDR = "iris";       // shows up in Ph3b3's device roster
-String SESSION_ID = "iris-session";    // make per-session later if you want
+const char*    PH3B3_CHAT = "/chat";
+const char*    PH3B3_USER = "REDACTED";
+const char*    PH3B3_PASS = "REDACTED";   // <- rotate before this goes over Funnel
+const char*    DEVICE_HDR = "iris";
+String         SESSION_ID = "iris-session";
 
 // ----------------------------------------------------------------------------
-Ph3b3Face face;
+// Globals
+Ph3b3Face  face;
+Preferences prefs;
+DNSServer  dns;
+WebServer  httpServer(80);
+
+enum UiMode { FACE, MENU, WIFI_SETUP, INFO };
+UiMode uiMode   = FACE;
+int    menuSel  = 0;
+bool   menuDirty     = true;
+bool   wifiSetupDirty = true;
+
+const char* MENU_ITEMS[] = { "WiFi Setup", "Reconnect", "Info", "Back" };
+const int   MENU_COUNT   = 4;
+
+bool     wifiWasConnected = false;
+uint32_t lastReconnectMs  = 0;
+const uint32_t RECONNECT_INTERVAL = 5000;
+
+String cachedScan = "";
+String portalMsg  = "";
+
+// BtnB hold detection — manual timing avoids M5Unified API ambiguity
+uint32_t btnBPressedAt = 0;
+bool     btnBLongFired  = false;
 
 // ----------------------------------------------------------------------------
-// WiFi
+// NVS helpers
 // ----------------------------------------------------------------------------
-void connectWiFi() {
-  face.setState(Ph3b3Face::CONNECTING);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) {
-    face.update();
-    delay(50);
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    face.setState(Ph3b3Face::IDLE);
-    face.setStatusLine(WiFi.localIP().toString());
-  } else {
-    face.setState(Ph3b3Face::ERROR);
-    face.setStatusLine("wifi failed");
-  }
+bool loadCreds(String& ssid, String& pass) {
+  prefs.begin("iris", true);
+  ssid = prefs.getString("ssid", "");
+  pass = prefs.getString("pass", "");
+  prefs.end();
+  return ssid.length() > 0;
+}
+
+void saveCreds(const String& ssid, const String& pass) {
+  prefs.begin("iris", false);
+  prefs.putString("ssid", ssid);
+  prefs.putString("pass", pass);
+  prefs.end();
 }
 
 // ----------------------------------------------------------------------------
-// POST /chat  ->  returns the response text (audio field ignored this rung)
+// WiFi supervisor — non-blocking, called every FACE-mode loop tick
+// ----------------------------------------------------------------------------
+void supervisorTick() {
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!wifiWasConnected) {
+      wifiWasConnected = true;
+      face.setState(Ph3b3Face::IDLE);
+      face.setStatusLine(WiFi.localIP().toString());
+    }
+    return;
+  }
+  if (wifiWasConnected) {
+    wifiWasConnected = false;
+    face.setState(Ph3b3Face::ERROR);
+    face.setStatusLine("offline");
+  }
+  uint32_t now = millis();
+  if (now - lastReconnectMs < RECONNECT_INTERVAL) return;
+  lastReconnectMs = now;
+  String ssid, pass;
+  if (!loadCreds(ssid, pass)) return;
+  WiFi.disconnect();
+  WiFi.begin(ssid.c_str(), pass.c_str());
+}
+
+// ----------------------------------------------------------------------------
+// POST /chat (unchanged from face-engine rung)
 // ----------------------------------------------------------------------------
 String ph3b3Chat(const String& message) {
   WiFiClientSecure tls;
@@ -67,15 +113,15 @@ String ph3b3Chat(const String& message) {
   tls.setInsecure();
 
   HTTPClient http;
-  if (!http.begin(tls, PH3B3_HOST, PH3B3_PORT, PH3B3_CHAT, true)) {
+  if (!http.begin(tls, PH3B3_HOST, PH3B3_PORT, PH3B3_CHAT, true))
     return String("ERR: begin failed");
-  }
+
   http.setAuthorization(PH3B3_USER, PH3B3_PASS);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Ph3b3-Device", DEVICE_HDR);
 
   JsonDocument body;
-  body["message"] = message;
+  body["message"]    = message;
   body["session_id"] = SESSION_ID;
   String payload;
   serializeJson(body, payload);
@@ -102,6 +148,303 @@ String ph3b3Chat(const String& message) {
 }
 
 // ----------------------------------------------------------------------------
+// Captive portal
+// ----------------------------------------------------------------------------
+void doScan() {
+  // WIFI_AP_STA mode is active at this point; STA radio can scan
+  int n = WiFi.scanNetworks();
+  cachedScan = "<select name='ssid'>";
+  if (n <= 0) {
+    cachedScan += "<option>No networks found</option>";
+  } else {
+    for (int i = 0; i < n; i++) {
+      String s = WiFi.SSID(i);
+      cachedScan += "<option value='" + s + "'>" +
+                    s + " (" + String(WiFi.RSSI(i)) + " dBm)</option>";
+    }
+  }
+  cachedScan += "</select>";
+  WiFi.scanDelete();
+}
+
+String buildPortalPage() {
+  String html;
+  html.reserve(1400);
+  html = "<!DOCTYPE html><html><head>"
+         "<meta charset='utf-8'>"
+         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+         "<title>Iris Setup</title>"
+         "<style>"
+         "body{background:#000;color:#0ff;font-family:monospace;padding:20px;max-width:400px}"
+         "h2{color:#0ff;margin:0 0 12px}"
+         "select,input{background:#111;color:#0ff;border:1px solid #0ff;"
+         "padding:8px;width:100%;margin:6px 0;box-sizing:border-box;font-family:monospace}"
+         "button{background:#0ff;color:#000;border:none;padding:12px;"
+         "width:100%;margin-top:10px;font-family:monospace;font-weight:bold;cursor:pointer}"
+         ".ok{color:#0f0;margin-top:10px}.err{color:#f55;margin-top:10px}"
+         "</style></head><body>"
+         "<h2>IRIS SETUP</h2>"
+         "<form method='POST' action='/connect'>";
+  html += cachedScan;
+  html += "<input type='password' name='pass' placeholder='password' autocomplete='off'>";
+  // NOTE: portal creds sent over local AP in cleartext
+  html += "<button type='submit'>CONNECT</button></form>";
+  html += portalMsg;
+  html += "</body></html>";
+  return html;
+}
+
+void handlePortalRoot() {
+  httpServer.send(200, "text/html", buildPortalPage());
+}
+
+void handlePortalConnect() {
+  if (!httpServer.hasArg("ssid") || !httpServer.hasArg("pass")) {
+    httpServer.send(400, "text/plain", "missing args");
+    return;
+  }
+  String ssid = httpServer.arg("ssid");
+  String pass = httpServer.arg("pass");
+
+  // Attempt STA join while AP stays up
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) {
+    dns.processNextRequest();
+    httpServer.handleClient();
+    delay(100);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    saveCreds(ssid, pass);
+    portalMsg = "<p class='ok'>Connected! Iris is online.</p>";
+    httpServer.send(200, "text/html", buildPortalPage());
+    delay(1500);
+    httpServer.stop();
+    dns.stop();
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    wifiWasConnected = true;
+    face.setState(Ph3b3Face::IDLE);
+    face.setStatusLine(WiFi.localIP().toString());
+    uiMode = FACE;
+  } else {
+    // Stay in AP, show error on portal and on device
+    WiFi.disconnect();
+    portalMsg = "<p class='err'>Failed to connect to " + ssid + ". Check password.</p>";
+    httpServer.send(200, "text/html", buildPortalPage());
+    wifiSetupDirty = true;   // re-draw device screen with hint
+  }
+}
+
+void startPortal() {
+  uiMode = WIFI_SETUP;
+  wifiSetupDirty = true;
+  WiFi.mode(WIFI_AP_STA);          // AP_STA so STA radio can scan while AP runs
+  WiFi.softAP("Iris-Setup");
+  IPAddress apIP(192, 168, 4, 1);
+  dns.start(53, "*", apIP);        // wildcard DNS → captive portal
+  doScan();
+  portalMsg = "";
+  httpServer.on("/",        HTTP_GET,  handlePortalRoot);
+  httpServer.on("/connect", HTTP_POST, handlePortalConnect);
+  httpServer.onNotFound([]() {
+    httpServer.sendHeader("Location", "http://192.168.4.1/");
+    httpServer.send(302, "text/plain", "");
+  });
+  httpServer.begin();
+}
+
+// ----------------------------------------------------------------------------
+// Boot-time WiFi connect (blocking — setup() only)
+// ----------------------------------------------------------------------------
+void connectWiFi() {
+  String ssid, pass;
+
+#ifdef LAB_SSID
+  ssid = LAB_SSID;
+  pass = LAB_PASS;
+#else
+  if (!loadCreds(ssid, pass)) {
+    startPortal();
+    return;
+  }
+#endif
+
+  face.setState(Ph3b3Face::CONNECTING);
+  face.setStatusLine("joining...");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) {
+    face.update();
+    delay(50);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiWasConnected = true;
+    face.setState(Ph3b3Face::IDLE);
+    face.setStatusLine(WiFi.localIP().toString());
+  } else {
+    face.setState(Ph3b3Face::ERROR);
+    face.setStatusLine("wifi failed");
+    delay(800);
+    startPortal();
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Display renderers (face paused in all non-FACE modes)
+// ----------------------------------------------------------------------------
+void drawMenu() {
+  if (!menuDirty) return;
+  menuDirty = false;
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setTextSize(2);
+  M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+  M5.Display.setCursor(4, 6);
+  M5.Display.println("-- MENU --");
+  for (int i = 0; i < MENU_COUNT; i++) {
+    M5.Display.setCursor(4, 38 + i * 28);
+    if (i == menuSel) {
+      M5.Display.setTextColor(TFT_BLACK, TFT_CYAN);
+    } else {
+      M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+    }
+    M5.Display.print(" ");
+    M5.Display.print(MENU_ITEMS[i]);
+    M5.Display.println("    ");   // clear highlight tail
+  }
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  M5.Display.setCursor(4, 158);
+  M5.Display.println("B:next  hold B:pick");
+}
+
+void drawWifiSetup() {
+  if (!wifiSetupDirty) return;
+  wifiSetupDirty = false;
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setTextSize(2);
+  M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+  M5.Display.setCursor(4, 10);
+  M5.Display.println("IRIS SETUP");
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Display.setCursor(4, 46);
+  M5.Display.println("1. Join this wifi:");
+  M5.Display.setTextSize(2);
+  M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+  M5.Display.setCursor(4, 62);
+  M5.Display.println("Iris-Setup");
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Display.setCursor(4, 90);
+  M5.Display.println("2. Open browser:");
+  M5.Display.setTextSize(2);
+  M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+  M5.Display.setCursor(4, 106);
+  M5.Display.println("192.168.4.1");
+}
+
+void drawInfo() {
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setTextSize(2);
+  M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+  M5.Display.setCursor(4, 6);
+  M5.Display.println("-- INFO --");
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Display.setCursor(4, 38);
+  M5.Display.print("IP:   ");
+  M5.Display.println(WiFi.status() == WL_CONNECTED
+                     ? WiFi.localIP().toString() : "offline");
+  M5.Display.setCursor(4, 54);
+  M5.Display.print("WiFi: ");
+  M5.Display.println(WiFi.status() == WL_CONNECTED ? "connected" : "offline");
+  M5.Display.setCursor(4, 70);
+  M5.Display.print("Host: ");
+  M5.Display.println(PH3B3_HOST);
+  M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  M5.Display.setCursor(4, 100);
+  M5.Display.println("B: back to menu");
+}
+
+// ----------------------------------------------------------------------------
+// Menu activation
+// ----------------------------------------------------------------------------
+void activateMenuItem() {
+  switch (menuSel) {
+    case 0:  // WiFi Setup
+      startPortal();
+      break;
+
+    case 1:  // Reconnect
+      {
+        String ssid, pass;
+        if (loadCreds(ssid, pass)) {
+          WiFi.disconnect();
+          WiFi.mode(WIFI_STA);
+          WiFi.begin(ssid.c_str(), pass.c_str());
+          wifiWasConnected = false;
+          lastReconnectMs = millis();
+          face.setState(Ph3b3Face::CONNECTING);
+        } else {
+          startPortal();
+          break;
+        }
+        uiMode = FACE;
+      }
+      break;
+
+    case 2:  // Info
+      drawInfo();
+      uiMode = INFO;
+      break;
+
+    case 3:  // Back
+      uiMode = FACE;
+      break;
+  }
+  menuSel   = 0;
+  menuDirty = true;
+}
+
+// ----------------------------------------------------------------------------
+// BtnB handler — all menu navigation lives here
+// ----------------------------------------------------------------------------
+void handleBtnB() {
+  if (M5.BtnB.wasPressed()) {
+    btnBPressedAt = millis();
+    btnBLongFired  = false;
+  }
+
+  // Long press threshold: 600 ms — activate selected item
+  if (M5.BtnB.isPressed() && !btnBLongFired &&
+      millis() - btnBPressedAt > 600) {
+    btnBLongFired = true;
+    if (uiMode == MENU) activateMenuItem();
+  }
+
+  // Short release (not a long press) — navigate
+  if (M5.BtnB.wasReleased() && !btnBLongFired) {
+    if (uiMode == FACE) {
+      uiMode    = MENU;
+      menuSel   = 0;
+      menuDirty = true;
+    } else if (uiMode == MENU) {
+      menuSel   = (menuSel + 1) % MENU_COUNT;
+      menuDirty = true;
+    } else if (uiMode == INFO) {
+      uiMode    = MENU;
+      menuSel   = 0;
+      menuDirty = true;
+    }
+  }
+}
+
+// ----------------------------------------------------------------------------
 void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
@@ -115,16 +458,13 @@ void setup() {
 
 void loop() {
   M5.update();
-  face.update();
 
-  // WiFi lost — drop to error state
-  if (WiFi.status() != WL_CONNECTED) {
-    face.setState(Ph3b3Face::ERROR);
-    face.setStatusLine("offline");
-  }
+  // ── BtnB: menu (all navigation; WIFI_SETUP mode ignores it) ──────────────
+  handleBtnB();
 
-  // BtnA: fire a /chat round-trip
-  if (M5.BtnA.wasPressed() && WiFi.status() == WL_CONNECTED) {
+  // ── BtnA: single-click = /chat ping | hold = PTT reserved ────────────────
+  // PTT: hold BtnA reserved
+  if (M5.BtnA.wasPressed() && uiMode == FACE && WiFi.status() == WL_CONNECTED) {
     face.setState(Ph3b3Face::THINKING);
     String reply = ph3b3Chat("Iris online. Comms check.");
     Serial.println(reply);
@@ -132,17 +472,28 @@ void loop() {
     bool ok = !reply.startsWith("ERR") &&
               !reply.startsWith("HTTP") &&
               !reply.startsWith("JSON");
-
     if (ok) {
       face.setState(Ph3b3Face::SPEAKING);
-      // TODO: real duration from audio length once ES8311 is wired
-      delay(2000);
+      delay(2000);   // TODO: replace with real audio duration once ES8311 is wired
       face.setState(Ph3b3Face::IDLE);
     } else {
       face.setState(Ph3b3Face::ERROR);
       face.setStatusLine(reply.substring(0, 20));
     }
   }
+
+  // ── Mode dispatch ─────────────────────────────────────────────────────────
+  if (uiMode == FACE) {
+    supervisorTick();      // non-blocking reconnect + state updates
+    face.update();         // face owns the display in this mode
+  } else if (uiMode == MENU) {
+    drawMenu();            // dirty-flagged; redraws only on change
+  } else if (uiMode == WIFI_SETUP) {
+    dns.processNextRequest();
+    httpServer.handleClient();
+    drawWifiSetup();       // dirty-flagged; draws once on entry
+  }
+  // INFO: static screen drawn on entry; BtnB handled above
 
   delay(10);
 }
