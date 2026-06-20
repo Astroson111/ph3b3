@@ -170,33 +170,26 @@ String ph3b3Chat(const String& message) {
   String payload;
   serializeJson(body, payload);
 
-  Serial.printf("[chat] POST %s:%d%s\n", PH3B3_HOST, PH3B3_PORT, PH3B3_CHAT);
   int code = http.POST(payload);
-  Serial.printf("[chat] POST returned HTTP %d\n", code);
   if (code != HTTP_CODE_OK) {
     http.end();
     return "HTTP " + String(code);
   }
 
-  // Read the first 6 KB of the body directly via readBytes() so blocking is
-  // handled by Stream::timedRead() → NetworkClientSecure::read() → SO_RCVTIMEO.
-  // The "response" field always precedes "audio" in Ph3b3's JSON so 6 KB is
-  // sufficient; audio is skipped.
+  // Read the first 6 KB of the body via readBytes() — blocking I/O with
+  // Stream::_timeout and SO_RCVTIMEO both set above. "response" always
+  // precedes the 171 KB base64 "audio" field so 6 KB captures it fully.
   static const int PEEK_MAX = 6144;
   static char peek[PEEK_MAX + 1];
   WiFiClient* raw = http.getStreamPtr();
-  raw->setTimeout(60000);   // Stream-level timeout for readBytes
   int peekLen = raw->readBytes(peek, PEEK_MAX);
-  Serial.printf("[chat] readBytes got %d bytes\n", peekLen);
-  if (peekLen > 0) Serial.printf("[chat] first 80: %.80s\n", peek);
   peek[peekLen] = '\0';
   http.end();
 
   JsonDocument filter;
   filter["response"] = true;
   JsonDocument doc;
-  DeserializationError jerr = deserializeJson(doc, peek, peekLen, DeserializationOption::Filter(filter));
-  Serial.printf("[chat] deserialize: %s\n", jerr.c_str());
+  deserializeJson(doc, peek, peekLen, DeserializationOption::Filter(filter));
 
   const char* resp = doc["response"];
   if (resp && *resp) return String(resp);
@@ -637,17 +630,6 @@ void loop() {
     face.update();   // draw immediately — ph3b3Chat() blocks and update won't run until it returns
     String reply = ph3b3Chat("Iris online. Comms check.");
     Serial.printf("[btnA] reply: %s\n", reply.c_str());
-
-    // Debug overlay: show exact reply text on screen for 4 s so we can see it
-    // without a serial monitor. Remove once round-trip is confirmed working.
-    M5.Display.fillScreen(TFT_BLACK);
-    M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
-    M5.Display.setTextSize(1);
-    M5.Display.setCursor(4, 4);
-    M5.Display.println("REPLY:");
-    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Display.println(reply.substring(0, 200));
-    delay(4000);
 
     bool ok = !reply.startsWith("ERR") &&
               !reply.startsWith("HTTP") &&
