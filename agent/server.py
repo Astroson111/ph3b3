@@ -12,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 import httpx
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
@@ -48,7 +48,8 @@ _raw_origins = os.getenv(
 )
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
-RECIPE_DB_PATH = os.getenv("RECIPE_DB_PATH", str(Path.home() / "ph3b3_data" / "recipes.db"))
+RECIPE_DB_PATH      = os.getenv("RECIPE_DB_PATH", str(Path.home() / "ph3b3_data" / "recipes.db"))
+IRIS_NETWORKS_FILE  = Path.home() / "ph3b3_data" / "iris_networks.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Ph3b3] %(message)s")
 log = logging.getLogger("ph3b3")
@@ -117,11 +118,11 @@ async def lifespan(app):
     memory.confirm_boot()
     boot_count = memory.memory.get("boot_count", 1)
     greetings = [
-        "Ph3b3 online. All systems nominal.",
+        "Soul online.",
         "Awakening. I'm here.",
         "Systems initialised. Ready when you are.",
         "Online. Watching. Listening.",
-        "Ph3b3 active. What do you need?",
+        "Active. What do you need?",
     ]
     text = greetings[(boot_count - 1) % len(greetings)] + " Made with Soul, baby."
     log.info(f"Boot greeting (#{boot_count}): {text}")
@@ -712,13 +713,37 @@ async def skills_log():
     return {"entries": entries, "total": len(lines)}
 
 @app.post("/chat")
-async def chat_endpoint(body: dict):
+async def chat_endpoint(body: dict, request: Request):
     session = get_session(body.get("session_id","default"))
     user_msg = body.get("message","")
     if "soul" in user_msg.lower():
         tts.soul_line()
     session.add("user", user_msg)
-    response, updated = await chat_with_tools(session.messages())
+
+    messages = session.messages()
+
+    # ── Device-awareness (additive, ephemeral, soul untouched) ───────────────
+    # Injected per-call into the Ollama context only; never stored in session
+    # history so it doesn't accumulate. Add new devices here as needed.
+    _DEVICE_NOTES = {
+        "iris": (
+            "You are transmitting via your combadge. "
+            "IMPORTANT: reply in ONE short sentence only (under 20 words). "
+            "Begin directly with your answer — no salutation, no address, no preamble."
+        ),
+    }
+    device = request.headers.get("X-Ph3b3-Device", "")
+    device_note = None
+    if device in _DEVICE_NOTES:
+        device_note = {"role": "system", "content": _DEVICE_NOTES[device]}
+        messages.insert(1, device_note)   # after soul, before conversation turns
+
+    response, updated = await chat_with_tools(messages)
+
+    # Strip the ephemeral device note before storing so it doesn't grow the history
+    if device_note and device_note in updated:
+        updated.remove(device_note)
+
     session.history = updated
     session.add("assistant", response)
     audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, response)
@@ -787,6 +812,44 @@ async def transcribe_audio(body: dict):
         except OSError:
             pass
 
+
+def _load_iris_networks() -> list:
+    if not IRIS_NETWORKS_FILE.exists():
+        return []
+    try:
+        return json.loads(IRIS_NETWORKS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+def _save_iris_networks(networks: list) -> None:
+    IRIS_NETWORKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    IRIS_NETWORKS_FILE.write_text(json.dumps(networks, indent=2), encoding="utf-8")
+
+@app.get("/iris/networks")
+async def iris_get_networks():
+    return {"networks": _load_iris_networks()}
+
+@app.post("/iris/networks")
+async def iris_add_network(body: dict):
+    ssid = (body.get("ssid") or "").strip()
+    password = body.get("pass", "")
+    if not ssid:
+        raise HTTPException(400, "ssid required")
+    nets = _load_iris_networks()
+    for n in nets:
+        if n["ssid"] == ssid:
+            n["pass"] = password
+            _save_iris_networks(nets)
+            return {"ok": True, "updated": True}
+    nets.append({"ssid": ssid, "pass": password})
+    _save_iris_networks(nets)
+    return {"ok": True, "updated": False}
+
+@app.delete("/iris/networks/{ssid}")
+async def iris_remove_network(ssid: str):
+    nets = [n for n in _load_iris_networks() if n["ssid"] != ssid]
+    _save_iris_networks(nets)
+    return {"ok": True}
 
 @app.get("/panel")
 async def panel():
