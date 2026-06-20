@@ -152,6 +152,7 @@ String ph3b3Chat(const String& message) {
   if (!http.begin(tls, PH3B3_HOST, PH3B3_PORT, PH3B3_CHAT, true))
     return String("ERR: begin failed");
 
+  http.setTimeout(30000);   // LLM inference + Piper TTS can take 10-20 s
   http.setAuthorization(PH3B3_USER, PH3B3_PASS);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Ph3b3-Device", DEVICE_HDR);
