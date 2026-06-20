@@ -524,7 +524,17 @@ void factoryReset() {
 void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
-  M5.Display.setRotation(0);   // portrait (135×240) — face engine reads W/H here
+
+  // Fix ST7789 color order: M5GFX defaults rgb_order=false (BGR); StickS3 panel needs RGB.
+  // Get the live panel pointer, flip the flag, then let setRotation() re-flush MADCTL.
+  // This corrects all colors in one place — face engine, menu, and setup screens.
+  {
+    auto* p = M5.Display.panel();
+    auto pcfg = p->config();
+    pcfg.rgb_order = true;
+    p->config(pcfg);
+  }
+  M5.Display.setRotation(0);   // portrait (135×240) + re-sends MADCTL with MAD_RGB
   face.begin();
 
   // ── Boot factory-reset gesture ──────────────────────────────────────────
