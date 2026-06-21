@@ -28,6 +28,7 @@ public:
         _pttBuf     = nullptr;
         _pttSamples = 0;
         _wasTouch   = false;
+        _recAmp     = 0.0f;
         _heardText  = "";
         _replyText  = "";
         _drawPanel("");
@@ -64,6 +65,14 @@ public:
             if (_pttBuf && _pttSamples < PTT_MAX) {
                 int chunk = min(512, PTT_MAX - _pttSamples);
                 M5.Mic.record(&_pttBuf[_pttSamples], chunk, PTT_RATE);
+                // RMS of fresh chunk → smooth amplitude for ring
+                float rms = 0.0f;
+                int base = _pttSamples;
+                for (int i = 0; i < chunk; i++) {
+                    float s = _pttBuf[base + i] / 32768.0f;
+                    rms += s * s;
+                }
+                _recAmp = _recAmp * 0.6f + sqrtf(rms / chunk) * 0.4f;
                 _pttSamples += chunk;
             }
             // Stop on second tap, 5s max, or buffer full
@@ -72,9 +81,7 @@ public:
             if (tapped || timeout || full) {
                 _stopRecordingAndDispatch();
             } else {
-                // Update recording timer on panel
-                int elapsed = (millis() - _recStartMs) / 1000;
-                _drawPanel(String("Recording... ") + elapsed + "s / 5s");
+                _drawRecordRing(_recAmp);
             }
             break;
         }
@@ -132,6 +139,7 @@ private:
     int      _pttSamples = 0;
     uint32_t _recStartMs = 0;
     bool     _wasTouch   = false;
+    float    _recAmp     = 0.0f;   // smoothed mic RMS during recording
     String   _heardText;
     String   _replyText;
 
@@ -187,7 +195,7 @@ private:
 
         face.setState(Ph3b3Face::LISTENING);
         face.setStatusLine("listening...");
-        _drawPanel("Recording...  tap to send");
+        _drawRecordRing(0.0f);
         _phase = PH_RECORDING;
     }
 
@@ -208,7 +216,7 @@ private:
         face.setState(Ph3b3Face::THINKING);
         face.setStatusLine("transcribing...");
         face.update();
-        _drawPanel("Sending to Ph3b3...");
+        _drawPanel("");
 
         _dispatch(_pttBuf, _pttSamples);
         heap_caps_free(_pttBuf);
@@ -300,8 +308,6 @@ private:
             return;
         }
 
-        // Brief flash: show what was heard
-        _drawPanel("You: " + _heardText);
         face.setState(Ph3b3Face::THINKING);
         face.setStatusLine("thinking...");
         face.update();
@@ -314,8 +320,7 @@ private:
 
         face.setState(ok ? Ph3b3Face::IDLE : Ph3b3Face::ERROR);
         face.setStatusLine(ok ? "tap to speak" : _replyText.substring(0, 20));
-        _drawPanel("You: " + _heardText.substring(0, 44) + "\n" +
-                   "Ph3b3: " + _replyText.substring(0, 40));
+        _drawPanel("");
         _phase = ok ? PH_DONE : PH_ERROR;
     }
 
@@ -366,8 +371,7 @@ private:
             _applyMoodReaction(responseText);
             face.setState(Ph3b3Face::SPEAKING);
             face.setStatusLine("ph3b3 says:");
-            _drawPanel("You: " + _heardText.substring(0, 44) + "\n" +
-                       "Ph3b3: " + responseText.substring(0, 40));
+            _drawPanel("");
             face.update();
         }
 
@@ -492,6 +496,26 @@ private:
             face.setState(mood);
             for (int i = 0; i < 5; i++) { face.update(); delay(60); }
         }
+    }
+
+    // ── Recording ring — amplitude driven by live mic RMS ────────────────────
+    // amp: 0.0..1.0 (smoothed RMS from _recAmp). Outer ring expands with voice.
+    void _drawRecordRing(float amp) {
+        auto& d  = M5StackChan.Display();
+        int W    = d.width();
+        int Y0   = 164;
+        d.fillRect(0, Y0, W, d.height() - Y0, TFT_BLACK);
+
+        int cx = W / 2, cy = Y0 + 32;
+        int rOuter = 12 + (int)(amp * 26.0f);   // 12..38px; grows with voice
+        d.fillCircle(cx, cy, rOuter, M5.Display.color565(80, 20, 20));
+        d.fillCircle(cx, cy, 12,     M5.Display.color565(200, 50, 50));
+        d.fillCircle(cx, cy, 7,      TFT_BLACK);
+        d.fillCircle(cx, cy, 3,      M5.Display.color565(255, 80, 80));
+
+        d.setTextDatum(bottom_center);
+        d.setTextColor(M5.Display.color565(40, 40, 60), TFT_BLACK);
+        d.drawString("tap to send | hold \x1e for menu", W / 2, d.height() - 2);
     }
 
     // ── Bottom panel ─────────────────────────────────────────────────────────
