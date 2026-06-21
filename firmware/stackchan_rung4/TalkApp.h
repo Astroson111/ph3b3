@@ -99,6 +99,8 @@ public:
                 } else if (_noiseFloor == 0.0f && _noiseSamples > 0) {
                     _noiseFloor = max(VAD_FLOOR_MIN,
                                      sqrtf(_noiseAccum / _noiseSamples) * VAD_THRESH_MULT);
+                    Serial.printf("[vad] floor=%.4f (from %d samples)\n",
+                                  _noiseFloor, _noiseSamples);
                 }
 
                 // VAD: track silence window after min duration
@@ -260,11 +262,16 @@ private:
         _noiseSamples   = 0;
         _silenceStartMs = 0;
 
-        if (M5.Speaker.isPlaying()) M5.Speaker.stop();
+        // Ensure speaker I2S is fully released before mic claims the shared BCK/WS bus.
+        // _doChatAndPlay() ends it after normal drain, but _startRecording() can also
+        // be called from PH_IDLE (first turn) where the speaker may not have been used.
+        M5.Speaker.stop(0);
+        M5.Speaker.end();
+        Serial.println("[i2s] mic.begin() — speaker torn down");
 
         auto mcfg = M5.Mic.config();
         mcfg.sample_rate   = PTT_RATE;
-        mcfg.magnification = 16;   // same as Iris — helps Whisper see a strong signal
+        mcfg.magnification = 16;
         M5.Mic.config(mcfg);
         M5.Mic.begin();
 
@@ -641,6 +648,17 @@ private:
                 }
                 face.update();
                 delay(50);
+            }
+
+            // Release speaker I2S unconditionally after playback.
+            // BCK/WS are shared with mic (GPIO 34/33); if speaker I2S stays
+            // initialised, the next M5.Mic.begin() gets the bus in a broken
+            // state and records zeros. Barge-in already calls end() above;
+            // this covers the normal non-interrupted drain path.
+            if (!_bargeIn) {
+                Serial.println("[i2s] speaker.end() — normal drain complete");
+                M5.Speaker.end();
+                delay(15);  // let shared clock lines settle before mic takes the bus
             }
         } else {
             http.end();
