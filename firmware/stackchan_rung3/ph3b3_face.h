@@ -35,12 +35,16 @@ class Ph3b3Face {
     W = w > 0 ? w : M5.Display.width();
     H = h > 0 ? h : M5.Display.height();
     cx = W / 2;
-    int base = min(W, H);
-    eyeR   = max(8, (int)(base * 0.18f));
-    eyeGap = (int)(base * 0.23f);
-    eyeY   = (int)(H * 0.34f);
-    mouthY = (int)(H * 0.56f);
+    // Portrait (H > W): keep original W-based formula — tuned for Iris 135×240.
+    // Landscape (W ≥ H): switch to H-based so eyes don't dominate the wider canvas.
+    bool portrait = H > W;
+    eyeR   = max(8, portrait ? (int)(W * 0.20f) : (int)(H * 0.11f));
+    eyeGap = portrait ? (int)(W * 0.27f) : max(eyeR + 10, (int)(W * 0.16f));
+    eyeY   = (int)(H * 0.36f);                       // was 0.34 — clears crescent margin
+    mouthY = (int)(H * (portrait ? 0.58f : 0.60f));  // was 0.56 — tracks new eyeY
     crestY = (int)(H * 0.13f);
+    Serial.printf("[face] W=%d H=%d portrait=%d eyeR=%d gap=%d eyeY=%d mouthY=%d\n",
+                  W, H, (int)portrait, eyeR, eyeGap, eyeY, mouthY);
     canvas.deleteSprite();
     canvas.setColorDepth(16);
     canvas.createSprite(W, H);
@@ -151,7 +155,7 @@ class Ph3b3Face {
 
     // lunar crest signature — brightens while listening
     float k = (state == LISTENING) ? 1.0f : 0.42f;
-    float cr = W * 0.058f;
+    float cr = min(W, H) * 0.058f;   // was W — landscape was too large
     canvas.fillSmoothCircle(cx, crestY, cr, C(p.cr*k, p.cg*k, p.cb*k));
     canvas.fillSmoothCircle(cx + cr*0.55f, crestY - cr*0.18f, cr, TFT_BLACK); // carve crescent
 
