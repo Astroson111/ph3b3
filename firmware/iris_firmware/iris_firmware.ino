@@ -18,6 +18,7 @@
 #include <DNSServer.h>
 #include <WebServer.h>
 #include "ph3b3_face.h"
+#include "es8311_fullduplex.h"
 
 // ----------------------------------------------------------------------------
 // CONFIG
@@ -98,8 +99,8 @@ int    menuSel  = 0;
 bool   menuDirty     = true;
 bool   wifiSetupDirty = true;
 
-const char* MENU_ITEMS[] = { "WiFi Setup", "Reconnect", "Forget WiFi", "Info", "Back" };
-const int   MENU_COUNT   = 5;
+const char* MENU_ITEMS[] = { "WiFi Setup", "Reconnect", "Forget WiFi", "Info", "FD Test", "Back" };
+const int   MENU_COUNT   = 6;
 
 // Reply text overlay — persists across face.update() calls until next BtnA press
 String gLastReply  = "";
@@ -958,7 +959,84 @@ void activateMenuItem() {
       uiMode = INFO;
       break;
 
-    case 4:  // Back
+    case 4:  // FD Test — full-duplex audio path proof (branch-only)
+      {
+        // Show test screen
+        M5.Display.fillScreen(TFT_BLACK);
+        M5.Display.setTextSize(2);
+        M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+        M5.Display.setCursor(4, 4);
+        M5.Display.println("FD TEST");
+        M5.Display.setTextSize(1);
+        M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+        M5.Display.setCursor(4, 36);
+        M5.Display.println("Init full-duplex...");
+        face.update();
+
+        esp_err_t err = fdInit();
+        if (err != ESP_OK) {
+          M5.Display.setCursor(4, 54);
+          M5.Display.setTextColor(TFT_RED, TFT_BLACK);
+          M5.Display.printf("INIT FAIL %d", err);
+          face.update();
+          delay(3000);
+          uiMode = FACE;
+          break;
+        }
+
+        M5.Display.setCursor(4, 54);
+        M5.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+        M5.Display.println("Playing 440Hz...");
+        M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+        M5.Display.setCursor(4, 72);
+        M5.Display.println("Capturing mic...");
+        M5.Display.setCursor(4, 90);
+        M5.Display.println("3 seconds...");
+        face.update();
+
+        // Play 440 Hz sine + capture mic simultaneously for 3 s
+        float rms = fdRunTest(3000);
+
+        fdDeinit();
+
+        // Display result
+        M5.Display.fillScreen(TFT_BLACK);
+        M5.Display.setTextSize(2);
+        M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+        M5.Display.setCursor(4, 4);
+        M5.Display.println("FD TEST");
+        M5.Display.setTextSize(1);
+        M5.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+        M5.Display.setCursor(4, 36);
+        M5.Display.println("Done! Speaker restored.");
+        M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+        M5.Display.setCursor(4, 54);
+        M5.Display.printf("Mic RMS: %.5f\n", rms);
+        M5.Display.setCursor(4, 72);
+        if (rms > 0.001f) {
+          M5.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+          M5.Display.println("REAL signal captured!");
+          M5.Display.println("Full-duplex WORKS.");
+        } else {
+          M5.Display.setTextColor(TFT_RED, TFT_BLACK);
+          M5.Display.println("Silent — check init.");
+        }
+        M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+        M5.Display.setCursor(4, 108);
+        M5.Display.println("(See serial log)");
+        face.update();
+
+        // Hold until BtnA tap returns to face
+        while (true) {
+          M5.update();
+          if (M5.BtnA.wasPressed()) break;
+          delay(30);
+        }
+        uiMode = FACE;
+      }
+      break;
+
+    case 5:  // Back
       uiMode = FACE;
       break;
   }
