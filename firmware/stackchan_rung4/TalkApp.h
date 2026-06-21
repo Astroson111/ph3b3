@@ -169,7 +169,7 @@ private:
     // VAD consts — millis()-based so timing is correct regardless of M5.Mic.record() blocking
     static constexpr uint32_t VAD_CALIBRATE_MS = 200;    // noise floor window
     static constexpr uint32_t VAD_MIN_MS       = 600;    // minimum recording before VAD fires
-    static constexpr uint32_t VAD_SILENCE_MS   = 1200;   // continuous silence → end turn
+    static constexpr uint32_t VAD_SILENCE_MS   = 1800;   // continuous silence → end turn
     static constexpr uint32_t VAD_MAX_MS       = 12000;  // hard time cap (backup for PTT_MAX)
     static constexpr float    VAD_THRESH_MULT  = 3.0f;   // threshold = noise_floor × this
     static constexpr float    VAD_FLOOR_MIN    = 0.003f; // abs. minimum threshold
