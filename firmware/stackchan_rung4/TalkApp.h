@@ -30,11 +30,14 @@ public:
         _pttSamples = 0;
         _wasTouch   = false;
         _recAmp     = 0.0f;
-        _bargeIn    = false;
-        _heardText  = "";
-        _replyText  = "";
-        _sessionId  = "sc-" + String(millis(), HEX);  // stable for this conversation
-        _lastTalkMs = millis();
+        _bargeIn         = false;
+        _heardText       = "";
+        _replyText       = "";
+        _sessionId       = "sc-" + String(millis(), HEX);  // stable for this conversation
+        _lastTalkMs      = millis();
+        _inConversation  = false;
+        _convLastValidMs = 0;
+        _exitAfterTurn   = false;
         _drawPanel("");
     }
 
@@ -64,7 +67,10 @@ public:
                 _lastTalkMs = millis();
             }
             if (tapped) {
-                _lastTalkMs = millis();
+                _lastTalkMs      = millis();
+                _inConversation  = true;   // conversation begins
+                _convLastValidMs = millis();
+                _exitAfterTurn   = false;
                 _startRecording();
             }
             break;
@@ -105,10 +111,12 @@ public:
                 }
             }
 
-            uint32_t elapsed = millis() - _recStartMs;
-            bool vad  = (_silenceStartMs > 0 && millis() - _silenceStartMs >= VAD_SILENCE_MS);
-            bool full = (elapsed >= VAD_MAX_MS || _pttSamples >= PTT_MAX);
-            if (tapped || vad || full) {
+            uint32_t elapsed  = millis() - _recStartMs;
+            bool vad      = (_silenceStartMs > 0 && millis() - _silenceStartMs >= VAD_SILENCE_MS);
+            bool full     = (elapsed >= VAD_MAX_MS || _pttSamples >= PTT_MAX);
+            bool convIdle = (_inConversation && _convLastValidMs > 0 &&
+                             millis() - _convLastValidMs > CONV_IDLE_MS);
+            if (tapped || vad || full || convIdle) {
                 _stopRecordingAndDispatch();
             } else {
                 _drawRecordRing(_recAmp);
@@ -150,8 +158,10 @@ public:
         if (_pttBuf) { heap_caps_free(_pttBuf); _pttBuf = nullptr; }
         M5.Speaker.stop(0);
         face.begin();  // restore full-screen face
-        _phase     = PH_IDLE;
-        _sessionId = "";  // will be regenerated on next init()
+        _phase          = PH_IDLE;
+        _sessionId      = "";  // will be regenerated on next init()
+        _inConversation = false;
+        _exitAfterTurn  = false;
     }
 
     const char* name() const override { return "Talk / Ph3b3"; }
@@ -163,6 +173,8 @@ private:
     static const char* PASS;
     static constexpr int PORT       = 443;
     static constexpr uint32_t SESSION_IDLE_RESET_MS = 60000;  // 60s idle resets conversation
+    static constexpr uint32_t CONV_IDLE_MS          = 9000;   // 9s no valid speech → end loop
+    static constexpr int      JUNK_MIN_LEN          = 2;      // transcript chars below this → noise
     static constexpr int      PTT_RATE      = 16000;
     static constexpr int      PTT_MAX       = PTT_RATE * 12;  // 12s hard cap = 384 KB PSRAM
     static constexpr int      CHUNK_SAMP    = 1024;           // ~46 ms @ 22050 Hz
@@ -190,8 +202,12 @@ private:
     uint32_t _silenceStartMs = 0;   // millis() when current silence window began; 0 = not in silence
     String   _heardText;
     String   _replyText;
-    String   _sessionId;       // generated on init(), stable for a conversation, reset on exit/idle
-    uint32_t _lastTalkMs = 0;  // tracks idle time for session reset
+    String   _sessionId;          // generated on init(), stable for a conversation, reset on exit/idle
+    uint32_t _lastTalkMs      = 0;  // tracks idle time for session reset
+    // Continuous conversation
+    bool     _inConversation  = false;
+    uint32_t _convLastValidMs = 0;   // millis() of last successful /chat; idle clock measures from here
+    bool     _exitAfterTurn   = false; // set when exit word detected — end after current SPEAK
 
     // ── Base64 helpers ────────────────────────────────────────────────────────
     static int _b64val(char c) {
@@ -260,10 +276,15 @@ private:
         M5.Speaker.setVolume(150);
 
         if (!_pttBuf || _pttSamples < PTT_RATE / 4) {
-            // Too short to be speech
             if (_pttBuf) { heap_caps_free(_pttBuf); _pttBuf = nullptr; }
-            _phase = PH_IDLE;
-            _drawPanel("Too short — try again");
+            bool withinIdle = _inConversation &&
+                              (millis() - _convLastValidMs < CONV_IDLE_MS);
+            if (withinIdle) {
+                _startRecording();  // auto re-listen — don't flash ready
+            } else {
+                _inConversation = false;
+                _phase = PH_IDLE;
+            }
             return;
         }
 
@@ -279,6 +300,13 @@ private:
 
     // ── Main dispatch: encode → /transcribe → /chat → play ───────────────────
     void _dispatch(int16_t* audio, int numSamples) {
+        // Idle check before expensive work — if conversation timed out, skip entirely
+        if (_inConversation && _convLastValidMs > 0 &&
+            millis() - _convLastValidMs > CONV_IDLE_MS) {
+            _endConversation();
+            return;
+        }
+
         // ── Step 1: build {"audio":"<base64 WAV>"} in PSRAM ──────────────────
         uint8_t wavHdr[44];
         _buildWavHdr(wavHdr, numSamples, PTT_RATE);
@@ -354,13 +382,31 @@ private:
         if (_heardText.length() == 0) {
             String err = (code > 0) ? "http " + String(code) :
                          (code == 0) ? "timeout" : "err " + String(code);
-            err += " " + String(ESP.getMaxAllocHeap() / 1024) + "k";
+            if (_inConversation && millis() - _convLastValidMs < CONV_IDLE_MS) {
+                Serial.printf("[talk] transcribe error in conv: %s — re-listen\n", err.c_str());
+                _drawPanel(""); _startRecording(); return;
+            }
             face.setState(Ph3b3Face::ERROR);
             face.setStatusLine(err);
             _drawPanel("Nothing heard");
+            _inConversation = false;
             _phase = PH_ERROR;
             return;
         }
+
+        // Junk filter: short transcripts (noise artifacts) don't trigger /chat
+        if (_isJunkTranscript(_heardText)) {
+            Serial.printf("[talk] junk transcript '%s' — discarded\n", _heardText.c_str());
+            if (_inConversation && millis() - _convLastValidMs < CONV_IDLE_MS) {
+                _drawPanel(""); _startRecording(); return;  // re-listen, idle clock unchanged
+            }
+            _inConversation = false;
+            _phase = PH_IDLE;
+            return;
+        }
+
+        // Exit word detection — will end conversation after current SPEAK
+        _exitAfterTurn = _isExitWord(_heardText);
 
         face.setState(Ph3b3Face::THINKING);
         face.setStatusLine("thinking...");
@@ -372,16 +418,71 @@ private:
         bool ok = !_replyText.startsWith("ERR") && !_replyText.startsWith("HTTP") &&
                   !_replyText.startsWith("(no");
 
+        // Barge-in: tap during SPEAK → reset idle and go straight to LISTEN
+        if (_bargeIn) {
+            _bargeIn = false;
+            _exitAfterTurn = false;
+            if (ok) _convLastValidMs = millis();
+            _drawPanel("");
+            _startRecording();
+            return;
+        }
+
+        // Update idle clock on a good turn (only if not exit-word — exit closes the session)
+        if (ok && !_exitAfterTurn) _convLastValidMs = millis();
+
+        // Exit word: give the sign-off, then drop to ready
+        if (_exitAfterTurn) {
+            _exitAfterTurn = false;
+            _endConversation();
+            return;
+        }
+
+        bool convIdle = (_inConversation && _convLastValidMs > 0 &&
+                         millis() - _convLastValidMs > CONV_IDLE_MS);
+
+        // Continuous loop: SPEAK done → auto-reopen LISTEN (no "ready" flash)
+        if (ok && _inConversation && !convIdle) {
+            _drawPanel("");
+            _startRecording();
+            return;
+        }
+
+        // Conversation over (idle timeout, error, or normal end)
+        if (!ok || convIdle) _inConversation = false;
         face.setState(ok ? Ph3b3Face::IDLE : Ph3b3Face::ERROR);
         face.setStatusLine(ok ? "" : _replyText.substring(0, 20));
         _drawPanel("");
         _phase = ok ? PH_DONE : PH_ERROR;
+    }
 
-        // Barge-in: tap during playback → skip DONE, go straight to listening
-        if (_bargeIn) {
-            _bargeIn = false;
-            _startRecording();
-        }
+    // ── Conversation helpers ──────────────────────────────────────────────────
+    bool _isJunkTranscript(const String& text) {
+        String t = text; t.trim();
+        return t.length() < (uint32_t)JUNK_MIN_LEN;
+    }
+
+    bool _isExitWord(const String& text) {
+        String t = text; t.toLowerCase(); t.trim();
+        if (t.indexOf("goodbye")          >= 0) return true;
+        if (t.indexOf("bye")              >= 0) return true;
+        if (t.indexOf("stop")             >= 0) return true;
+        if (t.indexOf("that's all")       >= 0) return true;
+        if (t.indexOf("thats all")        >= 0) return true;
+        if (t.indexOf("thanks phoebe")    >= 0) return true;
+        if (t.indexOf("thank you phoebe") >= 0) return true;
+        if (t.indexOf("see you later")    >= 0) return true;
+        return false;
+    }
+
+    void _endConversation() {
+        _inConversation  = false;
+        _exitAfterTurn   = false;
+        _convLastValidMs = 0;
+        face.setState(Ph3b3Face::IDLE);
+        face.setStatusLine("");
+        _drawPanel("");
+        _phase = PH_IDLE;
     }
 
     // ── /chat + streaming audio ───────────────────────────────────────────────
