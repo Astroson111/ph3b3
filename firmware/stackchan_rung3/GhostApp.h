@@ -23,7 +23,7 @@
 class GhostApp : public AppBase {
 public:
     void init() override {
-        face.setState(Ph3b3Face::ERROR);   // dark/offline vibe suits ghost mode
+        face.setState(Ph3b3Face::FOCUSED);
         face.setStatusLine("Ghost mode");
         _logOpen = false;
         _sessionStartMs = millis();
@@ -58,10 +58,10 @@ public:
 
     void update() override {
         if (!_logOpen) {
-            face.setState(Ph3b3Face::ERROR);
+            face.setState(Ph3b3Face::FOCUSED);
             return;
         }
-        face.setState(Ph3b3Face::ERROR);
+        face.setState(Ph3b3Face::FOCUSED);
 
         // Heartbeat every 5 seconds
         uint32_t now = millis();
