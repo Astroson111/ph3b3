@@ -74,7 +74,7 @@ public:
                 int chunk = min(512, PTT_MAX - _pttSamples);
                 M5.Mic.record(&_pttBuf[_pttSamples], chunk, PTT_RATE);
 
-                // Chunk RMS — used for ring visualiser and VAD
+                // RMS of fresh chunk — ring visualizer + VAD input
                 float rms = 0.0f;
                 for (int i = 0; i < chunk; i++) {
                     float s = _pttBuf[_pttSamples + i] / 32768.0f;
@@ -84,24 +84,30 @@ public:
                 _recAmp = _recAmp * 0.6f + rms * 0.4f;
                 _pttSamples += chunk;
 
-                // Noise-floor calibration — first VAD_CALIBRATE_SAMP samples
-                if (_pttSamples <= VAD_CALIBRATE_SAMP) {
-                    _noiseAccum   += rms * rms * chunk;
-                    _noiseSamples += chunk;
+                uint32_t elapsed = millis() - _recStartMs;
+
+                // Noise-floor calibration — first VAD_CALIBRATE_MS of real time
+                if (elapsed < VAD_CALIBRATE_MS) {
+                    _noiseAccum += rms * rms;
+                    _noiseSamples++;
                 } else if (_noiseFloor == 0.0f && _noiseSamples > 0) {
                     _noiseFloor = max(VAD_FLOOR_MIN,
                                      sqrtf(_noiseAccum / _noiseSamples) * VAD_THRESH_MULT);
                 }
 
-                // VAD silence accumulator — only after min duration + calibration
-                if (_noiseFloor > 0.0f && _pttSamples >= VAD_MIN_SAMP) {
-                    if (rms < _noiseFloor) _silenceSamples += chunk;
-                    else                   _silenceSamples  = 0;
+                // VAD: track silence window after min duration
+                if (_noiseFloor > 0.0f && elapsed >= VAD_MIN_MS) {
+                    if (rms < _noiseFloor) {
+                        if (_silenceStartMs == 0) _silenceStartMs = millis();
+                    } else {
+                        _silenceStartMs = 0;
+                    }
                 }
             }
 
-            bool vad  = (_silenceSamples >= VAD_SILENCE_SAMP);
-            bool full = (_pttSamples >= PTT_MAX);
+            uint32_t elapsed = millis() - _recStartMs;
+            bool vad  = (_silenceStartMs > 0 && millis() - _silenceStartMs >= VAD_SILENCE_MS);
+            bool full = (elapsed >= VAD_MAX_MS || _pttSamples >= PTT_MAX);
             if (tapped || vad || full) {
                 _stopRecordingAndDispatch();
             } else {
@@ -157,15 +163,16 @@ private:
     static const char* PASS;
     static constexpr int PORT       = 443;
     static constexpr uint32_t SESSION_IDLE_RESET_MS = 60000;  // 60s idle resets conversation
-    static constexpr int   PTT_RATE          = 16000;
-    static constexpr int   PTT_MAX           = PTT_RATE * 12;  // 12s hard cap = 384 KB PSRAM
-    static constexpr int   CHUNK_SAMP        = 1024;           // ~46 ms @ 22050 Hz
-    // VAD consts — all tunable
-    static constexpr int   VAD_CALIBRATE_SAMP = (int)(PTT_RATE * 0.20f); // 200ms noise floor
-    static constexpr int   VAD_MIN_SAMP       = (int)(PTT_RATE * 0.60f); // min before VAD fires
-    static constexpr int   VAD_SILENCE_SAMP   = (int)(PTT_RATE * 1.20f); // 1.2s quiet → end
-    static constexpr float VAD_THRESH_MULT    = 3.0f;                     // threshold = floor × this
-    static constexpr float VAD_FLOOR_MIN      = 0.003f;                   // abs. minimum threshold
+    static constexpr int      PTT_RATE      = 16000;
+    static constexpr int      PTT_MAX       = PTT_RATE * 12;  // 12s hard cap = 384 KB PSRAM
+    static constexpr int      CHUNK_SAMP    = 1024;           // ~46 ms @ 22050 Hz
+    // VAD consts — millis()-based so timing is correct regardless of M5.Mic.record() blocking
+    static constexpr uint32_t VAD_CALIBRATE_MS = 200;    // noise floor window
+    static constexpr uint32_t VAD_MIN_MS       = 600;    // minimum recording before VAD fires
+    static constexpr uint32_t VAD_SILENCE_MS   = 1200;   // continuous silence → end turn
+    static constexpr uint32_t VAD_MAX_MS       = 12000;  // hard time cap (backup for PTT_MAX)
+    static constexpr float    VAD_THRESH_MULT  = 3.0f;   // threshold = noise_floor × this
+    static constexpr float    VAD_FLOOR_MIN    = 0.003f; // abs. minimum threshold
 
     // ── State ─────────────────────────────────────────────────────────────────
     enum Phase { PH_IDLE, PH_RECORDING, PH_DONE, PH_ERROR };
@@ -177,10 +184,10 @@ private:
     float    _recAmp     = 0.0f;   // smoothed mic RMS during recording
     bool     _bargeIn    = false;  // set when tap interrupts playback → restart listening
     // VAD state
-    float    _noiseFloor    = 0.0f;
-    float    _noiseAccum    = 0.0f;
-    int      _noiseSamples  = 0;
-    int      _silenceSamples= 0;
+    float    _noiseFloor     = 0.0f;
+    float    _noiseAccum     = 0.0f;
+    int      _noiseSamples   = 0;
+    uint32_t _silenceStartMs = 0;   // millis() when current silence window began; 0 = not in silence
     String   _heardText;
     String   _replyText;
     String   _sessionId;       // generated on init(), stable for a conversation, reset on exit/idle
@@ -230,7 +237,7 @@ private:
         _noiseFloor     = 0.0f;
         _noiseAccum     = 0.0f;
         _noiseSamples   = 0;
-        _silenceSamples = 0;
+        _silenceStartMs = 0;
 
         if (M5.Speaker.isPlaying()) M5.Speaker.stop();
 
