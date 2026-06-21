@@ -297,9 +297,16 @@ private:
         face.setState(Ph3b3Face::THINKING);
         face.update();
 
-        _dispatch(_pttBuf, _pttSamples);
-        heap_caps_free(_pttBuf);
-        _pttBuf = nullptr;
+        // Clear _pttBuf BEFORE dispatch so the CC re-arm path inside _dispatch()
+        // can safely call _startRecording() and assign a fresh buffer to _pttBuf.
+        // If we free _pttBuf AFTER dispatch, we'd free the new turn-2 buffer instead.
+        int16_t* audio      = _pttBuf;
+        int      numSamples = _pttSamples;
+        _pttBuf     = nullptr;
+        _pttSamples = 0;
+
+        _dispatch(audio, numSamples);
+        heap_caps_free(audio);
     }
 
     // ── Main dispatch: encode → /transcribe → /chat → play ───────────────────
