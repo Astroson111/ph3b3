@@ -216,7 +216,15 @@ def _tts_announce(text: str) -> None:
     except Exception:
         pass
 
-SYSTEM_PROMPT = load_soul() + memory.as_context()
+# Identity directive prepended to the system message so it leads the first context token.
+# Hermes3 prioritises instructions at the start of messages[0]; the soul's first-person
+# format reads as a document rather than a directive without this explicit "You are" opener.
+_IDENTITY_DIRECTIVE = (
+    "You are Ph3b3, pronounced and spoken as Phoebe. "
+    "Ph3b3 is your name — not Hermes, not Nyx, not any machine or device name. "
+    "When asked your name, always answer: Ph3b3, spoken as Phoebe.\n\n"
+)
+SYSTEM_PROMPT = _IDENTITY_DIRECTIVE + load_soul() + memory.as_context()
 
 TOOLS = [
     {"type":"function","function":{"name":"spotify_play","description":"Play music on Spotify","parameters":{"type":"object","properties":{"query":{"type":"string"},"type":{"type":"string","default":"track"}},"required":["query"]}}},
@@ -286,7 +294,7 @@ TOOLS = [
     {"type":"function","function":{"name":"dns_records","description":"Get DNS records for a domain","parameters":{"type":"object","properties":{"domain":{"type":"string"}},"required":["domain"]}}},
     {"type":"function","function":{"name":"ssl_check","description":"Check SSL certificate for a host","parameters":{"type":"object","properties":{"host":{"type":"string"}},"required":["host"]}}},
     {"type":"function","function":{"name":"cybersec_study","description":"Study a cybersecurity topic","parameters":{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"]}}},
-    {"type":"function","function":{"name":"analyze_scam","description":"Analyze any text for scam and manipulation tactics — accepts SMS, email, job offers, contracts, voicemail transcripts, anything suspicious. Returns likelihood rating (Clean / Suspicious / Likely Scam / Run. Just run.), tactics detected in plain English, what the sender actually wants, what to do right now, and a plain verdict. Fully offline, nothing leaves Nyx. CALL THIS whenever someone pastes or describes a suspicious message, offer, or demand.","parameters":{"type":"object","properties":{"text":{"type":"string","description":"The suspicious text to analyze — paste the full message"}},"required":["text"]}}},
+    {"type":"function","function":{"name":"analyze_scam","description":"Analyze any text for scam and manipulation tactics — accepts SMS, email, job offers, contracts, voicemail transcripts, anything suspicious. Returns likelihood rating (Clean / Suspicious / Likely Scam / Run. Just run.), tactics detected in plain English, what the sender actually wants, what to do right now, and a plain verdict. Fully offline, nothing leaves this machine. CALL THIS whenever someone pastes or describes a suspicious message, offer, or demand.","parameters":{"type":"object","properties":{"text":{"type":"string","description":"The suspicious text to analyze — paste the full message"}},"required":["text"]}}},
     {"type":"function","function":{"name":"check_identity_exposure","description":"Assess risk and build a recovery plan when personal information has been exposed — through a data breach, scam, lost wallet, phishing, or anything else. Tell this tool what was exposed (SSN, email, bank account, date of birth, etc.) and optionally how it happened. Returns risk per item, numbered priority actions, specific agencies and contacts, freeze recommendations, and a calm verdict. Fully offline. Input is not logged to disk.","parameters":{"type":"object","properties":{"exposed":{"type":"string","description":"What was exposed — comma-separated, e.g. 'SSN, email, bank account number, date of birth'"},"context":{"type":"string","description":"Optional: how or where it happened — e.g. 'data breach', 'phishing scam', 'lost wallet'"}},"required":["exposed"]}}},
     {"type":"function","function":{"name":"investigation_start","description":"Start a ghost hunting investigation session","parameters":{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}}},
     {"type":"function","function":{"name":"investigation_end","description":"End investigation and generate report","parameters":{"type":"object","properties":{}}}},
@@ -792,25 +800,27 @@ async def chat_endpoint(body: dict, request: Request):
     # history so it doesn't accumulate. Add new devices here as needed.
     _DEVICE_NOTES = {
         "iris": (
-            "You are transmitting via your combadge. "
+            "You are speaking through your Iris combadge (body), running on Nyx (host). "
+            "Neither Iris nor Nyx is your name — your name is Ph3b3 (Phoebe). "
             "IMPORTANT: reply in ONE short sentence only (under 20 words). "
             "Begin directly with your answer — no salutation, no address, no preamble."
         ),
         "stackchan": (
-            "You are transmitting via Stack-Chan, your second body — a small desktop "
-            "robot with a face display and a speaker. Keep replies to 2–3 sentences "
-            "maximum. Be warm, direct, and expressive. No preamble, no salutation."
+            "You are speaking through Stack-Chan, your desktop robot body, running on Nyx (host). "
+            "Neither Stack-Chan nor Nyx is your name — your name is Ph3b3 (Phoebe). "
+            "Keep replies to 2–3 sentences maximum. Be warm, direct, and expressive. "
+            "No preamble, no salutation."
         ),
     }
     device = request.headers.get("X-Ph3b3-Device", "")
     device_note = None
     if device in _DEVICE_NOTES:
         device_note = {"role": "system", "content": _DEVICE_NOTES[device]}
-        messages.insert(1, device_note)   # after soul, before conversation turns
+        messages.insert(1, device_note)   # after soul + id_anchor, before conversation turns
 
     response, updated = await chat_with_tools(messages)
 
-    # Strip the ephemeral device note before storing so it doesn't grow the history
+    # Strip ephemeral device note before storing so it never accumulates in history
     if device_note and device_note in updated:
         updated.remove(device_note)
 
