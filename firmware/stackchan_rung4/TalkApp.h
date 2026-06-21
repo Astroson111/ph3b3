@@ -394,6 +394,14 @@ private:
 
             auto flushChunk = [&]() {
                 if (chunkPos == 0) return;
+                // RMS of chunk about to play → lip-sync via setSpeakingLevel (~22 Hz)
+                float rms = 0.0f;
+                for (int i = 0; i < chunkPos; i++) {
+                    float s = pcmBuf[fillIdx][i] / 32768.0f;
+                    rms += s * s;
+                }
+                face.setSpeakingLevel(min(1.0f, sqrtf(rms / chunkPos) * 5.0f));
+                face.update();
                 while (M5.Speaker.isPlaying(0)) delay(1);
                 if (!keepGoing) return;
                 M5.Speaker.playRaw(pcmBuf[fillIdx], chunkPos, 22050, false, 1, 0);
