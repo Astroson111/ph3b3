@@ -166,6 +166,11 @@ public:
 
     const char* name() const override { return "Talk / Ph3b3"; }
 
+    // Suppress "hold ↑ menu" hint during active CC turns — show only at idle/ready
+    bool showReturnHint() const override {
+        return _phase == PH_IDLE || _phase == PH_DONE || _phase == PH_ERROR;
+    }
+
 private:
     // ── Constants ─────────────────────────────────────────────────────────────
     static const char* HOST;
