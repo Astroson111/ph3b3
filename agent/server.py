@@ -216,15 +216,16 @@ def _tts_announce(text: str) -> None:
     except Exception:
         pass
 
-# Identity directive prepended to the system message so it leads the first context token.
-# Hermes3 prioritises instructions at the start of messages[0]; the soul's first-person
-# format reads as a document rather than a directive without this explicit "You are" opener.
-_IDENTITY_DIRECTIVE = (
-    "You are Ph3b3, pronounced and spoken as Phoebe. "
-    "Ph3b3 is your name — not Hermes, not Nyx, not any machine or device name. "
-    "When asked your name, always answer: Ph3b3, spoken as Phoebe.\n\n"
+# _IDENTITY_DIRECTIVE was removed: putting "You are Ph3b3" after the template's
+# "You are a function calling AI model" created two conflicting identity claims that
+# confused the 8B model into meta-conversation mode instead of calling tools.
+# The soul's own first-person voice asserts identity without the conflict.
+_SEARCH_NUDGE = (
+    "\n\nFor any query involving current events, recent news, prices, scores, schedules, "
+    "weather, or anything that changes over time — use your tools first. "
+    "Do not answer from training memory when real-time data is available via a tool."
 )
-SYSTEM_PROMPT = _IDENTITY_DIRECTIVE + load_soul() + memory.as_context()
+SYSTEM_PROMPT = load_soul() + _SEARCH_NUDGE + memory.as_context()
 
 TOOLS = [
     {"type":"function","function":{"name":"spotify_play","description":"Play music on Spotify","parameters":{"type":"object","properties":{"query":{"type":"string"},"type":{"type":"string","default":"track"}},"required":["query"]}}},
@@ -245,7 +246,7 @@ TOOLS = [
     {"type":"function","function":{"name":"set_baseline","description":"Set current camera view as normal","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"check_anomaly","description":"Compare camera to baseline","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"start_monitoring","description":"Start background camera monitoring","parameters":{"type":"object","properties":{"interval":{"type":"integer","default":30}}}}},
-    {"type":"function","function":{"name":"web_search","description":"Search the web","parameters":{"type":"object","properties":{"query":{"type":"string"},"type":{"type":"string","default":"search"}},"required":["query"]}}},
+    {"type":"function","function":{"name":"web_search","description":"Search the web for current information. CALL THIS for: current events, news, recent/latest anything, prices, scores, schedules, weather forecasts, product releases, politics, tech news, or any question where the answer may have changed since training. Use type='news' for breaking news. Never answer time-sensitive questions from memory when this tool is available.","parameters":{"type":"object","properties":{"query":{"type":"string"},"type":{"type":"string","default":"search"}},"required":["query"]}}},
     {"type":"function","function":{"name":"speak","description":"Speak text aloud using Piper TTS","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}},
     {"type":"function","function":{"name":"listen","description":"Listen via microphone using Whisper","parameters":{"type":"object","properties":{"duration":{"type":"integer","default":10}}}}},
     {"type":"function","function":{"name":"anime_lookup","description":"Look up anime or get recommendations","parameters":{"type":"object","properties":{"query":{"type":"string"},"mode":{"type":"string","default":"lookup"}},"required":["query"]}}},
