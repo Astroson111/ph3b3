@@ -327,7 +327,7 @@ void setup() {
     appMgr.registerApp(&karaokeApp);  // 3
     appMgr.registerApp(&ghostApp);    // 4
 
-    appMgr.begin(MENU_IDX);
+    appMgr.begin(1);  // boot into Talk — menu accessible via hold-gesture
     Serial.println("[rung4] setup done");
 }
 
