@@ -40,9 +40,9 @@ class Ph3b3Face {
     bool portrait = H > W;
     eyeR   = max(8, portrait ? (int)(W * 0.20f) : (int)(H * 0.11f));
     eyeGap = portrait ? (int)(W * 0.27f) : max(eyeR + 10, (int)(W * 0.16f));
-    eyeY   = (int)(H * 0.36f);                       // was 0.34 — clears crescent margin
-    mouthY = (int)(H * (portrait ? 0.58f : 0.60f));  // was 0.56 — tracks new eyeY
-    crestY = (int)(H * 0.13f);
+    crestY = (int)(H * 0.26f);  // was 0.13 — shifted down for vertical centering
+    eyeY   = (int)(H * 0.49f);  // was 0.36 — maintains crest→eye spacing
+    mouthY = (int)(H * 0.73f);  // was 0.58/0.60 — maintains eye→mouth spacing
     Serial.printf("[face] W=%d H=%d portrait=%d eyeR=%d gap=%d eyeY=%d mouthY=%d\n",
                   W, H, (int)portrait, eyeR, eyeGap, eyeY, mouthY);
     canvas.deleteSprite();
@@ -78,10 +78,15 @@ class Ph3b3Face {
       if (k >= 250.f) { blinkStart = 0; nextBlinkMs = now + 2200 + random(3000); }
     }
 
-    // --- gaze drift (the "alive" tell) ---
-    if (now > nextGlanceMs) {
-      gTX = ((random(200) / 100.0f) - 1.0f) * eyeR * 0.40f;  // was 0.28
-      gTY = ((random(200) / 100.0f) - 1.0f) * eyeR * 0.28f;  // was 0.20
+    // --- gaze drift / eye contact ---
+    // LISTENING: lock pupils to center (eye contact) and ease smoothly toward it.
+    // All other states: normal randomised drift.
+    if (state == LISTENING) {
+      gTX = 0.0f;
+      gTY = 0.0f;
+    } else if (now > nextGlanceMs) {
+      gTX = ((random(200) / 100.0f) - 1.0f) * eyeR * 0.40f;
+      gTY = ((random(200) / 100.0f) - 1.0f) * eyeR * 0.28f;
       nextGlanceMs = now + 1500 + random(2700);
     }
     glanceX += (gTX - glanceX) * 0.07f;
