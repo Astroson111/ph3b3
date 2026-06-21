@@ -12,6 +12,4 @@ public:
     virtual void draw()   {}    // called after face.update(); draw overlays here
     virtual void exit()   {}    // called on switch-out
     virtual const char* name() const = 0;
-    // Return false to suppress the "hold ↑ menu" hint (e.g. during active CC turns)
-    virtual bool showReturnHint() const { return true; }
 };

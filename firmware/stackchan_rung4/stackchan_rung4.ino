@@ -15,7 +15,7 @@
  *   After connecting, Ph3b3's /iris/networks is pulled and saved to NVS —
  *   subsequent boots load from NVS so you can blank these defines again.
  *
- * Return to menu: hold top-left 60×60 px corner for 1 s from any mode.
+ * Mode switching: tap the crescent tab (top-left corner) to open the mode overlay.
  *
  * SD card layout (microSD, CS=GPIO4):
  *   /karaoke/track.wav  /karaoke/track.lrc  /ghost/ev_*.log
@@ -36,7 +36,7 @@
 #include "ph3b3_face.h"
 #include "AppBase.h"
 #include "AppManager.h"
-#include "MenuApp.h"
+#include "CrescentMenu.h"
 #include "TalkApp.h"
 #include "NetworkApp.h"
 #include "KaraokeApp.h"
@@ -202,14 +202,15 @@ static void wifiSupervisorTick() {
 }
 
 // ── Globals ───────────────────────────────────────────────────────────────────
-Ph3b3Face  face;
-AppManager appMgr;
+Ph3b3Face    face;
+AppManager   appMgr;
+bool         g_overlayOpen = false;  // set by CrescentMenu; suppresses app touch handling
 
-static MenuApp    menuApp;
-static TalkApp    talkApp;
-static NetworkApp networkApp;
-static KaraokeApp karaokeApp;
-static GhostApp   ghostApp;
+static CrescentMenu crescentMenu;
+static TalkApp      talkApp;
+static NetworkApp   networkApp;
+static KaraokeApp   karaokeApp;
+static GhostApp     ghostApp;
 
 // ── Servo constants ───────────────────────────────────────────────────────────
 static const int TILT_HOME = 450;
@@ -259,26 +260,6 @@ static void safeHome() {
     waitAxis([]() { return M5StackChan.Motion.isXMoving(); });
 }
 
-// ── Global return-to-menu gesture ─────────────────────────────────────────────
-static uint32_t _menuHoldMs = 0;
-
-static bool checkMenuReturn() {
-    if (appMgr.isOnMenu()) { _menuHoldMs = 0; return false; }
-    int16_t tx = 0, ty = 0;
-    bool t = M5StackChan.Display().getTouch(&tx, &ty);
-    if (t && tx < 60 && ty < 60) {
-        if (_menuHoldMs == 0) _menuHoldMs = millis();
-        if (millis() - _menuHoldMs >= 1000) {
-            _menuHoldMs = 0;
-            appMgr.returnToMenu();
-            return true;
-        }
-    } else {
-        _menuHoldMs = 0;
-    }
-    return false;
-}
-
 // ── setup ─────────────────────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
@@ -320,14 +301,15 @@ void setup() {
     }
 
     face.begin();
+    face.setStatusVisible(false);   // face-only mode: state via expression, no text
+    face.setCrescentTabVisible(true);  // corner crescent is the only control affordance
 
-    appMgr.registerApp(&menuApp);     // 0
-    appMgr.registerApp(&talkApp);     // 1
-    appMgr.registerApp(&networkApp);  // 2
-    appMgr.registerApp(&karaokeApp);  // 3
-    appMgr.registerApp(&ghostApp);    // 4
+    appMgr.registerApp(&talkApp);     // 0
+    appMgr.registerApp(&networkApp);  // 1
+    appMgr.registerApp(&karaokeApp);  // 2
+    appMgr.registerApp(&ghostApp);    // 3
 
-    appMgr.begin(1);  // boot into Talk — menu accessible via hold-gesture
+    appMgr.begin(0);  // boot into Talk
     Serial.println("[rung4] setup done");
 }
 
@@ -336,14 +318,11 @@ void loop() {
     M5StackChan.update();
     wifiSupervisorTick();
 
-    if (checkMenuReturn()) {
-        delay(16);
-        return;
-    }
-
-    appMgr.update();
-    face.update();
-    appMgr.draw();
+    crescentMenu.update();  // updates g_overlayOpen + handles mode-switch taps
+    appMgr.update();        // app logic (checks g_overlayOpen before processing touches)
+    face.update();          // renders face + crescent tab onto canvas, pushes to display
+    appMgr.draw();          // app overlays (e.g. karaoke lyrics)
+    crescentMenu.draw();    // mode panel slides over everything when open
     applyBodyLanguage(face.getState());
 
     delay(16);
