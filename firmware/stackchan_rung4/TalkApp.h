@@ -8,6 +8,7 @@
 
 // Defined once in stackchan_rung4.ino
 extern const char ISRG_ROOT_X1[];
+extern bool g_overlayOpen;
 
 // ── TalkApp — full Ph3b3 voice round-trip ────────────────────────────────────
 //
@@ -23,8 +24,8 @@ extern const char ISRG_ROOT_X1[];
 class TalkApp : public AppBase {
 public:
     void init() override {
-        M5StackChan.Display().fillScreen(TFT_BLACK);  // clear stale state from prev app
-        face.begin(320, 160);   // top 160px face, bottom 80px panel
+        M5StackChan.Display().fillScreen(TFT_BLACK);
+        face.begin();  // full-screen face — no panel
         _phase      = PH_IDLE;
         _pttBuf     = nullptr;
         _pttSamples = 0;
@@ -38,22 +39,27 @@ public:
         _inConversation  = false;
         _convLastValidMs = 0;
         _exitAfterTurn   = false;
-        _drawPanel("");
     }
 
     void update() override {
+        // ── Overlay gate — CrescentMenu handles all touches while panel is open ─
+        if (g_overlayOpen) {
+            int16_t _tx, _ty;
+            _wasTouch = M5StackChan.Display().getTouch(&_tx, &_ty);
+            return;
+        }
+
         // ── WiFi gate ──────────────────────────────────────────────────────────
         if (WiFi.status() != WL_CONNECTED) {
             face.setState(Ph3b3Face::CONNECTING);
-            face.setStatusLine("wifi offline");
-            _drawPanel("WiFi required for Talk");
             return;
         }
 
         // ── Touch detection ────────────────────────────────────────────────────
         int16_t tx = 0, ty = 0;
         bool touching = M5StackChan.Display().getTouch(&tx, &ty);
-        bool tapped   = (touching && !_wasTouch);
+        // Reserve top-left 36×36 px — crescent tab zone handled by CrescentMenu
+        bool tapped = (touching && !_wasTouch) && !(tx < 36 && ty < 36);
         _wasTouch = touching;
 
         // ── State machine ──────────────────────────────────────────────────────
@@ -61,7 +67,6 @@ public:
 
         case PH_IDLE:
             face.setState(Ph3b3Face::IDLE);
-            face.setStatusLine("");
             if (millis() - _lastTalkMs > SESSION_IDLE_RESET_MS) {
                 _sessionId  = "sc-" + String(millis(), HEX);
                 _lastTalkMs = millis();
@@ -120,8 +125,6 @@ public:
                              millis() - _convLastValidMs > CONV_IDLE_MS);
             if (tapped || vad || full || convIdle) {
                 _stopRecordingAndDispatch();
-            } else {
-                _drawRecordRing(_recAmp);
             }
             break;
         }
@@ -137,7 +140,6 @@ public:
                 _phase      = PH_IDLE;
                 _heardText  = "";
                 _replyText  = "";
-                _drawPanel("");
             }
             break;
 
@@ -145,13 +147,12 @@ public:
             face.setState(Ph3b3Face::ERROR);
             if (tapped) {
                 _phase = PH_IDLE;
-                _drawPanel("");
             }
             break;
         }
     }
 
-    void draw() override {}  // panel drawn reactively in update()
+    void draw() override {}
 
     void exit() override {
         if (_phase == PH_RECORDING) {
@@ -168,11 +169,6 @@ public:
 
     const char* name() const override { return "Talk / Ph3b3"; }
 
-    // Suppress "hold ↑ menu" hint during active CC turns — show only at idle/ready
-    bool showReturnHint() const override {
-        return _phase == PH_IDLE || _phase == PH_DONE || _phase == PH_ERROR;
-    }
-
 private:
     // ── Constants ─────────────────────────────────────────────────────────────
     static const char* HOST;
@@ -188,9 +184,9 @@ private:
     // VAD consts — millis()-based so timing is correct regardless of M5.Mic.record() blocking
     static constexpr uint32_t VAD_CALIBRATE_MS = 200;    // noise floor window
     static constexpr uint32_t VAD_MIN_MS       = 600;    // minimum recording before VAD fires
-    static constexpr uint32_t VAD_SILENCE_MS   = 1800;   // continuous silence → end turn
+    static constexpr uint32_t VAD_SILENCE_MS   = 900;    // continuous silence → end turn (was 1800 — too long for noisy room)
     static constexpr uint32_t VAD_MAX_MS       = 12000;  // hard time cap (backup for PTT_MAX)
-    static constexpr float    VAD_THRESH_MULT  = 3.0f;   // threshold = noise_floor × this
+    static constexpr float    VAD_THRESH_MULT  = 5.0f;   // threshold = noise_floor × this (was 3.0 — ambient spikes kept resetting window)
     static constexpr float    VAD_FLOOR_MIN    = 0.003f; // abs. minimum threshold
 
     // ── State ─────────────────────────────────────────────────────────────────
@@ -249,9 +245,8 @@ private:
         _pttBuf = (int16_t*)heap_caps_malloc(PTT_MAX * sizeof(int16_t),
                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!_pttBuf) {
+            Serial.println("[talk] OOM: failed to alloc PTT buffer");
             face.setState(Ph3b3Face::ERROR);
-            face.setStatusLine("OOM-rec");
-            _drawPanel("Out of memory");
             _phase = PH_ERROR;
             return;
         }
@@ -267,6 +262,7 @@ private:
         // be called from PH_IDLE (first turn) where the speaker may not have been used.
         M5.Speaker.stop(0);
         M5.Speaker.end();
+        delay(30);  // let shared BCK/WS lines settle; prevents switching noise from polluting VAD calibration
         Serial.println("[i2s] mic.begin() — speaker torn down");
 
         auto mcfg = M5.Mic.config();
@@ -276,8 +272,6 @@ private:
         M5.Mic.begin();
 
         face.setState(Ph3b3Face::LISTENING);
-        face.setStatusLine("listening...");
-        _drawRecordRing(0.0f);
         _phase = PH_RECORDING;
     }
 
@@ -301,9 +295,7 @@ private:
         }
 
         face.setState(Ph3b3Face::THINKING);
-        face.setStatusLine("transcribing...");
         face.update();
-        _drawPanel("");
 
         _dispatch(_pttBuf, _pttSamples);
         heap_caps_free(_pttBuf);
@@ -328,9 +320,8 @@ private:
         char* jbuf   = (char*)heap_caps_malloc(jLen + 1,
                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!jbuf) {
+            Serial.println("[talk] OOM: failed to alloc JSON buffer");
             face.setState(Ph3b3Face::ERROR);
-            face.setStatusLine("OOM-jbuf");
-            _drawPanel("Not enough PSRAM");
             _phase = PH_ERROR;
             return;
         }
@@ -363,8 +354,6 @@ private:
         jbuf[pos++] = '"'; jbuf[pos++] = '}'; jbuf[pos] = '\0';
 
         // ── Step 2: POST /transcribe ──────────────────────────────────────────
-        face.setStatusLine("sending...");
-        face.update();
 
         WiFiClientSecure tls2;
         tls2.setCACert(ISRG_ROOT_X1);
@@ -396,11 +385,9 @@ private:
                          (code == 0) ? "timeout" : "err " + String(code);
             if (_inConversation && millis() - _convLastValidMs < CONV_IDLE_MS) {
                 Serial.printf("[talk] transcribe error in conv: %s — re-listen\n", err.c_str());
-                _drawPanel(""); _startRecording(); return;
+                _startRecording(); return;
             }
             face.setState(Ph3b3Face::ERROR);
-            face.setStatusLine(err);
-            _drawPanel("Nothing heard");
             _inConversation = false;
             _phase = PH_ERROR;
             return;
@@ -410,7 +397,7 @@ private:
         if (_isJunkTranscript(_heardText)) {
             Serial.printf("[talk] junk transcript '%s' — discarded\n", _heardText.c_str());
             if (_inConversation && millis() - _convLastValidMs < CONV_IDLE_MS) {
-                _drawPanel(""); _startRecording(); return;  // re-listen, idle clock unchanged
+                _startRecording(); return;  // re-listen, idle clock unchanged
             }
             _inConversation = false;
             _phase = PH_IDLE;
@@ -421,7 +408,6 @@ private:
         _exitAfterTurn = _isExitWord(_heardText);
 
         face.setState(Ph3b3Face::THINKING);
-        face.setStatusLine("thinking...");
         face.update();
 
         // ── Step 3: POST /chat ────────────────────────────────────────────────
@@ -434,7 +420,6 @@ private:
             _bargeIn = false;
             _exitAfterTurn = false;
             if (ok) _convLastValidMs = millis();
-            _drawPanel("");
             _startRecording();
             return;
         }
@@ -454,7 +439,6 @@ private:
 
         // Continuous loop: SPEAK done → auto-reopen LISTEN (no "ready" flash)
         if (ok && _inConversation && !convIdle) {
-            _drawPanel("");
             _startRecording();
             return;
         }
@@ -462,8 +446,6 @@ private:
         // Conversation over (idle timeout, error, or normal end)
         if (!ok || convIdle) _inConversation = false;
         face.setState(ok ? Ph3b3Face::IDLE : Ph3b3Face::ERROR);
-        face.setStatusLine(ok ? "" : _replyText.substring(0, 20));
-        _drawPanel("");
         _phase = ok ? PH_DONE : PH_ERROR;
     }
 
@@ -491,8 +473,6 @@ private:
         _exitAfterTurn   = false;
         _convLastValidMs = 0;
         face.setState(Ph3b3Face::IDLE);
-        face.setStatusLine("");
-        _drawPanel("");
         _phase = PH_IDLE;
     }
 
@@ -517,12 +497,10 @@ private:
         String payload;
         serializeJson(body, payload);
 
-        face.setStatusLine("asking ph3b3...");
         face.update();
         int code = http.POST(payload);
         if (code != HTTP_CODE_OK) { http.end(); return "HTTP " + String(code); }
 
-        face.setStatusLine("reading reply...");
         face.update();
 
         // ── Phase A: first 6 KB captures the "response" text field ───────────
@@ -542,8 +520,6 @@ private:
         if (responseText.length() > 0) {
             _applyMoodReaction(responseText);
             face.setState(Ph3b3Face::SPEAKING);
-            face.setStatusLine("ph3b3 says:");
-            _drawPanel("");
             face.update();
         }
 
@@ -612,7 +588,6 @@ private:
             for (int i = audioStart; i < peekLen; i++) feedCh(peek[i]);
 
             if (keepGoing) {
-                face.setStatusLine("playing...");
                 face.update();
 
                 uint32_t deadline = millis() + 90000;
@@ -694,57 +669,6 @@ private:
         }
     }
 
-    // ── Recording ring — amplitude driven by live mic RMS ────────────────────
-    // amp: 0.0..1.0 (smoothed RMS from _recAmp). Outer ring expands with voice.
-    void _drawRecordRing(float amp) {
-        auto& d  = M5StackChan.Display();
-        int W    = d.width();
-        int Y0   = 160;   // matches face.begin(320,160) — no uncovered gap
-        d.fillRect(0, Y0, W, d.height() - Y0, TFT_BLACK);
-
-        int cx = W / 2, cy = Y0 + 32;
-        int rOuter = 12 + (int)(amp * 26.0f);   // 12..38px; grows with voice
-        d.fillCircle(cx, cy, rOuter, M5.Display.color565(80, 20, 20));
-        d.fillCircle(cx, cy, 12,     M5.Display.color565(200, 50, 50));
-        d.fillCircle(cx, cy, 7,      TFT_BLACK);
-        d.fillCircle(cx, cy, 3,      M5.Display.color565(255, 80, 80));
-
-        d.setTextDatum(bottom_center);
-        d.setTextColor(M5.Display.color565(40, 40, 60), TFT_BLACK);
-        d.drawString("tap to send | hold \x1e for menu", W / 2, d.height() - 2);
-    }
-
-    // ── Bottom panel ─────────────────────────────────────────────────────────
-    // Draws below the face area (y: 160..240, 80px tall).
-    // `msg` supports a single embedded `\n` for two-line layout.
-    void _drawPanel(const String& msg) {
-        auto& d  = M5StackChan.Display();
-        int W    = d.width();
-        int Y0   = 160;   // matches face.begin(320,160) — no uncovered gap
-        d.fillRect(0, Y0, W, d.height() - Y0, TFT_BLACK);
-        d.setTextWrap(false);
-        d.setTextSize(1);
-
-        int nl = msg.indexOf('\n');
-        if (nl >= 0) {
-            String l1 = msg.substring(0, nl);
-            String l2 = msg.substring(nl + 1);
-            d.setTextDatum(top_left);
-            d.setTextColor(M5.Display.color565(180, 180, 180), TFT_BLACK);
-            d.drawString(l1, 4, Y0 + 2);
-            d.setTextColor(TFT_CYAN, TFT_BLACK);
-            d.drawString(l2, 4, Y0 + 18);
-        } else if (msg.length() > 0) {
-            d.setTextDatum(middle_center);
-            d.setTextColor(TFT_WHITE, TFT_BLACK);
-            d.drawString(msg, W / 2, Y0 + 36);
-        }
-
-        // Bottom hint
-        d.setTextDatum(bottom_center);
-        d.setTextColor(M5.Display.color565(40, 40, 60), TFT_BLACK);
-        d.drawString("tap to speak | hold \x1e for menu", W / 2, d.height() - 2);
-    }
 };
 
 // Static member definitions

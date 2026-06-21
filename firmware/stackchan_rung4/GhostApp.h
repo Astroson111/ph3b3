@@ -24,51 +24,35 @@ class GhostApp : public AppBase {
 public:
     void init() override {
         face.setState(Ph3b3Face::FOCUSED);
-        face.setStatusLine("Ghost mode");
         _logOpen = false;
         _sessionStartMs = millis();
         _lastHeartbeatMs = 0;
 
         if (!SD.begin(4)) {
-            face.setStatusLine("no SD — no log");
-            _drawStatus("SD missing");
+            Serial.println("[ghost] no SD card");
             return;
         }
 
-        // Ensure /ghost directory exists
         if (!SD.exists("/ghost")) SD.mkdir("/ghost");
-
-        // Build filename from RTC if available, else millis
         _buildFilename();
 
-        // Open in append mode — the ONLY acceptable open mode for this file.
         _log = SD.open(_fname, FILE_APPEND);
         if (!_log) {
-            face.setStatusLine("log open failed");
-            _drawStatus("log open failed");
+            Serial.printf("[ghost] log open failed: %s\n", _fname);
             return;
         }
         _logOpen = true;
-
-        // Write session-start marker
         _appendLine("SESSION_START", "rung=3 source=stub");
-        _drawStatus("logging");
-        face.setStatusLine(_fname + 7);  // strip "/ghost/"
+        Serial.printf("[ghost] logging to %s\n", _fname);
     }
 
     void update() override {
-        if (!_logOpen) {
-            face.setState(Ph3b3Face::FOCUSED);
-            return;
-        }
         face.setState(Ph3b3Face::FOCUSED);
 
-        // Heartbeat every 5 seconds
         uint32_t now = millis();
-        if (now - _lastHeartbeatMs >= 5000) {
+        if (_logOpen && now - _lastHeartbeatMs >= 5000) {
             _lastHeartbeatMs = now;
             _appendLine("HEARTBEAT", "source=stub sensor=none");
-            _drawStatus("logging");
         }
     }
 
@@ -116,18 +100,4 @@ private:
         _log.flush();  // every write, every time
     }
 
-    void _drawStatus(const char* status) {
-        auto& d = M5StackChan.Display();
-        int W = d.width(), H = d.height();
-        d.fillRect(0, H - 80, W, 80, TFT_BLACK);
-        d.setTextDatum(middle_center);
-        d.setTextSize(1);
-        d.setTextColor(M5.Display.color565(60, 180, 60), TFT_BLACK);
-        d.drawString(_logOpen ? "RECORDING" : "OFFLINE", W / 2, H - 64);
-        d.setTextColor(TFT_WHITE, TFT_BLACK);
-        d.drawString(_fname, W / 2, H - 48);
-        d.setTextColor(M5.Display.color565(100, 100, 100), TFT_BLACK);
-        d.drawString(status, W / 2, H - 32);
-        d.drawString("Next: IMU / mic / env sensors", W / 2, H - 14);
-    }
 };

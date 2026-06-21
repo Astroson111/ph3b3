@@ -56,6 +56,9 @@ class Ph3b3Face {
   void  setState(State s) { state = s; }
   State getState()  const { return state; }
   void setStatusLine(const String& s) { statusLine = s; }
+  void setStatusVisible(bool v)        { _showStatus = v; }
+  void setCrescentTabVisible(bool v)   { _showCrescentTab = v; }
+  void setCrescentTabHighlight(bool v) { _crescentTabHighlight = v; }
   void setSpeakingLevel(float level01) {       // call from audio playback
     lastLevel = constrain(level01, 0.f, 1.f);
     lastLevelMs = millis();
@@ -84,6 +87,13 @@ class Ph3b3Face {
     if (state == LISTENING) {
       gTX = 0.0f;
       gTY = 0.0f;
+    } else if (state == THINKING) {
+      // Slow upward-right drift — looking up in thought
+      if (now > nextGlanceMs) {
+        gTX = eyeR * 0.20f;
+        gTY = -eyeR * 0.25f;
+        nextGlanceMs = now + 2000 + random(1500);
+      }
     } else if (now > nextGlanceMs) {
       gTX = ((random(200) / 100.0f) - 1.0f) * eyeR * 0.40f;
       gTY = ((random(200) / 100.0f) - 1.0f) * eyeR * 0.28f;
@@ -110,6 +120,9 @@ class Ph3b3Face {
   uint32_t blinkStart = 0, nextBlinkMs = 0, nextGlanceMs = 0, lastLevelMs = 0;
   float lastLevel = 0;
   String statusLine;
+  bool _showStatus         = true;
+  bool _showCrescentTab    = false;
+  bool _crescentTabHighlight = false;
 
   struct Pal { uint8_t cr, cg, cb, hr, hg, hb, mr, mg, mb; float open; const char* label; };
 
@@ -174,11 +187,25 @@ class Ph3b3Face {
     canvas.fillSmoothRoundRect(cx - mw/2, mouthY - mh/2 + oy, mw, mh,
                                mh / 2, C(p.mr, p.mg, p.mb));
 
-    // status line
-    canvas.setTextColor(C(120,150,165), TFT_BLACK);
-    canvas.setTextDatum(bottom_center);
-    canvas.setTextSize(1);
-    canvas.drawString(statusLine.length() ? statusLine : String(p.label), cx, H - 6);
+    // status line (suppressed for face-only mode)
+    if (_showStatus) {
+      canvas.setTextColor(C(120,150,165), TFT_BLACK);
+      canvas.setTextDatum(bottom_center);
+      canvas.setTextSize(1);
+      canvas.drawString(statusLine.length() ? statusLine : String(p.label), cx, H - 6);
+    }
+
+    // corner crescent tab — drawn on canvas so it survives every pushSprite
+    if (_showCrescentTab) {
+      int tcx = 22, tcy = 22;
+      float tr = 14.0f;
+      uint8_t br = _crescentTabHighlight ? 200 :  60;
+      uint8_t bg = _crescentTabHighlight ? 100 :  35;
+      uint8_t bb = _crescentTabHighlight ? 255 : 140;
+      canvas.fillSmoothCircle(tcx, tcy, tr, C(br, bg, bb));
+      canvas.fillSmoothCircle(tcx + (int)(tr * 0.55f), tcy - (int)(tr * 0.18f),
+                              tr, TFT_BLACK);
+    }
 
     canvas.pushSprite(0, 0);
   }
