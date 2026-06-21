@@ -64,18 +64,20 @@ class Ph3b3Face {
     // --- breath bob ---
     breath = sinf(t * 6.2832f / 3.0f) * 1.6f;
 
-    // --- blink (quick close/open, then schedule the next) ---
+    // --- blink: 90ms close, 70ms dwell, 90ms open → 250ms total ---
     if (blinkStart == 0 && now > nextBlinkMs) blinkStart = now;
     if (blinkStart != 0) {
-      float k = (now - blinkStart) / 140.0f;
-      blink = k < 1.0f ? sinf(k * 3.1416f) : 0.0f;
-      if (k >= 1.0f) { blinkStart = 0; nextBlinkMs = now + 2200 + random(3000); }
+      float k = (float)(now - blinkStart);
+      blink = (k < 90.f)  ? k / 90.f :
+              (k < 160.f) ? 1.0f :
+              (k < 250.f) ? 1.0f - (k - 160.f) / 90.f : 0.0f;
+      if (k >= 250.f) { blinkStart = 0; nextBlinkMs = now + 2200 + random(3000); }
     }
 
     // --- gaze drift (the "alive" tell) ---
     if (now > nextGlanceMs) {
-      gTX = ((random(200) / 100.0f) - 1.0f) * eyeR * 0.28f;
-      gTY = ((random(200) / 100.0f) - 1.0f) * eyeR * 0.20f;
+      gTX = ((random(200) / 100.0f) - 1.0f) * eyeR * 0.40f;  // was 0.28
+      gTY = ((random(200) / 100.0f) - 1.0f) * eyeR * 0.28f;  // was 0.20
       nextGlanceMs = now + 1500 + random(2700);
     }
     glanceX += (gTX - glanceX) * 0.07f;
@@ -99,6 +101,8 @@ class Ph3b3Face {
   uint32_t blinkStart = 0, nextBlinkMs = 0, nextGlanceMs = 0, lastLevelMs = 0;
   float lastLevel = 0;
   String statusLine;
+  // 0 = flat bar; ~0.12 = faint warm upturn; hard-cap < 0.20 (never a grin)
+  static constexpr float MOUTH_CURVE = 0.12f;
 
   struct Pal { uint8_t cr, cg, cb, hr, hg, hb, mr, mg, mb; float open; const char* label; };
 
@@ -162,6 +166,13 @@ class Ph3b3Face {
                                (mh + 4) / 2, C(p.mr*0.30, p.mg*0.30, p.mb*0.30));
     canvas.fillSmoothRoundRect(cx - mw/2, mouthY - mh/2 + oy, mw, mh,
                                mh / 2, C(p.mr, p.mg, p.mb));
+    // faint upward arc: carve bottom center (MOUTH_CURVE = 0 → flat bar)
+    if (MOUTH_CURVE > 0.0f) {
+      float boost = (state == SPEAKING) ? 0.35f : 0.0f;
+      int ch = max(1, (int)(mw * (MOUTH_CURVE + MOUTH_CURVE * boost)));
+      canvas.fillEllipse(cx, (int)(mouthY + mh * 0.5f) + oy,
+                         (int)(mw * 0.44f), ch, TFT_BLACK);
+    }
 
     // status line
     canvas.setTextColor(C(120,150,165), TFT_BLACK);
