@@ -30,6 +30,7 @@ public:
         _pttSamples = 0;
         _wasTouch   = false;
         _recAmp     = 0.0f;
+        _bargeIn    = false;
         _heardText  = "";
         _replyText  = "";
         _drawPanel("");
@@ -141,6 +142,7 @@ private:
     uint32_t _recStartMs = 0;
     bool     _wasTouch   = false;
     float    _recAmp     = 0.0f;   // smoothed mic RMS during recording
+    bool     _bargeIn    = false;  // set when tap interrupts playback → restart listening
     String   _heardText;
     String   _replyText;
 
@@ -323,6 +325,12 @@ private:
         face.setStatusLine(ok ? "" : _replyText.substring(0, 20));
         _drawPanel("");
         _phase = ok ? PH_DONE : PH_ERROR;
+
+        // Barge-in: tap during playback → skip DONE, go straight to listening
+        if (_bargeIn) {
+            _bargeIn = false;
+            _startRecording();
+        }
     }
 
     // ── /chat + streaming audio ───────────────────────────────────────────────
@@ -447,11 +455,13 @@ private:
                 uint32_t deadline = millis() + 90000;
                 while (keepGoing && millis() < deadline) {
                     M5.update();
-                    // Touch anywhere stops playback (like Iris's BtnA)
                     int16_t tx2, ty2;
                     if (M5StackChan.Display().getTouch(&tx2, &ty2)) {
                         M5.Speaker.stop(0);
-                        keepGoing = false;
+                        M5.Speaker.end();  // fully release I2S before mic can start
+                        face.setSpeakingLevel(0.0f);
+                        _bargeIn   = true;
+                        keepGoing  = false;
                         break;
                     }
                     int c = raw->read();
@@ -468,6 +478,9 @@ private:
                 int16_t tx2, ty2;
                 if (M5StackChan.Display().getTouch(&tx2, &ty2)) {
                     M5.Speaker.stop(0);
+                    M5.Speaker.end();
+                    face.setSpeakingLevel(0.0f);
+                    _bargeIn = true;
                     break;
                 }
                 face.update();
