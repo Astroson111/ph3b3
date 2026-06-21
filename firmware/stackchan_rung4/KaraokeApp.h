@@ -1,6 +1,7 @@
 #pragma once
 #include "AppBase.h"
 #include <M5StackChan.h>
+extern bool g_overlayOpen;
 #include <M5Unified.h>
 #include <SD.h>
 #include <vector>
@@ -44,10 +45,8 @@ class KaraokeApp : public AppBase {
 public:
     void init() override {
         _state = STOPPED;
-        face.begin(320, 160);                   // top 160 px for face, bottom 80 for lyrics
+        face.begin(320, 160);  // top 160 px for face, bottom 80 for lyrics
         face.setState(Ph3b3Face::IDLE);
-        face.setStatusLine("Karaoke");
-        _drawSplash();
 
         // Mic — start continuous short recordings for VU meter
         M5.Mic.begin();
@@ -60,15 +59,20 @@ public:
     }
 
     void update() override {
-        int16_t tx = 0, ty = 0;
-        bool touching = M5StackChan.Display().getTouch(&tx, &ty);
+        if (!g_overlayOpen) {
+            int16_t tx = 0, ty = 0;
+            bool touching = M5StackChan.Display().getTouch(&tx, &ty);
+            // Reserve top-left 36×36 px for crescent tab
+            bool tapped = (touching && !_wasTouch) && !(tx < 36 && ty < 36);
+            _wasTouch = touching;
 
-        if (touching && !_wasTouch) {
-            _wasTouch = true;
-            if (_state == STOPPED)  _startPlayback();
-            else                    _stopPlayback();
-        } else if (!touching) {
-            _wasTouch = false;
+            if (tapped) {
+                if (_state == STOPPED) _startPlayback();
+                else                   _stopPlayback();
+            }
+        } else {
+            int16_t _tx, _ty;
+            _wasTouch = M5StackChan.Display().getTouch(&_tx, &_ty);
         }
 
         if (_state == PLAYING) {
@@ -76,12 +80,9 @@ public:
             _tickNod();
             _tickLeds();
             _tickMic();
-
             face.setState(Ph3b3Face::SPEAKING);
-            face.setStatusLine(_trackName);
         } else {
             face.setState(Ph3b3Face::IDLE);
-            face.setStatusLine("touch to play");
         }
     }
 
@@ -167,17 +168,17 @@ private:
 
     void _startPlayback() {
         if (!SD.begin(4)) {
-            face.setStatusLine("no SD card");
+            Serial.println("[karaoke] no SD card");
             return;
         }
         _wavFile = SD.open(TRACK_WAV);
         if (!_wavFile) {
-            face.setStatusLine("no track.wav");
+            Serial.println("[karaoke] no track.wav");
             return;
         }
-        _trackName = String(TRACK_WAV).substring(9);  // strip "/karaoke/"
+        _trackName = String(TRACK_WAV).substring(9);
         if (!_parseWavHeader()) {
-            face.setStatusLine("bad WAV");
+            Serial.println("[karaoke] bad WAV header");
             _wavFile.close();
             return;
         }
@@ -322,13 +323,4 @@ private:
         M5StackChan.showRgbColor(bright, 0, bright / 2);
     }
 
-    void _drawSplash() {
-        auto& d = M5StackChan.Display();
-        d.fillRect(0, 160, d.width(), 80, TFT_BLACK);
-        d.setTextDatum(middle_center);
-        d.setTextColor(TFT_CYAN, TFT_BLACK);
-        d.setTextSize(1);
-        d.drawString("touch to start", d.width() / 2, 200);
-        d.drawString(TRACK_WAV, d.width() / 2, 220);
-    }
 };
