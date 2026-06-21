@@ -59,10 +59,9 @@ public:
             _wasTouch = false;
         }
 
-        // Lerp toward target only when not actively dragging the panel
+        // Snap to target when not dragging — lerp was causing choppy redraws during settling
         if (!_dragging) {
-            float target = _open ? 1.0f : 0.0f;
-            _progress += (target - _progress) * 0.22f;
+            _progress = _open ? 1.0f : 0.0f;
         }
 
         g_overlayOpen = _open || _progress > 0.02f;
