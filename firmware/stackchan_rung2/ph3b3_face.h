@@ -28,15 +28,16 @@
 
 class Ph3b3Face {
  public:
-  enum State { BOOT, CONNECTING, IDLE, LISTENING, THINKING, SPEAKING, ERROR };
+  enum State { BOOT, CONNECTING, IDLE, LISTENING, THINKING, SPEAKING, ERROR, FOCUSED };
 
   // w/h = 0 → use full display; pass explicit values for split-screen layouts
   void begin(int w = 0, int h = 0) {
     W = w > 0 ? w : M5.Display.width();
     H = h > 0 ? h : M5.Display.height();
     cx = W / 2;
-    eyeR   = max(8, (int)(W * 0.20f));
-    eyeGap = (int)(W * 0.27f);
+    int base = min(W, H);
+    eyeR   = max(8, (int)(base * 0.18f));
+    eyeGap = (int)(base * 0.23f);
     eyeY   = (int)(H * 0.34f);
     mouthY = (int)(H * 0.56f);
     crestY = (int)(H * 0.13f);
@@ -110,6 +111,7 @@ class Ph3b3Face {
       case THINKING:   return {255, 80,180,  58,10, 42, 220, 70,160, 0.86f, "thinking"};
       case SPEAKING:   return {255,140,220,  50,18, 60, 240,110,200, 1.00f, "speaking"};
       case ERROR:      return { 60,120,255,  10,18, 65,  80,140,255, 0.52f, "offline"};
+      case FOCUSED:    return { 60,210,175,   8,52,42,  50,190,160, 0.78f, "watching"};
       default:         return { 80, 60,140,  10, 8, 30,  80, 60,140, 0.55f, "waking"};
     }
   }
