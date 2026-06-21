@@ -591,6 +591,43 @@ async def execute_tool(name, args):
 
 ONE_SHOT_TOOLS = frozenset({"tell_joke", "roast"})
 
+
+def _looks_like_tool_call(text: str) -> bool:
+    """Return True if text is a raw tool-call/schema leak rather than user-facing prose.
+
+    Hermes3 leaks tool calls in several JSON shapes; the one reliable signal is that
+    the entire content is a bare JSON object — natural-language replies never are.
+    """
+    t = text.strip()
+    if "<tool_call>" in t or "</tool_call>" in t:
+        return True
+    if t.startswith("{") and t.endswith("}"):
+        try:
+            parsed = json.loads(t)
+            return isinstance(parsed, dict)
+        except Exception:
+            pass
+    return False
+
+
+def _parse_tool_call_text(text: str) -> tuple:
+    """Parse a text-format tool call. Returns (name, args) or (None, {})."""
+    t = text.strip().replace("<tool_call>", "").replace("</tool_call>", "").strip()
+    try:
+        parsed = json.loads(t)
+        if not isinstance(parsed, dict):
+            return None, {}
+        name = parsed.get("name") or parsed.get("function")
+        if not name:
+            return None, {}
+        args = parsed.get("arguments", {})
+        if isinstance(args, str):
+            args = json.loads(args)
+        return name, args
+    except Exception:
+        return None, {}
+
+
 async def chat_with_tools(messages):
     async with httpx.AsyncClient(timeout=120) as client:
         payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":TOOLS,"options":{"temperature":0.7,"num_ctx":8192}}
@@ -630,6 +667,27 @@ async def chat_with_tools(messages):
                 return f"I completed the action but couldn't formulate a response — model '{follow_model}' may not be installed.", messages
             msg = response.json()["message"]
         content = msg.get("content", "")
+
+        # Hermes3 sometimes outputs a tool call as raw JSON/XML text in content
+        # instead of using the structured tool_calls field.  Detect, execute, synthesise.
+        if _looks_like_tool_call(content):
+            log.warning(f"Tool-call text leak detected: {content[:120]!r}")
+            _tc_name, _tc_args = _parse_tool_call_text(content)
+            content = ""
+            if _tc_name:
+                try:
+                    _tc_result = await execute_tool(_tc_name, _tc_args)
+                    _synth = [
+                        messages[0],
+                        {"role": "user", "content": f"Tool result: {str(_tc_result)[:600]}\n\nSummarise this for the user in one clear paragraph."},
+                    ]
+                    _pl = {"model": HEAVY_MODEL, "messages": _synth, "stream": False, "options": {"temperature": 0.7, "num_ctx": 4096}}
+                    _r = await client.post(f"{OLLAMA_HOST}/api/chat", json=_pl)
+                    _r.raise_for_status()
+                    content = _r.json()["message"].get("content", "") or str(_tc_result)[:300]
+                except Exception as e:
+                    log.error(f"Leaked tool call recovery failed ({_tc_name}): {e}")
+
         if not content and loop > 0:
             # hermes3 exited the tool loop without synthesising — rebuild context without
             # tool_call/tool messages so the model can produce plain text
@@ -649,7 +707,7 @@ async def chat_with_tools(messages):
                     r = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
                     r.raise_for_status()
                     raw = r.json()["message"].get("content", "")
-                    content = raw if "<tool_call>" not in raw else ""
+                    content = raw if not _looks_like_tool_call(raw) else ""
                 except Exception as e:
                     log.error(f"Synthesis fallback failed: {e}")
         return content, messages
