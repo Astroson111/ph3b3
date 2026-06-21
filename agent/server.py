@@ -654,11 +654,17 @@ async def chat_with_tools(messages):
                     log.error(f"Synthesis fallback failed: {e}")
         return content, messages
 
+CONV_WINDOW = 8  # conversation turns (user+assistant pairs) kept per session
+
 class Session:
     def __init__(self):
         self.history = [{"role":"system","content":SYSTEM_PROMPT}]
     def add(self, role, content):
         self.history.append({"role":role,"content":content})
+        # Rolling window: always keep system prompt + last CONV_WINDOW turns
+        max_msgs = 1 + CONV_WINDOW * 2
+        if len(self.history) > max_msgs:
+            self.history = [self.history[0]] + self.history[-(CONV_WINDOW * 2):]
     def messages(self):
         return self.history.copy()
     def reset(self):

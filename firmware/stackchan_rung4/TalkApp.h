@@ -33,6 +33,8 @@ public:
         _bargeIn    = false;
         _heardText  = "";
         _replyText  = "";
+        _sessionId  = "sc-" + String(millis(), HEX);  // stable for this conversation
+        _lastTalkMs = millis();
         _drawPanel("");
     }
 
@@ -57,7 +59,12 @@ public:
         case PH_IDLE:
             face.setState(Ph3b3Face::IDLE);
             face.setStatusLine("");
+            if (millis() - _lastTalkMs > SESSION_IDLE_RESET_MS) {
+                _sessionId  = "sc-" + String(millis(), HEX);
+                _lastTalkMs = millis();
+            }
             if (tapped) {
+                _lastTalkMs = millis();
                 _startRecording();
             }
             break;
@@ -104,12 +111,16 @@ public:
         }
 
         case PH_DONE:
-            // Results shown — next tap restarts
             face.setState(Ph3b3Face::IDLE);
+            if (millis() - _lastTalkMs > SESSION_IDLE_RESET_MS) {
+                _sessionId  = "sc-" + String(millis(), HEX);
+                _lastTalkMs = millis();
+            }
             if (tapped) {
-                _phase     = PH_IDLE;
-                _heardText = "";
-                _replyText = "";
+                _lastTalkMs = millis();
+                _phase      = PH_IDLE;
+                _heardText  = "";
+                _replyText  = "";
                 _drawPanel("");
             }
             break;
@@ -133,7 +144,8 @@ public:
         if (_pttBuf) { heap_caps_free(_pttBuf); _pttBuf = nullptr; }
         M5.Speaker.stop(0);
         face.begin();  // restore full-screen face
-        _phase = PH_IDLE;
+        _phase     = PH_IDLE;
+        _sessionId = "";  // will be regenerated on next init()
     }
 
     const char* name() const override { return "Talk / Ph3b3"; }
@@ -143,8 +155,8 @@ private:
     static const char* HOST;
     static const char* USER;
     static const char* PASS;
-    static const char* SESSION;
     static constexpr int PORT       = 443;
+    static constexpr uint32_t SESSION_IDLE_RESET_MS = 60000;  // 60s idle resets conversation
     static constexpr int   PTT_RATE          = 16000;
     static constexpr int   PTT_MAX           = PTT_RATE * 12;  // 12s hard cap = 384 KB PSRAM
     static constexpr int   CHUNK_SAMP        = 1024;           // ~46 ms @ 22050 Hz
@@ -171,6 +183,8 @@ private:
     int      _silenceSamples= 0;
     String   _heardText;
     String   _replyText;
+    String   _sessionId;       // generated on init(), stable for a conversation, reset on exit/idle
+    uint32_t _lastTalkMs = 0;  // tracks idle time for session reset
 
     // ── Base64 helpers ────────────────────────────────────────────────────────
     static int _b64val(char c) {
@@ -380,7 +394,7 @@ private:
 
         JsonDocument body;
         body["message"]    = message;
-        body["session_id"] = SESSION;
+        body["session_id"] = _sessionId;
         String payload;
         serializeJson(body, payload);
 
@@ -604,7 +618,6 @@ private:
 };
 
 // Static member definitions
-inline const char* TalkApp::HOST    = "ph3b3.<tailnet>.ts.net";
-inline const char* TalkApp::USER    = "REDACTED";
-inline const char* TalkApp::PASS    = "REDACTED";
-inline const char* TalkApp::SESSION = "stackchan-001";
+inline const char* TalkApp::HOST = "ph3b3.<tailnet>.ts.net";
+inline const char* TalkApp::USER = "REDACTED";
+inline const char* TalkApp::PASS = "REDACTED";
