@@ -195,13 +195,25 @@ class Ph3b3Face {
       canvas.drawString(statusLine.length() ? statusLine : String(p.label), cx, H - 6);
     }
 
-    // corner crescent tab — drawn on canvas so it survives every pushSprite
+    // corner crescent tab — drawn on canvas so it survives every pushSprite.
+    // Color by state so it doubles as a recording/thinking indicator.
     if (_showCrescentTab) {
       int tcx = 22, tcy = 22;
       float tr = 14.0f;
-      uint8_t br = _crescentTabHighlight ? 200 :  60;
-      uint8_t bg = _crescentTabHighlight ? 100 :  35;
-      uint8_t bb = _crescentTabHighlight ? 255 : 140;
+      uint8_t br, bg, bb;
+      if (_crescentTabHighlight) {
+        br = 200; bg = 100; bb = 255;  // menu open: bright purple
+      } else if (state == LISTENING) {
+        // Pulse red — "I'm recording, talk now"
+        float pulse = 0.5f + 0.5f * sinf(t * 7.0f);
+        br = (uint8_t)(120 + 100 * pulse);
+        bg = (uint8_t)(10);
+        bb = (uint8_t)(15);
+      } else if (state == THINKING) {
+        br = 220; bg = 130; bb = 20;   // amber — "processing"
+      } else {
+        br = 60;  bg = 35;  bb = 140;  // dim purple — resting
+      }
       canvas.fillSmoothCircle(tcx, tcy, tr, C(br, bg, bb));
       canvas.fillSmoothCircle(tcx + (int)(tr * 0.55f), tcy - (int)(tr * 0.18f),
                               tr, TFT_BLACK);

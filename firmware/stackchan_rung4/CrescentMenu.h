@@ -53,10 +53,9 @@ private:
     bool  _open     = false;
     bool  _wasTouch = false;
 
-    // Crescent tab geometry — must match ph3b3_face.h render() values
-    static const int TAB_CX  = 22;
-    static const int TAB_CY  = 22;
-    static const int TAB_HIT = 22;  // hit radius (slightly larger than drawn radius)
+    // Tab hit zone: top-left 60×60 corner (rectangular is reliable; circular radius 22
+    // from center (22,22) missed corners that are clearly on the crescent visually)
+    static const int TAB_ZONE = 60;
 
     // Overlay panel geometry
     static const int OVL_W   = 152;
@@ -64,8 +63,7 @@ private:
     static const int TILE_H  = 46;
 
     bool _hitsTab(int x, int y) const {
-        int dx = x - TAB_CX, dy = y - TAB_CY;
-        return (dx*dx + dy*dy) <= TAB_HIT * TAB_HIT;
+        return (x >= 0 && x < TAB_ZONE && y >= 0 && y < TAB_ZONE);
     }
 
     void _handleTap(int tx, int ty) {
