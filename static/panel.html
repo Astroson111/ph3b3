@@ -389,6 +389,27 @@
     <div class="ts" id="netTs"></div>
   </section>
 
+  <!-- STACK-CHAN -->
+  <section id="paneStackchan" class="pane">
+    <div class="card">
+      <div class="card-title">
+        Stack-Chan Networks
+        <button class="btn-sm" id="scNetRefreshBtn">Refresh</button>
+      </div>
+      <div class="net-list" id="scNetList"><div class="net-empty">Loading…</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Add Network</div>
+      <div class="iris-form">
+        <input id="scNetSsid" type="text" placeholder="SSID" autocomplete="off" autocorrect="off" autocapitalize="none">
+        <input id="scNetPass" type="password" placeholder="Password" autocomplete="off">
+        <button class="btn-add" id="scNetAddBtn">Add / Update</button>
+        <div class="net-msg" id="scNetMsg"></div>
+      </div>
+    </div>
+    <div class="ts" id="scNetTs"></div>
+  </section>
+
   <!-- DEVICES -->
   <section id="paneDevices" class="pane">
     <div class="card">
@@ -415,6 +436,10 @@
   <button class="tab" data-pane="Iris">
     <svg viewBox="0 0 24 24"><path d="M12 2a5 5 0 1 0 0 10A5 5 0 0 0 12 2z"/><path d="M2 20c0-4 4.5-7 10-7s10 3 10 7"/></svg>
     Iris
+  </button>
+  <button class="tab" data-pane="Stackchan">
+    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="10" r="2"/><circle cx="15" cy="10" r="2"/><path d="M8 16s1 2 4 2 4-2 4-2"/></svg>
+    SC
   </button>
   <button class="tab" data-pane="Devices">
     <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -729,6 +754,58 @@ document.getElementById('netAddBtn').addEventListener('click', async () => {
   } catch(e) {
     netMsg.textContent = 'Error: ' + e.message;
     netMsg.className = 'net-msg err';
+  }
+});
+
+// ── Stack-Chan network management ────────────────────────────────────────────
+const scNetList = document.getElementById('scNetList');
+const scNetMsg  = document.getElementById('scNetMsg');
+
+async function refreshScNetworks() {
+  try {
+    const data = await fetch('/stackchan/networks').then(r => r.json());
+    const nets = data.networks || [];
+    if (!nets.length) {
+      scNetList.innerHTML = '<div class="net-empty">No networks stored.</div>';
+    } else {
+      scNetList.innerHTML = nets.map(n =>
+        `<div class="net-row">
+          <span class="net-ssid">${n.ssid}</span>
+          <button class="btn-del" data-ssid="${encodeURIComponent(n.ssid)}">Remove</button>
+        </div>`
+      ).join('');
+      scNetList.querySelectorAll('.btn-del').forEach(b => b.addEventListener('click', async () => {
+        const ssid = decodeURIComponent(b.dataset.ssid);
+        await fetch('/stackchan/networks/' + encodeURIComponent(ssid), {method:'DELETE'});
+        refreshScNetworks();
+      }));
+    }
+    document.getElementById('scNetTs').textContent = 'Updated ' + now();
+  } catch {
+    scNetList.innerHTML = '<div class="net-empty">Error loading networks.</div>';
+  }
+}
+
+document.getElementById('scNetRefreshBtn').addEventListener('click', refreshScNetworks);
+document.getElementById('scNetAddBtn').addEventListener('click', async () => {
+  const ssid = document.getElementById('scNetSsid').value.trim();
+  const pass = document.getElementById('scNetPass').value;
+  if (!ssid) { scNetMsg.textContent = 'SSID required'; scNetMsg.className = 'net-msg err'; return; }
+  try {
+    const res  = await fetch('/stackchan/networks', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ssid, pass}),
+    });
+    const data = await res.json();
+    scNetMsg.textContent = data.updated ? 'Updated.' : 'Added. Stack-Chan will sync on next boot.';
+    scNetMsg.className = 'net-msg ok';
+    document.getElementById('scNetSsid').value = '';
+    document.getElementById('scNetPass').value = '';
+    refreshScNetworks();
+  } catch(e) {
+    scNetMsg.textContent = 'Error: ' + e.message;
+    scNetMsg.className = 'net-msg err';
   }
 });
 
