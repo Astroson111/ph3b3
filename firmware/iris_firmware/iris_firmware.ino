@@ -1117,10 +1117,10 @@ void loop() {
     sPttActive  = false;
   }
 
-  // After 500 ms hold: start recording (quick taps are ~100-200 ms so this is safe)
+  // After 200 ms hold: start recording (quick taps are ~80-150 ms so this is safe)
   if (M5.BtnA.isPressed() && !sPttActive && uiMode == FACE
       && WiFi.status() == WL_CONNECTED
-      && (millis() - sBtnADownAt) >= 500) {
+      && (millis() - sBtnADownAt) >= 200) {
     sPttActive  = true;
     sPttSamples = 0;
     sPttBuf     = (int16_t*)malloc(PTT_MAX * 2);
