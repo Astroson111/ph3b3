@@ -105,8 +105,6 @@ class Ph3b3Face {
   uint32_t blinkStart = 0, nextBlinkMs = 0, nextGlanceMs = 0, lastLevelMs = 0;
   float lastLevel = 0;
   String statusLine;
-  // 0 = flat bar; ~0.12 = faint warm upturn; hard-cap < 0.20 (never a grin)
-  static constexpr float MOUTH_CURVE = 0.12f;
 
   struct Pal { uint8_t cr, cg, cb, hr, hg, hb, mr, mg, mb; float open; const char* label; };
 
@@ -170,13 +168,6 @@ class Ph3b3Face {
                                (mh + 4) / 2, C(p.mr*0.30, p.mg*0.30, p.mb*0.30));
     canvas.fillSmoothRoundRect(cx - mw/2, mouthY - mh/2 + oy, mw, mh,
                                mh / 2, C(p.mr, p.mg, p.mb));
-    // faint upward arc: carve bottom center (MOUTH_CURVE = 0 → flat bar)
-    if (MOUTH_CURVE > 0.0f) {
-      float boost = (state == SPEAKING) ? 0.35f : 0.0f;
-      int ch = max(1, (int)(mw * (MOUTH_CURVE + MOUTH_CURVE * boost)));
-      canvas.fillEllipse(cx, (int)(mouthY + mh * 0.5f) + oy,
-                         (int)(mw * 0.44f), ch, TFT_BLACK);
-    }
 
     // status line
     canvas.setTextColor(C(120,150,165), TFT_BLACK);
