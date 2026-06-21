@@ -63,24 +63,39 @@ public:
             break;
 
         case PH_RECORDING: {
-            // Accumulate 512-sample chunks each frame
             if (_pttBuf && _pttSamples < PTT_MAX) {
                 int chunk = min(512, PTT_MAX - _pttSamples);
                 M5.Mic.record(&_pttBuf[_pttSamples], chunk, PTT_RATE);
-                // RMS of fresh chunk → smooth amplitude for ring
+
+                // Chunk RMS — used for ring visualiser and VAD
                 float rms = 0.0f;
-                int base = _pttSamples;
                 for (int i = 0; i < chunk; i++) {
-                    float s = _pttBuf[base + i] / 32768.0f;
+                    float s = _pttBuf[_pttSamples + i] / 32768.0f;
                     rms += s * s;
                 }
-                _recAmp = _recAmp * 0.6f + sqrtf(rms / chunk) * 0.4f;
+                rms = sqrtf(rms / chunk);
+                _recAmp = _recAmp * 0.6f + rms * 0.4f;
                 _pttSamples += chunk;
+
+                // Noise-floor calibration — first VAD_CALIBRATE_SAMP samples
+                if (_pttSamples <= VAD_CALIBRATE_SAMP) {
+                    _noiseAccum   += rms * rms * chunk;
+                    _noiseSamples += chunk;
+                } else if (_noiseFloor == 0.0f && _noiseSamples > 0) {
+                    _noiseFloor = max(VAD_FLOOR_MIN,
+                                     sqrtf(_noiseAccum / _noiseSamples) * VAD_THRESH_MULT);
+                }
+
+                // VAD silence accumulator — only after min duration + calibration
+                if (_noiseFloor > 0.0f && _pttSamples >= VAD_MIN_SAMP) {
+                    if (rms < _noiseFloor) _silenceSamples += chunk;
+                    else                   _silenceSamples  = 0;
+                }
             }
-            // Stop on second tap, 5s max, or buffer full
-            bool timeout = (millis() - _recStartMs) >= 5000;
-            bool full    = (_pttSamples >= PTT_MAX);
-            if (tapped || timeout || full) {
+
+            bool vad  = (_silenceSamples >= VAD_SILENCE_SAMP);
+            bool full = (_pttSamples >= PTT_MAX);
+            if (tapped || vad || full) {
                 _stopRecordingAndDispatch();
             } else {
                 _drawRecordRing(_recAmp);
@@ -130,9 +145,15 @@ private:
     static const char* PASS;
     static const char* SESSION;
     static constexpr int PORT       = 443;
-    static constexpr int PTT_RATE   = 16000;
-    static constexpr int PTT_MAX    = PTT_RATE * 5;   // 5 s @ 16 kHz = 160 KB
-    static constexpr int CHUNK_SAMP = 1024;            // ~46 ms @ 22050 Hz
+    static constexpr int   PTT_RATE          = 16000;
+    static constexpr int   PTT_MAX           = PTT_RATE * 12;  // 12s hard cap = 384 KB PSRAM
+    static constexpr int   CHUNK_SAMP        = 1024;           // ~46 ms @ 22050 Hz
+    // VAD consts — all tunable
+    static constexpr int   VAD_CALIBRATE_SAMP = (int)(PTT_RATE * 0.20f); // 200ms noise floor
+    static constexpr int   VAD_MIN_SAMP       = (int)(PTT_RATE * 0.60f); // min before VAD fires
+    static constexpr int   VAD_SILENCE_SAMP   = (int)(PTT_RATE * 1.20f); // 1.2s quiet → end
+    static constexpr float VAD_THRESH_MULT    = 3.0f;                     // threshold = floor × this
+    static constexpr float VAD_FLOOR_MIN      = 0.003f;                   // abs. minimum threshold
 
     // ── State ─────────────────────────────────────────────────────────────────
     enum Phase { PH_IDLE, PH_RECORDING, PH_DONE, PH_ERROR };
@@ -143,6 +164,11 @@ private:
     bool     _wasTouch   = false;
     float    _recAmp     = 0.0f;   // smoothed mic RMS during recording
     bool     _bargeIn    = false;  // set when tap interrupts playback → restart listening
+    // VAD state
+    float    _noiseFloor    = 0.0f;
+    float    _noiseAccum    = 0.0f;
+    int      _noiseSamples  = 0;
+    int      _silenceSamples= 0;
     String   _heardText;
     String   _replyText;
 
@@ -185,8 +211,12 @@ private:
             _phase = PH_ERROR;
             return;
         }
-        _pttSamples = 0;
-        _recStartMs = millis();
+        _pttSamples     = 0;
+        _recStartMs     = millis();
+        _noiseFloor     = 0.0f;
+        _noiseAccum     = 0.0f;
+        _noiseSamples   = 0;
+        _silenceSamples = 0;
 
         if (M5.Speaker.isPlaying()) M5.Speaker.stop();
 
