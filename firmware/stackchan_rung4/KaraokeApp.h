@@ -63,7 +63,7 @@ public:
             int16_t tx = 0, ty = 0;
             bool touching = M5StackChan.Display().getTouch(&tx, &ty);
             // Reserve top-left 36×36 px for crescent tab
-            bool tapped = (touching && !_wasTouch) && !(tx < 36 && ty < 36);
+            bool tapped = (touching && !_wasTouch) && !(tx < 60 && ty < 60);
             _wasTouch = touching;
 
             if (tapped) {
