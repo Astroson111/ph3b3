@@ -48,8 +48,9 @@ _raw_origins = os.getenv(
 )
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
-RECIPE_DB_PATH      = os.getenv("RECIPE_DB_PATH", str(Path.home() / "ph3b3_data" / "recipes.db"))
-IRIS_NETWORKS_FILE  = Path.home() / "ph3b3_data" / "iris_networks.json"
+RECIPE_DB_PATH          = os.getenv("RECIPE_DB_PATH", str(Path.home() / "ph3b3_data" / "recipes.db"))
+IRIS_NETWORKS_FILE      = Path.home() / "ph3b3_data" / "iris_networks.json"
+STACKCHAN_NETWORKS_FILE = Path.home() / "ph3b3_data" / "stackchan_networks.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Ph3b3] %(message)s")
 log = logging.getLogger("ph3b3")
@@ -731,6 +732,11 @@ async def chat_endpoint(body: dict, request: Request):
             "IMPORTANT: reply in ONE short sentence only (under 20 words). "
             "Begin directly with your answer — no salutation, no address, no preamble."
         ),
+        "stackchan": (
+            "You are transmitting via Stack-Chan, your second body — a small desktop "
+            "robot with a face display and a speaker. Keep replies to 2–3 sentences "
+            "maximum. Be warm, direct, and expressive. No preamble, no salutation."
+        ),
     }
     device = request.headers.get("X-Ph3b3-Device", "")
     device_note = None
@@ -849,6 +855,45 @@ async def iris_add_network(body: dict):
 async def iris_remove_network(ssid: str):
     nets = [n for n in _load_iris_networks() if n["ssid"] != ssid]
     _save_iris_networks(nets)
+    return {"ok": True}
+
+# ── Stack-Chan network provisioning (mirrors Iris exactly) ────────────────────
+def _load_sc_networks() -> list:
+    if not STACKCHAN_NETWORKS_FILE.exists():
+        return []
+    try:
+        return json.loads(STACKCHAN_NETWORKS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+def _save_sc_networks(networks: list) -> None:
+    STACKCHAN_NETWORKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STACKCHAN_NETWORKS_FILE.write_text(json.dumps(networks, indent=2), encoding="utf-8")
+
+@app.get("/stackchan/networks")
+async def sc_get_networks():
+    return {"networks": _load_sc_networks()}
+
+@app.post("/stackchan/networks")
+async def sc_add_network(body: dict):
+    ssid = (body.get("ssid") or "").strip()
+    password = body.get("pass", "")
+    if not ssid:
+        raise HTTPException(400, "ssid required")
+    nets = _load_sc_networks()
+    for n in nets:
+        if n["ssid"] == ssid:
+            n["pass"] = password
+            _save_sc_networks(nets)
+            return {"ok": True, "updated": True}
+    nets.append({"ssid": ssid, "pass": password})
+    _save_sc_networks(nets)
+    return {"ok": True, "updated": False}
+
+@app.delete("/stackchan/networks/{ssid}")
+async def sc_remove_network(ssid: str):
+    nets = [n for n in _load_sc_networks() if n["ssid"] != ssid]
+    _save_sc_networks(nets)
     return {"ok": True}
 
 @app.get("/panel")

@@ -130,7 +130,7 @@ static void _syncNetworks() {
     tls.setCACert(ISRG_ROOT_X1);
     tls.setTimeout(8000);
     HTTPClient http;
-    http.begin(tls, "ph3b3.<tailnet>.ts.net", 443, "/iris/networks", true);
+    http.begin(tls, "ph3b3.<tailnet>.ts.net", 443, "/stackchan/networks", true);
     http.setAuthorization(USER, PASS);
     http.addHeader("X-Ph3b3-Device", "stackchan");
     http.setTimeout(8000);
