@@ -58,8 +58,8 @@ public:
         // ── Touch detection ────────────────────────────────────────────────────
         int16_t tx = 0, ty = 0;
         bool touching = M5StackChan.Display().getTouch(&tx, &ty);
-        // Reserve top-left 36×36 px — crescent tab zone handled by CrescentMenu
-        bool tapped = (touching && !_wasTouch) && !(tx < 36 && ty < 36);
+        // Reserve top-left 60×60 px — crescent tab zone handled by CrescentMenu
+        bool tapped = (touching && !_wasTouch) && !(tx < 60 && ty < 60);
         _wasTouch = touching;
 
         // ── State machine ──────────────────────────────────────────────────────
@@ -180,7 +180,7 @@ private:
     static constexpr int      JUNK_MIN_LEN          = 2;      // transcript chars below this → noise
     static constexpr int      PTT_RATE      = 16000;
     static constexpr int      PTT_MAX       = PTT_RATE * 12;  // 12s hard cap = 384 KB PSRAM
-    static constexpr int      CHUNK_SAMP    = 1024;           // ~46 ms @ 22050 Hz
+    static constexpr int      CHUNK_SAMP    = 2048;           // ~93 ms @ 22050 Hz; larger = fewer gaps
     // VAD consts — millis()-based so timing is correct regardless of M5.Mic.record() blocking
     static constexpr uint32_t VAD_CALIBRATE_MS = 200;    // noise floor window
     static constexpr uint32_t VAD_MIN_MS       = 600;    // minimum recording before VAD fires
@@ -549,7 +549,9 @@ private:
                 }
                 face.setSpeakingLevel(min(1.0f, sqrtf(rms / chunkPos) * 5.0f));
                 face.update();
-                while (M5.Speaker.isPlaying(0)) delay(1);
+                // Queue next chunk as soon as there's room (don't wait for empty —
+                // waiting for empty causes a gap between every chunk = choppy audio)
+                while (M5.Speaker.isPlaying(0) >= 2) delay(1);
                 if (!keepGoing) return;
                 M5.Speaker.playRaw(pcmBuf[fillIdx], chunkPos, 22050, false, 1, 0);
                 fillIdx ^= 1;
