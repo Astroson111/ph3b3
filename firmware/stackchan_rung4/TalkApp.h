@@ -416,7 +416,6 @@ private:
         face.setState(Ph3b3Face::THINKING);
         face.setStatusLine("thinking...");
         face.update();
-        delay(600);
 
         // ── Step 3: POST /chat ────────────────────────────────────────────────
         _replyText = _doChatAndPlay(_heardText);
@@ -471,7 +470,7 @@ private:
         String t = text; t.toLowerCase(); t.trim();
         if (t.indexOf("goodbye")          >= 0) return true;
         if (t.indexOf("bye")              >= 0) return true;
-        if (t.indexOf("stop")             >= 0) return true;
+        if (t.indexOf("stop listening")    >= 0) return true;
         if (t.indexOf("that's all")       >= 0) return true;
         if (t.indexOf("thats all")        >= 0) return true;
         if (t.indexOf("thanks phoebe")    >= 0) return true;
