@@ -104,6 +104,7 @@ const int   MENU_COUNT   = 5;
 // Reply text overlay — persists across face.update() calls until next BtnA press
 String gLastReply  = "";
 bool   gShowReply  = false;
+bool   gBargeIn    = false;  // set during SPEAKING when BtnA pressed — restart listening after
 
 void drawReplyOverlay() {
   const int Y0      = 148;
@@ -618,6 +619,7 @@ String ph3b3Chat(const String& message) {
         M5.update();
         if (M5.BtnA.wasPressed()) {
           M5.Speaker.stop();
+          gBargeIn  = true;
           keepGoing = false;
           break;
         }
@@ -632,7 +634,7 @@ String ph3b3Chat(const String& message) {
 
     while (M5.Speaker.isPlaying()) {
       M5.update();
-      if (M5.BtnA.wasPressed()) { M5.Speaker.stop(); break; }
+      if (M5.BtnA.wasPressed()) { M5.Speaker.stop(); gBargeIn = true; break; }
       face.update();
       if (gShowReply) drawReplyOverlay();
       delay(50);
@@ -1158,6 +1160,25 @@ void loop() {
         doPttTranscribeAndChat(&sPttBuf, sPttSamples);  // takes ownership, nulls sPttBuf
       if (sPttBuf) { free(sPttBuf); sPttBuf = nullptr; }  // safety — already null if func ran
       sPttActive = false;
+      if (gBargeIn) {
+        // BtnA was pressed during playback — tear down speaker, re-arm mic immediately.
+        // ES8311 shared codec: M5.Speaker.begin() was called above; end it before ADC mode.
+        gBargeIn   = false;
+        gShowReply = false;
+        sPttBuf = (int16_t*)malloc(PTT_MAX * 2);
+        if (sPttBuf) {
+          M5.Speaker.end();
+          auto mc = M5.Mic.config();
+          mc.sample_rate = PTT_RATE; mc.magnification = 16;
+          M5.Mic.config(mc);
+          M5.Mic.begin();
+          sPttActive  = true;
+          sPttSamples = 0;
+          face.setState(Ph3b3Face::LISTENING);
+          face.setStatusLine("listening...");
+          face.update();
+        }
+      }
     } else if ((millis() - sBtnADownAt) < 600) {
       // Short tap → rotating prompt
       static char sWeatherQ[64];
@@ -1180,10 +1201,28 @@ void loop() {
       String reply = ph3b3Chat(PROMPTS[promptIdx++ % 4]);
       Serial.printf("[btnA] reply: %s\n", reply.c_str());
 
-      bool ok = !reply.startsWith("ERR") && !reply.startsWith("HTTP") &&
-                !reply.startsWith("JSON") && !reply.startsWith("(no");
-      face.setState(ok ? Ph3b3Face::IDLE : Ph3b3Face::ERROR);
-      if (!ok) face.setStatusLine(reply.substring(0, 20));
+      if (gBargeIn) {
+        gBargeIn   = false;
+        gShowReply = false;
+        sPttBuf = (int16_t*)malloc(PTT_MAX * 2);
+        if (sPttBuf) {
+          M5.Speaker.end();
+          auto mc = M5.Mic.config();
+          mc.sample_rate = PTT_RATE; mc.magnification = 16;
+          M5.Mic.config(mc);
+          M5.Mic.begin();
+          sPttActive  = true;
+          sPttSamples = 0;
+          face.setState(Ph3b3Face::LISTENING);
+          face.setStatusLine("listening...");
+          face.update();
+        }
+      } else {
+        bool ok = !reply.startsWith("ERR") && !reply.startsWith("HTTP") &&
+                  !reply.startsWith("JSON") && !reply.startsWith("(no");
+        face.setState(ok ? Ph3b3Face::IDLE : Ph3b3Face::ERROR);
+        if (!ok) face.setStatusLine(reply.substring(0, 20));
+      }
     }
   }
 
