@@ -23,6 +23,7 @@ extern const char ISRG_ROOT_X1[];
 class TalkApp : public AppBase {
 public:
     void init() override {
+        M5StackChan.Display().fillScreen(TFT_BLACK);  // clear stale state from prev app
         face.begin(320, 160);   // top 160px face, bottom 80px panel
         _phase      = PH_IDLE;
         _pttBuf     = nullptr;
@@ -54,7 +55,7 @@ public:
 
         case PH_IDLE:
             face.setState(Ph3b3Face::IDLE);
-            face.setStatusLine("tap to speak");
+            face.setStatusLine("");
             if (tapped) {
                 _startRecording();
             }
@@ -319,7 +320,7 @@ private:
                   !_replyText.startsWith("(no");
 
         face.setState(ok ? Ph3b3Face::IDLE : Ph3b3Face::ERROR);
-        face.setStatusLine(ok ? "tap to speak" : _replyText.substring(0, 20));
+        face.setStatusLine(ok ? "" : _replyText.substring(0, 20));
         _drawPanel("");
         _phase = ok ? PH_DONE : PH_ERROR;
     }
@@ -503,7 +504,7 @@ private:
     void _drawRecordRing(float amp) {
         auto& d  = M5StackChan.Display();
         int W    = d.width();
-        int Y0   = 164;
+        int Y0   = 160;   // matches face.begin(320,160) — no uncovered gap
         d.fillRect(0, Y0, W, d.height() - Y0, TFT_BLACK);
 
         int cx = W / 2, cy = Y0 + 32;
@@ -524,7 +525,7 @@ private:
     void _drawPanel(const String& msg) {
         auto& d  = M5StackChan.Display();
         int W    = d.width();
-        int Y0   = 164;
+        int Y0   = 160;   // matches face.begin(320,160) — no uncovered gap
         d.fillRect(0, Y0, W, d.height() - Y0, TFT_BLACK);
         d.setTextWrap(false);
         d.setTextSize(1);
