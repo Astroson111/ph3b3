@@ -32,7 +32,7 @@ public:
     // Draw active app overlays, then a dim menu-return hint in non-menu apps.
     void draw() {
         if (_count > 0) _apps[_idx]->draw();
-        if (!isOnMenu()) _drawReturnHint();
+        if (!isOnMenu() && _apps[_idx]->showReturnHint()) _drawReturnHint();
     }
 
     int      activeIndex() const { return _idx; }
