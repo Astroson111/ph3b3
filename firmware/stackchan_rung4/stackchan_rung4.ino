@@ -395,8 +395,8 @@ void setup() {
 void loop() {
     M5StackChan.update();
 
-    // Side-button hold (≥600ms) → safe-home servos then PMIC power-off
-    if (M5.BtnPWR.wasHold()) {
+    // Side-button tap → safe-home servos then PMIC power-off
+    if (M5.BtnPWR.wasClicked()) {
         safeHome();
         M5.Power.powerOff();
     }
