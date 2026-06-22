@@ -610,9 +610,9 @@ String ph3b3Chat(const String& message) {
     if (keepGoing) {
       face.setStatusLine("playing audio...");
       face.update();
-      if (gShowReply) drawReplyOverlay();
 
-      uint32_t deadline = millis() + 90000;
+      uint32_t deadline  = millis() + 90000;
+      uint32_t nextFaceMs = millis() + 33;   // ~30 fps bubble animation during drain
       while (keepGoing && millis() < deadline) {
         M5.update();
         if (M5.BtnA.wasPressed()) {
@@ -621,6 +621,8 @@ String ph3b3Chat(const String& message) {
           keepGoing = false;
           break;
         }
+        // Time-gated face update — fires even when TCP delivers bytes continuously
+        if (millis() >= nextFaceMs) { face.update(); nextFaceMs = millis() + 33; }
         int c = raw->read();
         if (c < 0) { delay(1); continue; }
         feedCh((char)c);

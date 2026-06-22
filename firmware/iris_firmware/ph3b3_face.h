@@ -158,7 +158,7 @@ class Ph3b3Face {
   int W = 0, H = 0, cx = 0, eyeR = 0, eyeGap = 0, eyeY = 0, mouthY = 0, crestY = 0;
   State state = BOOT;
   float blink = 0, breath = 0, glanceX = 0, glanceY = 0, gTX = 0, gTY = 0, speak = 0;
-  static constexpr int _BCOLS = 17;    // chars/line: (127-20)/6 at textSize 1
+  static constexpr int _BCOLS = 19;    // chars/line: (127-10)/6 at textSize 1, below-mouth bubble
   static constexpr int _BMAX  = 60;
   float    _bubbleProgress   = 0.0f;
   bool     _bubbleGrowing    = false;
@@ -168,7 +168,7 @@ class Ph3b3Face {
   uint8_t  _starX[10]        = {};
   uint8_t  _starY[10]        = {};
   bool     _starBright[10]   = {};
-  char     _blines[60][18]   = {};    // 17 chars + null per line
+  char     _blines[60][20]   = {};    // 19 chars + null per line
   int      _blineCount = 0, _bscrollLine = 0;
   uint32_t _bscrollLastMs = 0;
   uint32_t blinkStart = 0, nextBlinkMs = 0, nextGlanceMs = 0, lastLevelMs = 0;
@@ -274,20 +274,21 @@ class Ph3b3Face {
   }
 
   void _drawBubble() {
-    // Resized for Iris 135×240 portrait (mouthY=175, W=135).
-    // Full-size: bw=127 (W-8), bh=159 (tailBY-8), tail tip at mouthY.
-    const int CR      = 8;
+    // Bubble sits BELOW the mouth; tail tip points up at mouthY.
+    // Iris 135×240 portrait: mouthY=175, H=240.
+    // Full-size: bw=127, by=183→236 (53px), tail tip=(cx,175), base=(cx±thw,183).
     const int TAIL_H  = 8;
-    const int tailBY  = mouthY - TAIL_H;     // 167
-    const int BH_FULL = tailBY - 8;          // 159
-    const int BW_FULL = W - 8;               // 127
+    const int tailTY  = mouthY + TAIL_H;   // bubble top / tail base Y  (183)
+    const int BH_FULL = H - tailTY - 4;    // grows to near bottom       (53)
+    const int BW_FULL = W - 8;             // 127
+    const int CR      = 6;
 
     float p = _bubbleProgress;
 
     int bh = max(2, (int)(BH_FULL * p));
     int bw = max(2, (int)(BW_FULL * p));
     int bx = cx - bw / 2;
-    int by = tailBY - bh;
+    int by = tailTY;                        // top edge fixed; bubble grows downward
 
     uint16_t fill = C(14,  6, 38);
     uint16_t rim  = C(200, 225, 255);
@@ -295,11 +296,13 @@ class Ph3b3Face {
     uint16_t sdim = C(100, 120, 200);
     uint16_t sbrt = C(255, 255, 255);
 
+    // Tail: tip at mouth, base at bubble top
     int thw = max(2, (int)(10 * min(1.0f, p * 4)));
-    canvas.fillTriangle(cx, mouthY, cx - thw, tailBY, cx + thw, tailBY, fill);
-    canvas.drawLine(cx, mouthY, cx - thw, tailBY, rim);
-    canvas.drawLine(cx, mouthY, cx + thw, tailBY, rim);
+    canvas.fillTriangle(cx, mouthY, cx - thw, tailTY, cx + thw, tailTY, fill);
+    canvas.drawLine(cx, mouthY, cx - thw, tailTY, rim);
+    canvas.drawLine(cx, mouthY, cx + thw, tailTY, rim);
 
+    // Bubble body: grows downward from tailTY
     int eff_cr = min(CR, bh / 3);
     canvas.fillRoundRect(bx, by, bw, bh, eff_cr, fill);
     canvas.drawRoundRect(bx, by, bw, bh, eff_cr, rim);
@@ -316,8 +319,9 @@ class Ph3b3Face {
 
     if (p < 0.90f) return;
 
-    const int TXT_PAD = 10;
-    const int ROWS    = (BH_FULL - TXT_PAD * 2) / 8;  // 17 rows at full size
+    // 5 visible rows at textSize 1 (8px/line, 5px pad top+bottom)
+    const int TXT_PAD = 5;
+    const int ROWS    = (BH_FULL - TXT_PAD * 2) / 8;
 
     uint32_t now2 = millis();
     if (_blineCount > ROWS && (now2 - _bscrollLastMs) >= 1400) {
