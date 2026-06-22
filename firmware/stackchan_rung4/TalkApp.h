@@ -39,6 +39,11 @@ public:
         _inConversation  = false;
         _convLastValidMs = 0;
         _exitAfterTurn   = false;
+        _awaitFloor      = 0.0f;
+        _awaitAccum      = 0.0f;
+        _awaitSamples    = 0;
+        _awaitOnsetMs    = 0;
+        _awaitCalibEnd   = 0;
     }
 
     void update() override {
@@ -55,6 +60,9 @@ public:
             return;
         }
 
+        // First frame with WiFi — arm always-listening
+        if (_phase == PH_IDLE) { _startAwaiting(); return; }
+
         // ── Touch detection ────────────────────────────────────────────────────
         int16_t tx = 0, ty = 0;
         bool touching = M5StackChan.Display().getTouch(&tx, &ty);
@@ -66,19 +74,68 @@ public:
         switch (_phase) {
 
         case PH_IDLE:
+            // Transient — _startAwaiting() called at WiFi gate; should never linger here
+            face.setState(Ph3b3Face::IDLE);
+            break;
+
+        case PH_AWAITING: {
             face.setState(Ph3b3Face::IDLE);
             if (millis() - _lastTalkMs > SESSION_IDLE_RESET_MS) {
                 _sessionId  = "sc-" + String(millis(), HEX);
                 _lastTalkMs = millis();
             }
+
+            // Record a small monitoring chunk
+            static int16_t monBuf[MONITOR_CHUNK];
+            M5.Mic.record(monBuf, MONITOR_CHUNK, PTT_RATE);
+
+            float rms = 0.0f;
+            for (int i = 0; i < MONITOR_CHUNK; i++) {
+                float s = monBuf[i] / 32768.0f;
+                rms += s * s;
+            }
+            rms = sqrtf(rms / MONITOR_CHUNK);
+
+            uint32_t now = millis();
+
+            // Calibrate noise floor during initial window
+            if (now < _awaitCalibEnd) {
+                _awaitAccum += rms * rms;
+                _awaitSamples++;
+            } else if (_awaitFloor == 0.0f && _awaitSamples > 0) {
+                _awaitFloor = max(VAD_FLOOR_MIN, sqrtf(_awaitAccum / _awaitSamples));
+                Serial.printf("[await] floor=%.4f\n", _awaitFloor);
+            }
+
+            // Speech onset: loud enough for long enough → start recording
+            if (_awaitFloor > 0.0f && rms > _awaitFloor * ONSET_THRESH) {
+                if (_awaitOnsetMs == 0) _awaitOnsetMs = now;
+                if (now - _awaitOnsetMs >= ONSET_MIN_MS) {
+                    Serial.printf("[await] onset rms=%.4f floor=%.4f\n", rms, _awaitFloor);
+                    _awaitOnsetMs    = 0;
+                    _lastTalkMs      = now;
+                    _inConversation  = true;
+                    _convLastValidMs = now;
+                    _exitAfterTurn   = false;
+                    M5.Mic.end();
+                    _startRecording();
+                }
+            } else {
+                _awaitOnsetMs = 0;
+            }
+
+            // Tap override — immediate recording without waiting for onset
             if (tapped) {
-                _lastTalkMs      = millis();
-                _inConversation  = true;   // conversation begins
-                _convLastValidMs = millis();
+                _awaitOnsetMs    = 0;
+                _lastTalkMs      = now;
+                _inConversation  = true;
+                _convLastValidMs = now;
                 _exitAfterTurn   = false;
+                M5.Mic.end();
                 _startRecording();
             }
             break;
+        }
 
         case PH_RECORDING: {
             if (_pttBuf && _pttSamples < PTT_MAX) {
@@ -130,23 +187,16 @@ public:
         }
 
         case PH_DONE:
-            face.setState(Ph3b3Face::IDLE);
-            if (millis() - _lastTalkMs > SESSION_IDLE_RESET_MS) {
-                _sessionId  = "sc-" + String(millis(), HEX);
-                _lastTalkMs = millis();
-            }
-            if (tapped) {
-                _lastTalkMs = millis();
-                _phase      = PH_IDLE;
-                _heardText  = "";
-                _replyText  = "";
-            }
+            // Auto-return to always-listening after conversation ends
+            _heardText = "";
+            _replyText = "";
+            _startAwaiting();
             break;
 
         case PH_ERROR:
             face.setState(Ph3b3Face::ERROR);
             if (tapped) {
-                _phase = PH_IDLE;
+                _startAwaiting();
             }
             break;
         }
@@ -155,11 +205,12 @@ public:
     void draw() override {}
 
     void exit() override {
-        if (_phase == PH_RECORDING) {
+        if (_phase == PH_RECORDING || _phase == PH_AWAITING) {
             M5.Mic.end();
         }
         if (_pttBuf) { heap_caps_free(_pttBuf); _pttBuf = nullptr; }
         M5.Speaker.stop(0);
+        M5.Speaker.end();
         face.begin();  // restore full-screen face
         _phase          = PH_IDLE;
         _sessionId      = "";  // will be regenerated on next init()
@@ -188,9 +239,13 @@ private:
     static constexpr uint32_t VAD_MAX_MS       = 12000;  // hard time cap (backup for PTT_MAX)
     static constexpr float    VAD_THRESH_MULT  = 5.0f;   // threshold = noise_floor × this (was 3.0 — ambient spikes kept resetting window)
     static constexpr float    VAD_FLOOR_MIN    = 0.003f; // abs. minimum threshold
+    // Always-listening onset detection
+    static constexpr int      MONITOR_CHUNK   = 256;     // samples per onset-check frame (~16 ms @ 16 kHz)
+    static constexpr uint32_t ONSET_MIN_MS    = 150;     // ms of loud signal before auto-trigger
+    static constexpr float    ONSET_THRESH    = 6.0f;    // × noise floor → speech onset
 
     // ── State ─────────────────────────────────────────────────────────────────
-    enum Phase { PH_IDLE, PH_RECORDING, PH_DONE, PH_ERROR };
+    enum Phase { PH_IDLE, PH_AWAITING, PH_RECORDING, PH_DONE, PH_ERROR };
     Phase    _phase      = PH_IDLE;
     int16_t* _pttBuf     = nullptr;
     int      _pttSamples = 0;
@@ -211,6 +266,12 @@ private:
     bool     _inConversation  = false;
     uint32_t _convLastValidMs = 0;   // millis() of last successful /chat; idle clock measures from here
     bool     _exitAfterTurn   = false; // set when exit word detected — end after current SPEAK
+    // Always-listening state
+    float    _awaitFloor    = 0.0f;
+    float    _awaitAccum    = 0.0f;
+    int      _awaitSamples  = 0;
+    uint32_t _awaitOnsetMs  = 0;      // millis() when onset window opened; 0 = no onset
+    uint32_t _awaitCalibEnd = 0;      // millis() when noise-floor calibration ends
 
     // ── Base64 helpers ────────────────────────────────────────────────────────
     static int _b64val(char c) {
@@ -237,6 +298,27 @@ private:
         h[32]=2; h[33]=0; h[34]=16; h[35]=0;
         memcpy(h+36, "data", 4);
         h[40]=d; h[41]=d>>8; h[42]=d>>16; h[43]=d>>24;
+    }
+
+    // ── Always-listening ──────────────────────────────────────────────────────
+    void _startAwaiting() {
+        M5.Speaker.stop(0);
+        M5.Speaker.end();
+        delay(30);
+        auto mcfg = M5.Mic.config();
+        mcfg.sample_rate   = PTT_RATE;
+        mcfg.magnification = 16;
+        M5.Mic.config(mcfg);
+        M5.Mic.begin();
+        _awaitFloor    = 0.0f;
+        _awaitAccum    = 0.0f;
+        _awaitSamples  = 0;
+        _awaitOnsetMs  = 0;
+        _awaitCalibEnd = millis() + VAD_CALIBRATE_MS;
+        _wasTouch      = false;  // tap that ended previous recording must not suppress first new tap
+        face.setState(Ph3b3Face::IDLE);
+        _phase = PH_AWAITING;
+        Serial.println("[await] armed — waiting for speech");
     }
 
     // ── Recording ─────────────────────────────────────────────────────────────
@@ -283,14 +365,8 @@ private:
 
         if (!_pttBuf || _pttSamples < PTT_RATE / 4) {
             if (_pttBuf) { heap_caps_free(_pttBuf); _pttBuf = nullptr; }
-            bool withinIdle = _inConversation &&
-                              (millis() - _convLastValidMs < CONV_IDLE_MS);
-            if (withinIdle) {
-                _startRecording();  // auto re-listen — don't flash ready
-            } else {
-                _inConversation = false;
-                _phase = PH_IDLE;
-            }
+            if (!(millis() - _convLastValidMs < CONV_IDLE_MS)) _inConversation = false;
+            _startAwaiting();  // re-arm voice detection
             return;
         }
 
@@ -311,9 +387,14 @@ private:
 
     // ── Main dispatch: encode → /transcribe → /chat → play ───────────────────
     void _dispatch(int16_t* audio, int numSamples) {
+        Serial.printf("[D1] dispatch samples=%d sess=%s inConv=%d validAge=%lums\n",
+                      numSamples, _sessionId.c_str(), (int)_inConversation,
+                      _convLastValidMs ? millis() - _convLastValidMs : 0);
+
         // Idle check before expensive work — if conversation timed out, skip entirely
         if (_inConversation && _convLastValidMs > 0 &&
             millis() - _convLastValidMs > CONV_IDLE_MS) {
+            Serial.println("[D1] idle timeout at dispatch entry — ending conv");
             _endConversation();
             return;
         }
@@ -327,11 +408,12 @@ private:
         char* jbuf   = (char*)heap_caps_malloc(jLen + 1,
                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!jbuf) {
-            Serial.println("[talk] OOM: failed to alloc JSON buffer");
+            Serial.printf("[D2] OOM jbuf jLen=%d\n", jLen);
             face.setState(Ph3b3Face::ERROR);
             _phase = PH_ERROR;
             return;
         }
+        Serial.printf("[D2] jbuf OK %d bytes\n", jLen);
 
         // Inline base64 encoder — feeds WAV header then PCM
         memcpy(jbuf, "{\"audio\":\"", 10);
@@ -391,8 +473,8 @@ private:
             String err = (code > 0) ? "http " + String(code) :
                          (code == 0) ? "timeout" : "err " + String(code);
             if (_inConversation && millis() - _convLastValidMs < CONV_IDLE_MS) {
-                Serial.printf("[talk] transcribe error in conv: %s — re-listen\n", err.c_str());
-                _startRecording(); return;
+                Serial.printf("[talk] transcribe error in conv: %s — re-await\n", err.c_str());
+                _startAwaiting(); return;
             }
             face.setState(Ph3b3Face::ERROR);
             _inConversation = false;
@@ -403,12 +485,10 @@ private:
         // Junk filter: short transcripts (noise artifacts) don't trigger /chat
         if (_isJunkTranscript(_heardText)) {
             Serial.printf("[talk] junk transcript '%s' — discarded\n", _heardText.c_str());
-            if (_inConversation && millis() - _convLastValidMs < CONV_IDLE_MS) {
-                _startRecording(); return;  // re-listen, idle clock unchanged
+            if (_inConversation && millis() - _convLastValidMs >= CONV_IDLE_MS) {
+                _inConversation = false;
             }
-            _inConversation = false;
-            _phase = PH_IDLE;
-            return;
+            _startAwaiting(); return;  // always re-await; idle clock unchanged
         }
 
         // Exit word detection — will end conversation after current SPEAK
@@ -418,9 +498,11 @@ private:
         face.update();
 
         // ── Step 3: POST /chat ────────────────────────────────────────────────
+        Serial.printf("[D3] /chat heard='%s'\n", _heardText.c_str());
         _replyText = _doChatAndPlay(_heardText);
         bool ok = !_replyText.startsWith("ERR") && !_replyText.startsWith("HTTP") &&
                   !_replyText.startsWith("(no");
+        Serial.printf("[D4] /chat reply='%.60s' ok=%d\n", _replyText.c_str(), (int)ok);
 
         // Barge-in: tap during SPEAK → reset idle and go straight to LISTEN
         if (_bargeIn) {
@@ -444,12 +526,15 @@ private:
         bool convIdle = (_inConversation && _convLastValidMs > 0 &&
                          millis() - _convLastValidMs > CONV_IDLE_MS);
 
-        // Continuous loop: SPEAK done → auto-reopen LISTEN (no "ready" flash)
+        // Continuous loop: SPEAK done → re-arm always-listening (re-calibrate to clear TTS tail)
         if (ok && _inConversation && !convIdle) {
-            _startRecording();
+            Serial.println("[D5] CC re-arm → AWAIT");
+            _startAwaiting();
             return;
         }
 
+        Serial.printf("[D5] conv end ok=%d convIdle=%d inConv=%d\n",
+                      (int)ok, (int)convIdle, (int)_inConversation);
         // Conversation over (idle timeout, error, or normal end)
         if (!ok || convIdle) _inConversation = false;
         face.setState(ok ? Ph3b3Face::IDLE : Ph3b3Face::ERROR);
@@ -479,8 +564,7 @@ private:
         _inConversation  = false;
         _exitAfterTurn   = false;
         _convLastValidMs = 0;
-        face.setState(Ph3b3Face::IDLE);
-        _phase = PH_IDLE;
+        _startAwaiting();
     }
 
     // ── /chat + streaming audio ───────────────────────────────────────────────
@@ -506,6 +590,7 @@ private:
 
         face.update();
         int code = http.POST(payload);
+        Serial.printf("[D3b] /chat POST code=%d\n", code);
         if (code != HTTP_CODE_OK) { http.end(); return "HTTP " + String(code); }
 
         face.update();
@@ -548,16 +633,14 @@ private:
 
             auto flushChunk = [&]() {
                 if (chunkPos == 0) return;
-                // RMS of chunk about to play → lip-sync via setSpeakingLevel (~22 Hz)
+                // RMS → lip-sync level (face.update() happens in outer loop, not here)
                 float rms = 0.0f;
                 for (int i = 0; i < chunkPos; i++) {
                     float s = pcmBuf[fillIdx][i] / 32768.0f;
                     rms += s * s;
                 }
                 face.setSpeakingLevel(min(1.0f, sqrtf(rms / chunkPos) * 5.0f));
-                face.update();
-                // Queue next chunk as soon as there's room (don't wait for empty —
-                // waiting for empty causes a gap between every chunk = choppy audio)
+                // Queue next chunk as soon as there's room
                 while (M5.Speaker.isPlaying(0) >= 2) delay(1);
                 if (!keepGoing) return;
                 M5.Speaker.playRaw(pcmBuf[fillIdx], chunkPos, 22050, false, 1, 0);
@@ -568,6 +651,11 @@ private:
             auto pushByte = [&](uint8_t b) {
                 if (wavHdrSkipped++ < 44) return;
                 if (!halfReady) { halfLo = b; halfReady = true; return; }
+                // Race guard: pcmBuf[fillIdx] was queued two iterations ago and may
+                // still be playing. Wait until it leaves the queue before overwriting it.
+                if (chunkPos == 0) {
+                    while (M5.Speaker.isPlaying(0) >= 2) delay(1);
+                }
                 pcmBuf[fillIdx][chunkPos++] = (int16_t)((b << 8) | halfLo);
                 halfReady = false;
                 if (chunkPos == CHUNK_SAMP) flushChunk();
@@ -601,7 +689,15 @@ private:
 
                 uint32_t deadline = millis() + 90000;
                 while (keepGoing && millis() < deadline) {
+                    // Drain all available TCP bytes before doing any UI work —
+                    // single-byte reads with M5.update() between each byte was
+                    // too slow (≈200 chars/s) to sustain 22050 Hz audio decode.
+                    while (keepGoing && raw->available() > 0) {
+                        feedCh((char)raw->read());
+                    }
+                    // Touch/face update only when TCP buffer is momentarily empty
                     M5.update();
+                    face.update();
                     int16_t tx2, ty2;
                     if (M5StackChan.Display().getTouch(&tx2, &ty2)) {
                         M5.Speaker.stop(0);
@@ -611,9 +707,7 @@ private:
                         keepGoing  = false;
                         break;
                     }
-                    int c = raw->read();
-                    if (c < 0) { delay(1); continue; }
-                    feedCh((char)c);
+                    delay(1);
                 }
             }
 

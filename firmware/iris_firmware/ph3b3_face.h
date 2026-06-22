@@ -156,11 +156,42 @@ class Ph3b3Face {
     Pal p = pal();
     canvas.fillScreen(TFT_BLACK);
 
-    // lunar crest signature — brightens while listening
-    float k = (state == LISTENING) ? 1.0f : 0.42f;
-    float cr = min(W, H) * 0.058f;   // was W — landscape was too large
-    canvas.fillSmoothCircle(cx, crestY, cr, C(p.cr*k, p.cg*k, p.cb*k));
-    canvas.fillSmoothCircle(cx + cr*0.55f, crestY - cr*0.18f, cr, TFT_BLACK); // carve crescent
+    // lunar crest — per-state color + motion; crescent is the only status indicator
+    float k, cr_r, cr_g, cr_b;
+    switch (state) {
+      case CONNECTING:
+        k = 0.22f + fabsf(sinf(t * 3.14f)) * 0.28f;   // ~0.5 Hz pulse
+        cr_r=100; cr_g=80;  cr_b=200; break;            // cool violet: searching
+      case IDLE:
+        k = 0.50f;
+        cr_r=155; cr_g=60;  cr_b=255; break;            // iris violet: ready
+      case LISTENING:
+        k = 0.58f + fabsf(sinf(t * 6.28f)) * 0.42f;   // 1 Hz pulse — most active ★
+        cr_r=210; cr_g=140; cr_b=255; break;            // bright lavender: recording
+      case THINKING:
+        k = 0.60f + fabsf(sinf(t * 1.8f)) * 0.20f;    // slow throb + spinning carve below
+        cr_r=255; cr_g=80;  cr_b=180; break;            // magenta: working
+      case SPEAKING:
+        k = 0.50f + speak * 0.50f;                      // amplitude-synced
+        cr_r=255; cr_g=140; cr_b=220; break;            // warm pink: talking
+      case ERROR:
+        k = 0.60f + fabsf(sinf(t * 2.5f)) * 0.40f;    // fast alarming pulse
+        cr_r=255; cr_g=55;  cr_b=20;  break;            // red-amber: offline/fault
+      default:
+        k = 0.30f;
+        cr_r=80;  cr_g=60;  cr_b=140; break;
+    }
+    float cr = min(W, H) * 0.058f;
+    canvas.fillSmoothCircle(cx, crestY, cr,
+        C((uint8_t)(cr_r*k), (uint8_t)(cr_g*k), (uint8_t)(cr_b*k)));
+    // THINKING: carve orbits the circle (spinning crescent = "working")
+    // All other states: static carve in the standard position
+    if (state == THINKING) {
+        float cOff = cr * 0.58f, ang = t * 1.2f;
+        canvas.fillSmoothCircle(cx + cOff*cosf(ang), crestY + cOff*sinf(ang), cr, TFT_BLACK);
+    } else {
+        canvas.fillSmoothCircle(cx + cr*0.55f, crestY - cr*0.18f, cr, TFT_BLACK);
+    }
 
     float open = max(0.0f, p.open * (1.0f - blink));
     int oy = (int)breath;
@@ -173,12 +204,6 @@ class Ph3b3Face {
                                (mh + 4) / 2, C(p.mr*0.30, p.mg*0.30, p.mb*0.30));
     canvas.fillSmoothRoundRect(cx - mw/2, mouthY - mh/2 + oy, mw, mh,
                                mh / 2, C(p.mr, p.mg, p.mb));
-
-    // status line
-    canvas.setTextColor(C(120,150,165), TFT_BLACK);
-    canvas.setTextDatum(bottom_center);
-    canvas.setTextSize(1);
-    canvas.drawString(statusLine.length() ? statusLine : String(p.label), cx, H - 6);
 
     canvas.pushSprite(0, 0);
   }
