@@ -65,7 +65,7 @@ def _save_prefs(prefs):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Ph3b3 Karaoke Prep")
+        root.title("☽ Ph3b3 Karaoke Prep")
         root.geometry("560x540")
         self._prefs = _load_prefs()
         self.infile = tk.StringVar()

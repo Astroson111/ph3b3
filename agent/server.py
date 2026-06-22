@@ -1017,4 +1017,5 @@ if __name__ == "__main__":
     if SSL_CERT and SSL_KEY:
         ssl_kwargs = {"ssl_certfile": SSL_CERT, "ssl_keyfile": SSL_KEY}
         log.info(f"HTTPS enabled — cert: {SSL_CERT}")
-    uvicorn.run(app, host=HOST, port=PORT, log_level="warning", **ssl_kwargs)
+    uvicorn.run(app, host=HOST, port=PORT, log_level="warning",
+                timeout_keep_alive=30, **ssl_kwargs)

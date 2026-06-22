@@ -44,12 +44,17 @@ struct WavHdr {
 class KaraokeApp : public AppBase {
 public:
     void init() override {
+        uint32_t _karT = millis(); // [KAR] strip
+        Serial.println("[KAR] KaraokeApp init enter"); // [KAR] strip
         _state = STOPPED;
         face.begin(320, 160);  // top 160 px for face, bottom 80 for lyrics
+        Serial.printf("[KAR] face.begin(320,160) %lums\n", millis()-_karT); // [KAR] strip
         face.setState(Ph3b3Face::IDLE);
 
         // Mic — start continuous short recordings for VU meter
         M5.Mic.begin();
+        Serial.printf("[KAR] Mic.begin %lums\n", millis()-_karT); // [KAR] strip
+        Serial.printf("[KAR] KaraokeApp init done %lums total\n", millis()-_karT); // [KAR] strip
     }
 
     void exit() override {
