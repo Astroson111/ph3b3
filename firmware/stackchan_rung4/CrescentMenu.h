@@ -115,7 +115,11 @@ private:
             for (int i = 0; i < n; i++) {
                 int tileY = OVL_PAD + i * TILE_H;
                 if (ty >= tileY && ty < tileY + TILE_H) {
+                    uint32_t _karT0 = millis(); // [KAR] strip
+                    Serial.printf("[KAR] tile %d (%s) selected\n", i, // [KAR] strip
+                                  appMgr.app(i) ? appMgr.app(i)->name() : "?"); // [KAR] strip
                     appMgr.switchTo(i);
+                    Serial.printf("[KAR] switchTo done %lums total\n", millis()-_karT0); // [KAR] strip
                     _open = false;
                     return;
                 }

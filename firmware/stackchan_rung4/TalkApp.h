@@ -44,6 +44,12 @@ public:
         _awaitSamples    = 0;
         _awaitOnsetMs    = 0;
         _awaitCalibEnd   = 0;
+        // One-time TLS setup — cert pointer stays valid (ISRG_ROOT_X1 is in flash).
+        // setReuse(true) tells HTTPClient to preserve the socket after http.end()
+        // when the server responds with Connection: keep-alive.
+        _tls.setCACert(ISRG_ROOT_X1);
+        _tls.setTimeout(30000);
+        _http.setReuse(true);
     }
 
     void update() override {
@@ -210,17 +216,26 @@ public:
     void draw() override {}
 
     void exit() override {
+        uint32_t _karT = millis(); // [KAR] strip
+        Serial.println("[KAR] TalkApp exit enter"); // [KAR] strip
         if (_phase == PH_RECORDING || _phase == PH_AWAITING) {
             M5.Mic.end();
+            Serial.printf("[KAR] Mic.end %lums\n", millis()-_karT); // [KAR] strip
         }
         if (_pttBuf) { heap_caps_free(_pttBuf); _pttBuf = nullptr; }
         M5.Speaker.stop(0);
         M5.Speaker.end();
+        Serial.printf("[KAR] Speaker.end %lums\n", millis()-_karT); // [KAR] strip
         face.begin();  // restore full-screen face
+        Serial.printf("[KAR] face.begin(full) %lums\n", millis()-_karT); // [KAR] strip
         _phase          = PH_IDLE;
         _sessionId      = "";  // will be regenerated on next init()
         _inConversation = false;
         _exitAfterTurn  = false;
+        // Drop the persistent TLS socket when leaving TalkApp — it will be
+        // stale by the time the user returns anyway.
+        _http.end();
+        _tls.stop();
     }
 
     const char* name() const override { return "Talk / Ph3b3"; }
@@ -277,6 +292,13 @@ private:
     int      _awaitSamples  = 0;
     uint32_t _awaitOnsetMs  = 0;      // millis() when onset window opened; 0 = no onset
     uint32_t _awaitCalibEnd = 0;      // millis() when noise-floor calibration ends
+
+    // Persistent TLS connection — cert set once; reused for /transcribe then /chat
+    // within the same turn so only one TLS handshake is needed per turn.
+    // HTTPClient::setReuse(true) keeps the socket alive across http.end() calls
+    // as long as the server responds with Connection: keep-alive.
+    WiFiClientSecure _tls;
+    HTTPClient       _http;
 
     // ── Base64 helpers ────────────────────────────────────────────────────────
     static int _b64val(char c) {
@@ -455,30 +477,28 @@ private:
         jbuf[pos++] = '"'; jbuf[pos++] = '}'; jbuf[pos] = '\0';
 
         // ── Step 2: POST /transcribe ──────────────────────────────────────────
+        // Use the persistent _tls/_http pair.  _tls may already be connected
+        // (between-turn reuse); if not, HTTPClient reconnects automatically.
 
-        WiFiClientSecure tls2;
-        tls2.setCACert(ISRG_ROOT_X1);
-        tls2.setTimeout(20000);
-        HTTPClient http2;
-        http2.begin(tls2, HOST, PORT, "/transcribe", true);
-        http2.setAuthorization(USER, PASS);
-        http2.addHeader("Content-Type", "application/json");
-        http2.addHeader("X-Ph3b3-Device", "stackchan");
-        http2.setConnectTimeout(20000);
-        http2.setTimeout(30000);
+        _http.begin(_tls, HOST, PORT, "/transcribe", true);
+        _http.setAuthorization(USER, PASS);
+        _http.addHeader("Content-Type", "application/json");
+        _http.addHeader("X-Ph3b3-Device", "stackchan");
+        _http.setConnectTimeout(20000);
+        _http.setTimeout(30000);
 
-        int code = http2.POST((uint8_t*)jbuf, pos);
+        int code = _http.POST((uint8_t*)jbuf, pos);
         heap_caps_free(jbuf); jbuf = nullptr;
 
         _heardText = "";
         if (code == HTTP_CODE_OK) {
-            String body = http2.getString();
+            String body = _http.getString();
             JsonDocument doc;
             deserializeJson(doc, body);
             const char* t = doc["text"];
             if (t && *t) _heardText = String(t);
         }
-        http2.end();
+        _http.end();  // keeps _tls alive if server returned Connection: keep-alive
         Serial.printf("[talk] transcribe=%d heard='%s'\n", code, _heardText.c_str());
 
         if (_heardText.length() == 0) {
@@ -601,18 +621,15 @@ private:
 
     // ── /chat + streaming audio ───────────────────────────────────────────────
     String _doChatAndPlay(const String& message) {
-        WiFiClientSecure tls;
-        tls.setCACert(ISRG_ROOT_X1);
-
-        HTTPClient http;
-        if (!http.begin(tls, HOST, PORT, "/chat", true))
+        // Reuse the same _tls/_http that carried /transcribe — no second handshake.
+        if (!_http.begin(_tls, HOST, PORT, "/chat", true))
             return String("ERR: begin failed");
 
-        http.setConnectTimeout(30000);
-        http.setTimeout(60000);
-        http.setAuthorization(USER, PASS);
-        http.addHeader("Content-Type", "application/json");
-        http.addHeader("X-Ph3b3-Device", "stackchan");
+        _http.setConnectTimeout(30000);
+        _http.setTimeout(60000);
+        _http.setAuthorization(USER, PASS);
+        _http.addHeader("Content-Type", "application/json");
+        _http.addHeader("X-Ph3b3-Device", "stackchan");
 
         JsonDocument body;
         body["message"]    = message;
@@ -621,16 +638,16 @@ private:
         serializeJson(body, payload);
 
         face.update();
-        int code = http.POST(payload);
+        int code = _http.POST(payload);
         Serial.printf("[D3b] /chat POST code=%d\n", code);
-        if (code != HTTP_CODE_OK) { http.end(); return "HTTP " + String(code); }
+        if (code != HTTP_CODE_OK) { _http.end(); return "HTTP " + String(code); }
 
         face.update();
 
         // ── Phase A: first 6 KB captures the "response" text field ───────────
         static const int PEEK_MAX = 6144;
         static char peek[PEEK_MAX + 1];
-        WiFiClient* raw = http.getStreamPtr();
+        WiFiClient* raw = _http.getStreamPtr();
         raw->setTimeout(60000);
         int peekLen = raw->readBytes(peek, PEEK_MAX);
         peek[peekLen] = '\0';
@@ -771,7 +788,7 @@ private:
             }
 
             flushChunk();
-            http.end();
+            _http.end();
 
             while (M5.Speaker.isPlaying(0)) {
                 M5.update();
@@ -798,7 +815,7 @@ private:
                 delay(15);  // let shared clock lines settle before mic takes the bus
             }
         } else {
-            http.end();
+            _http.end();
         }
 
         return responseText.length() > 0 ? responseText : String("(no response)");
