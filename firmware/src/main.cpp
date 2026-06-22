@@ -8,7 +8,7 @@
 // ── Credentials & endpoints ──────────────────────────────────────────────────
 #define WIFI_SSID "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
-#define PH3B3_HOST    "192.168.0.16"
+#define PH3B3_HOST    "192.168.0.23"
 #define PH3B3_PORT    7331
 #define PH3B3_PATH    "/ws/stackchan"
 

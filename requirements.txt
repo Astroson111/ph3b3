@@ -17,6 +17,7 @@ duckduckgo-search>=6.2.4
 piper-tts>=1.2.0
 sounddevice>=0.4.6
 soundfile>=0.12.1
+pywhispercpp>=1.5.0
 openai-whisper>=20231117
 torch>=2.0.0
 speedtest-cli>=2.1.3
