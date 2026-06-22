@@ -1,0 +1,11 @@
+{
+  "name": "Ph3b3",
+  "short_name": "Ph3b3",
+  "icons": [
+    { "src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "theme_color": "#A855F7",
+  "background_color": "#0a0a14",
+  "display": "standalone"
+}
