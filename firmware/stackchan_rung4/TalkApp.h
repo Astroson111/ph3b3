@@ -323,7 +323,9 @@ private:
         _awaitSamples  = 0;
         _awaitOnsetMs  = 0;
         _awaitCalibEnd = millis() + VAD_CALIBRATE_MS;
-        _wasTouch      = false;  // tap that ended previous recording must not suppress first new tap
+        // Snapshot live touch state so a still-held tap (e.g. exit tap from PH_RECORDING)
+        // is not re-detected as a new entry tap on the very next frame.
+        { int16_t _tx, _ty; _wasTouch = M5StackChan.Display().getTouch(&_tx, &_ty); }
         face.setState(Ph3b3Face::IDLE);
         face.clearBubble();
         _phase = PH_AWAITING;
