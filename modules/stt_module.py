@@ -1,21 +1,28 @@
 import os
 import logging
+import subprocess
 import threading
+
+import numpy as np
 
 log = logging.getLogger("ph3b3.stt")
 
+# whisper.cpp ggml model name: tiny, base, small, medium, large (and .en variants).
+# Larger = more accurate, slower. Switch via .env (PH3B3_WHISPER_MODEL) — no code change.
 WHISPER_MODEL = os.getenv("PH3B3_WHISPER_MODEL", "medium")
+# CPU threads for whisper.cpp inference. Defaults to all cores; more threads = faster.
+WHISPER_THREADS = int(os.getenv("PH3B3_WHISPER_THREADS", str(os.cpu_count() or 8)))
+WHISPER_SAMPLE_RATE = 16000
 
 try:
-    import whisper
-    WHISPER_AVAILABLE = True
+    from pywhispercpp.model import Model as _WhisperCppModel
+    WHISPERCPP_AVAILABLE = True
 except ImportError:
-    WHISPER_AVAILABLE = False
-    log.warning("openai-whisper not installed. Run: pip install openai-whisper")
+    WHISPERCPP_AVAILABLE = False
+    log.warning("pywhispercpp not installed. Run: pip install pywhispercpp")
 
 try:
     import sounddevice as sd
-    import numpy as np
     AUDIO_AVAILABLE = True
 except ImportError:
     AUDIO_AVAILABLE = False
@@ -26,29 +33,56 @@ try:
 except ImportError:
     SR_AVAILABLE = False
 
+
+def _decode_to_16k_mono(filepath):
+    """Decode any audio file to 16 kHz mono float32 via ffmpeg.
+
+    whisper.cpp (pywhispercpp) only accepts 16 kHz mono input, whereas the
+    device / Piper may produce other sample rates. ffmpeg resamples robustly,
+    matching how openai-whisper loaded audio internally.
+    """
+    cmd = ["ffmpeg", "-nostdin", "-threads", "0", "-i", filepath,
+           "-f", "f32le", "-ac", "1", "-ar", str(WHISPER_SAMPLE_RATE), "-"]
+    proc = subprocess.run(cmd, capture_output=True)
+    if proc.returncode != 0:
+        tail = proc.stderr.decode("utf-8", "replace")[-300:]
+        raise RuntimeError(f"ffmpeg decode failed: {tail}")
+    return np.frombuffer(proc.stdout, np.float32)
+
+
 class STTModule:
     def __init__(self):
         self._model     = None
         self._available = False
         self._loading   = False
-        if WHISPER_AVAILABLE:
+        if WHISPERCPP_AVAILABLE:
             self._loading = True
             threading.Thread(target=self._load_model, daemon=True).start()
         else:
-            log.warning("Whisper unavailable — falling back to SpeechRecognition")
+            log.warning("whisper.cpp unavailable — falling back to SpeechRecognition")
 
     def _load_model(self):
         try:
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            log.info(f"Loading Whisper {WHISPER_MODEL} on {device}...")
-            self._model     = whisper.load_model(WHISPER_MODEL, device=device)
+            log.info(f"Loading whisper.cpp {WHISPER_MODEL} on CPU ({WHISPER_THREADS} threads)...")
+            self._model = _WhisperCppModel(
+                WHISPER_MODEL,
+                n_threads=WHISPER_THREADS,
+                print_progress=False,
+                print_realtime=False,
+            )
             self._available = True
             self._loading   = False
-            log.info(f"Whisper {WHISPER_MODEL} ready on {device}")
+            log.info(f"whisper.cpp {WHISPER_MODEL} ready (CPU, {WHISPER_THREADS} threads)")
         except Exception as e:
-            log.error(f"Whisper load error: {e}")
+            log.error(f"whisper.cpp load error: {e}")
             self._loading = False
+
+    def _transcribe_array(self, audio, language=None):
+        params = {}
+        if language:
+            params["language"] = language
+        segments = self._model.transcribe(audio, **params)
+        return " ".join(seg.text for seg in segments).strip()
 
     def listen(self, duration_seconds=10, language=None):
         if self._loading:
@@ -63,15 +97,11 @@ class STTModule:
         if not AUDIO_AVAILABLE:
             return {"text": None, "error": "sounddevice not installed"}
         try:
-            sample_rate = 16000
-            audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
+            audio = sd.rec(int(duration * WHISPER_SAMPLE_RATE),
+                           samplerate=WHISPER_SAMPLE_RATE, channels=1, dtype='float32')
             sd.wait()
-            audio_flat = audio.flatten()
-            options = {}
-            if language:
-                options["language"] = language
-            result = self._model.transcribe(audio_flat, **options)
-            return {"text": result.get("text","").strip(), "language": result.get("language",""), "error": None}
+            text = self._transcribe_array(audio.flatten(), language)
+            return {"text": text, "language": language or "", "error": None}
         except Exception as e:
             return {"text": None, "error": str(e)}
 
@@ -92,27 +122,18 @@ class STTModule:
             return {"text": None, "error": "Whisper still loading — try again in a moment."}
         if not self._available:
             return {"text": None, "error": "Whisper not available"}
-        options = {}
-        if language:
-            options["language"] = language
         try:
-            result = self._model.transcribe(filepath, **options)
-            return {"text": result.get("text","").strip(), "language": result.get("language",""), "error": None}
+            audio = _decode_to_16k_mono(filepath)
+            text = self._transcribe_array(audio, language)
+            return {"text": text, "language": language or "", "error": None}
         except Exception as e:
-            if "CUDA" in str(e) and self._model is not None:
-                log.warning("CUDA error in transcription — falling back to CPU")
-                try:
-                    self._model = self._model.to("cpu")
-                    result = self._model.transcribe(filepath, **options)
-                    return {"text": result.get("text","").strip(), "language": result.get("language",""), "error": None}
-                except Exception as cpu_e:
-                    return {"text": None, "error": f"Transcription error (CPU fallback): {cpu_e}"}
             return {"text": None, "error": str(e)}
 
     def status(self):
-        if self._loading: return f"Whisper {WHISPER_MODEL} loading..."
+        if self._loading:
+            return f"whisper.cpp {WHISPER_MODEL} loading..."
         if self._available:
-            import torch
-            return f"Whisper {WHISPER_MODEL} ready on {'cuda' if torch.cuda.is_available() else 'cpu'}"
-        if SR_AVAILABLE: return "Whisper unavailable — using Google fallback"
+            return f"whisper.cpp {WHISPER_MODEL} ready (CPU, {WHISPER_THREADS} threads)"
+        if SR_AVAILABLE:
+            return "Whisper unavailable — using Google fallback"
         return "No speech recognition available"
