@@ -538,15 +538,13 @@ String ph3b3Chat(const String& message) {
   const char* resp = doc["response"];
   String responseText = (resp && *resp) ? String(resp) : "";
 
-  // Show text + switch to SPEAKING now, while audio still decoding
+  // Show text + switch to SPEAKING; bubble replaces drawReplyOverlay during SPEAKING
   if (responseText.length() > 0) {
-    gLastReply = responseText;
-    gShowReply = true;
     applyMoodReaction(responseText);   // brief expression beat before she speaks
     face.setState(Ph3b3Face::SPEAKING);
     face.setStatusLine("ph3b3 says:");
+    face.setBubble(responseText);
     face.update();
-    drawReplyOverlay();
   }
 
   // ── Phase 2: stream-decode "audio" base64 → PCM chunks → M5.Speaker ─────
@@ -636,12 +634,12 @@ String ph3b3Chat(const String& message) {
       M5.update();
       if (M5.BtnA.wasPressed()) { M5.Speaker.stop(); gBargeIn = true; break; }
       face.update();
-      if (gShowReply) drawReplyOverlay();
       delay(50);
     }
-    if (!gBargeIn) gShowReply = false;  // playback complete — clear text now
+    face.clearBubble();
   } else {
     http.end();
+    face.clearBubble();
   }
 
   return responseText.length() > 0 ? responseText : String("(no response)");

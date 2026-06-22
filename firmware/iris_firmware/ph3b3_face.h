@@ -61,6 +61,44 @@ class Ph3b3Face {
     lastLevelMs = millis();
   }
 
+  void setBubble(const String& text) {
+    _bubbleGrowing    = true;
+    _bubbleCollapsing = false;
+    _bubbleStartMs    = millis();
+    _bscrollLine      = 0;
+    _bscrollLastMs    = _bubbleStartMs;
+    _blineCount = 0;
+    int i = 0, len = (int)text.length();
+    while (i < len && _blineCount < _BMAX) {
+      while (i < len && text[i] == ' ') i++;
+      if (i >= len) break;
+      int end = min(len, i + _BCOLS);
+      if (end < len) {
+        int brk = end;
+        while (brk > i && text[brk] != ' ') brk--;
+        if (brk > i) end = brk;
+      }
+      int n = end - i;
+      if (n > _BCOLS) n = _BCOLS;
+      if (n > 0) {
+        strncpy(_blines[_blineCount], text.c_str() + i, n);
+        while (n > 0 && _blines[_blineCount][n-1] == ' ') n--;
+        _blines[_blineCount][n] = '\0';
+        if (n > 0) _blineCount++;
+      }
+      i = end;
+    }
+    for (int j = 0; j < 8;  j++) { _starX[j]=random(100); _starY[j]=random(100); _starBright[j]=false; }
+    for (int j = 8; j < 10; j++) { _starX[j]=random(100); _starY[j]=random(100); _starBright[j]=true;  }
+  }
+  void clearBubble() {
+    if (_bubbleGrowing || _bubbleProgress > 0.0f) {
+      _bubbleGrowing    = false;
+      _bubbleCollapsing = true;
+      _bubbleCollapseMs = millis();
+    }
+  }
+
   void update() {
     uint32_t now = millis();
     float t = now / 1000.0f;
@@ -99,6 +137,19 @@ class Ph3b3Face {
     else if (state == LISTENING) target = 0.12f + fabsf(sinf(t * 3.0f)) * 0.10f;
     speak += (target - speak) * 0.25f;
 
+    // Bubble grow/collapse — smoothstepped; runs only when animation is active
+    if (_bubbleGrowing) {
+      float raw = (float)(now - _bubbleStartMs) / 280.0f;
+      float pp  = min(1.0f, raw);
+      _bubbleProgress = pp*pp*(3.0f - 2.0f*pp);
+      if (raw >= 1.0f) _bubbleGrowing = false;
+    } else if (_bubbleCollapsing) {
+      float raw = 1.0f - (float)(now - _bubbleCollapseMs) / 200.0f;
+      float pp  = max(0.0f, raw);
+      _bubbleProgress = pp*pp*(3.0f - 2.0f*pp);
+      if (raw <= 0.0f) { _bubbleCollapsing = false; _bubbleProgress = 0.0f; }
+    }
+
     render(t);
   }
 
@@ -107,6 +158,19 @@ class Ph3b3Face {
   int W = 0, H = 0, cx = 0, eyeR = 0, eyeGap = 0, eyeY = 0, mouthY = 0, crestY = 0;
   State state = BOOT;
   float blink = 0, breath = 0, glanceX = 0, glanceY = 0, gTX = 0, gTY = 0, speak = 0;
+  static constexpr int _BCOLS = 17;    // chars/line: (127-20)/6 at textSize 1
+  static constexpr int _BMAX  = 60;
+  float    _bubbleProgress   = 0.0f;
+  bool     _bubbleGrowing    = false;
+  bool     _bubbleCollapsing = false;
+  uint32_t _bubbleStartMs    = 0;
+  uint32_t _bubbleCollapseMs = 0;
+  uint8_t  _starX[10]        = {};
+  uint8_t  _starY[10]        = {};
+  bool     _starBright[10]   = {};
+  char     _blines[60][18]   = {};    // 17 chars + null per line
+  int      _blineCount = 0, _bscrollLine = 0;
+  uint32_t _bscrollLastMs = 0;
   uint32_t blinkStart = 0, nextBlinkMs = 0, nextGlanceMs = 0, lastLevelMs = 0;
   float lastLevel = 0;
   String statusLine;
@@ -205,6 +269,66 @@ class Ph3b3Face {
     canvas.fillSmoothRoundRect(cx - mw/2, mouthY - mh/2 + oy, mw, mh,
                                mh / 2, C(p.mr, p.mg, p.mb));
 
+    if (_bubbleProgress > 0.0f) _drawBubble();
     canvas.pushSprite(0, 0);
+  }
+
+  void _drawBubble() {
+    // Resized for Iris 135×240 portrait (mouthY=175, W=135).
+    // Full-size: bw=127 (W-8), bh=159 (tailBY-8), tail tip at mouthY.
+    const int CR      = 8;
+    const int TAIL_H  = 8;
+    const int tailBY  = mouthY - TAIL_H;     // 167
+    const int BH_FULL = tailBY - 8;          // 159
+    const int BW_FULL = W - 8;               // 127
+
+    float p = _bubbleProgress;
+
+    int bh = max(2, (int)(BH_FULL * p));
+    int bw = max(2, (int)(BW_FULL * p));
+    int bx = cx - bw / 2;
+    int by = tailBY - bh;
+
+    uint16_t fill = C(14,  6, 38);
+    uint16_t rim  = C(200, 225, 255);
+    uint16_t tc   = C(230, 248, 255);
+    uint16_t sdim = C(100, 120, 200);
+    uint16_t sbrt = C(255, 255, 255);
+
+    int thw = max(2, (int)(10 * min(1.0f, p * 4)));
+    canvas.fillTriangle(cx, mouthY, cx - thw, tailBY, cx + thw, tailBY, fill);
+    canvas.drawLine(cx, mouthY, cx - thw, tailBY, rim);
+    canvas.drawLine(cx, mouthY, cx + thw, tailBY, rim);
+
+    int eff_cr = min(CR, bh / 3);
+    canvas.fillRoundRect(bx, by, bw, bh, eff_cr, fill);
+    canvas.drawRoundRect(bx, by, bw, bh, eff_cr, rim);
+
+    if (p < 0.45f) return;
+
+    for (int i = 0; i < 10; i++) {
+      int sx = bx + 3 + (_starX[i] * (bw - 6) / 100);
+      int sy = by + 3 + (_starY[i] * (bh - 6) / 100);
+      if (sx < bx+2 || sx > bx+bw-3 || sy < by+2 || sy > by+bh-3) continue;
+      if (_starBright[i]) canvas.fillSmoothCircle(sx, sy, 1, sbrt);
+      else                canvas.drawPixel(sx, sy, sdim);
+    }
+
+    if (p < 0.90f) return;
+
+    const int TXT_PAD = 10;
+    const int ROWS    = (BH_FULL - TXT_PAD * 2) / 8;  // 17 rows at full size
+
+    uint32_t now2 = millis();
+    if (_blineCount > ROWS && (now2 - _bscrollLastMs) >= 1400) {
+      if (_bscrollLine + ROWS < _blineCount) { _bscrollLine++; _bscrollLastMs = now2; }
+    }
+
+    canvas.setTextSize(1);
+    canvas.setTextColor(tc, fill);
+    canvas.setTextDatum(top_left);
+    for (int r = 0; r < ROWS && (_bscrollLine + r) < _blineCount; r++) {
+      canvas.drawString(_blines[_bscrollLine + r], bx + TXT_PAD, by + TXT_PAD + r * 8);
+    }
   }
 };
