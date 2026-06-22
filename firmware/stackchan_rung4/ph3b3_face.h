@@ -212,7 +212,11 @@ class Ph3b3Face {
       } else if (state == THINKING) {
         br = 220; bg = 130; bb = 20;   // amber — "processing"
       } else {
-        br = 60;  bg = 35;  bb = 140;  // dim purple — resting
+        // Slow breathing pulse — signals "always listening" in idle/awaiting state
+        float pulse = 0.5f + 0.5f * sinf(t * 1.5f);
+        br = (uint8_t)(50 + 40 * pulse);
+        bg = (uint8_t)(28 + 20 * pulse);
+        bb = (uint8_t)(120 + 60 * pulse);
       }
       canvas.fillSmoothCircle(tcx, tcy, tr, C(br, bg, bb));
       canvas.fillSmoothCircle(tcx + (int)(tr * 0.55f), tcy - (int)(tr * 0.18f),
