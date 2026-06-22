@@ -60,9 +60,6 @@ public:
             return;
         }
 
-        // First frame with WiFi — arm always-listening
-        if (_phase == PH_IDLE) { _startAwaiting(); return; }
-
         // ── Touch detection ────────────────────────────────────────────────────
         int16_t tx = 0, ty = 0;
         bool touching = M5StackChan.Display().getTouch(&tx, &ty);
@@ -73,8 +70,8 @@ public:
         switch (_phase) {
 
         case PH_IDLE:
-            // Transient — _startAwaiting() called at WiFi gate; should never linger here
             face.setState(Ph3b3Face::IDLE);
+            if (tapped) _startAwaiting();
             break;
 
         case PH_AWAITING: {
