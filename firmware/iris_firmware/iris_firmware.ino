@@ -379,7 +379,7 @@ static void buildWavHeader(uint8_t* h, int samples, int rate) {
 
 // PTT: encode audio → base64 JSON, POST /transcribe, then /chat.
 // Takes ownership of *ppAudio and frees it before opening TLS so that
-// sPttBuf(96KB) + jbuf(128KB) + TLS(~72KB) never all live at once.
+// Both sPttBuf and jbuf live in PSRAM; only TLS (~72KB) hits internal SRAM.
 static void doPttTranscribeAndChat(int16_t** ppAudio, int numSamples) {
   int16_t* audio = *ppAudio;
   face.setState(Ph3b3Face::THINKING);
@@ -392,7 +392,7 @@ static void doPttTranscribeAndChat(int16_t** ppAudio, int numSamples) {
   int wavBytes = 44 + numSamples * 2;
   int b64Len   = ((wavBytes + 2) / 3) * 4;
   int jLen     = 10 + b64Len + 2;            // {"audio":"..."}
-  char* jbuf   = (char*)malloc(jLen + 1);
+  char* jbuf   = (char*)heap_caps_malloc(jLen + 1, MALLOC_CAP_SPIRAM);
   if (!jbuf) {
     face.setState(Ph3b3Face::ERROR); face.setStatusLine("OOM-PTT"); face.update(); return;
   }
@@ -424,8 +424,7 @@ static void doPttTranscribeAndChat(int16_t** ppAudio, int numSamples) {
 
   jbuf[pos++] = '"'; jbuf[pos++] = '}'; jbuf[pos] = '\0';
 
-  // Audio is fully encoded into jbuf — free it now before TLS opens.
-  // Without this: sPttBuf(96KB) + jbuf(128KB) + TLS(~72KB) = 296KB > 268KB free → err -1.
+  // Audio is fully encoded into jbuf — free PTT buffer now (was in PSRAM).
   free(*ppAudio); *ppAudio = nullptr;
 
   // POST to /transcribe — blocking; jbuf(128KB) + TLS(~72KB) = 200KB, fits in 268KB.
@@ -1188,7 +1187,7 @@ void loop() {
   static int16_t* sPttBuf      = nullptr;
   static int      sPttSamples  = 0;
   static const int PTT_RATE    = 16000;
-  static const int PTT_MAX     = PTT_RATE * 3;   // 3 s @ 16 kHz = 96 KB
+  static const int PTT_MAX     = PTT_RATE * 12;  // 12 s @ 16 kHz = 384 KB in PSRAM
 
   if (M5.BtnA.wasPressed() && uiMode == FACE) {
     sBtnADownAt = millis();
@@ -1201,7 +1200,7 @@ void loop() {
       && (millis() - sBtnADownAt) >= 200) {
     sPttActive  = true;
     sPttSamples = 0;
-    sPttBuf     = (int16_t*)malloc(PTT_MAX * 2);
+    sPttBuf     = (int16_t*)heap_caps_malloc(PTT_MAX * 2, MALLOC_CAP_SPIRAM);
     if (sPttBuf) {
       if (M5.Speaker.isPlaying()) M5.Speaker.stop();
       // Boost analog-to-digital path: ES8311 PGA is at 0 dB by default;
@@ -1243,7 +1242,7 @@ void loop() {
         // ES8311 shared codec: M5.Speaker.begin() was called above; end it before ADC mode.
         gBargeIn   = false;
         gShowReply = false;
-        sPttBuf = (int16_t*)malloc(PTT_MAX * 2);
+        sPttBuf = (int16_t*)heap_caps_malloc(PTT_MAX * 2, MALLOC_CAP_SPIRAM);
         if (sPttBuf) {
           M5.Speaker.end();
           auto mc = M5.Mic.config();
@@ -1282,7 +1281,7 @@ void loop() {
       if (gBargeIn) {
         gBargeIn   = false;
         gShowReply = false;
-        sPttBuf = (int16_t*)malloc(PTT_MAX * 2);
+        sPttBuf = (int16_t*)heap_caps_malloc(PTT_MAX * 2, MALLOC_CAP_SPIRAM);
         if (sPttBuf) {
           M5.Speaker.end();
           auto mc = M5.Mic.config();

@@ -2,6 +2,7 @@
 import asyncio
 import base64
 from contextlib import asynccontextmanager
+from datetime import datetime
 import json
 import logging
 import os
@@ -796,6 +797,14 @@ async def chat_endpoint(body: dict, request: Request):
 
     messages = session.messages()
 
+    # ── Live datetime (additive, ephemeral — read fresh every request) ────────
+    # Injected per-call; never stored in session history so it never accumulates.
+    # datetime.now().astimezone() reads the OS clock + local timezone at call time.
+    _now = datetime.now().astimezone()
+    _dt_str = _now.strftime("%A, %B %-d, %Y, %-I:%M %p")
+    _dt_note = {"role": "system", "content": f"Current date and time: {_dt_str}."}
+    messages.insert(1, _dt_note)
+
     # ── Device-awareness (additive, ephemeral, soul untouched) ───────────────
     # Injected per-call into the Ollama context only; never stored in session
     # history so it doesn't accumulate. Add new devices here as needed.
@@ -821,7 +830,9 @@ async def chat_endpoint(body: dict, request: Request):
 
     response, updated = await chat_with_tools(messages)
 
-    # Strip ephemeral device note before storing so it never accumulates in history
+    # Strip ephemeral notes before storing so they never accumulate in history
+    if _dt_note in updated:
+        updated.remove(_dt_note)
     if device_note and device_note in updated:
         updated.remove(device_note)
 
