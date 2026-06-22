@@ -117,7 +117,7 @@ class Ph3b3Face {
     switch (state) {
       //                 iris──────────  halo──────────  mouth─────────  open   label
       case CONNECTING: return {100, 80,200,  16,12, 50,  80, 70,170, 0.62f, "connecting"};
-      case IDLE:       return {155, 60,255,  28, 8, 65, 155, 60,255, 1.00f, "ready"};
+      case IDLE:       return {255, 60,155,  65, 8, 28, 255, 60,155, 1.00f, "ready"};
       case LISTENING:  return {200,120,255,  40,18, 80, 180,100,245, 1.12f, "listening"};
       case THINKING:   return {255, 80,180,  58,10, 42, 220, 70,160, 0.86f, "thinking"};
       case SPEAKING:   return {255,140,220,  50,18, 60, 240,110,200, 1.00f, "speaking"};

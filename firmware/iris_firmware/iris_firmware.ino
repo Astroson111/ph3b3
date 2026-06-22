@@ -639,6 +639,7 @@ String ph3b3Chat(const String& message) {
       if (gShowReply) drawReplyOverlay();
       delay(50);
     }
+    if (!gBargeIn) gShowReply = false;  // playback complete — clear text now
   } else {
     http.end();
   }
