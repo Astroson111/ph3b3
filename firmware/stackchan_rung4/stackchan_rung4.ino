@@ -394,6 +394,13 @@ void setup() {
 // ── loop ──────────────────────────────────────────────────────────────────────
 void loop() {
     M5StackChan.update();
+
+    // Side-button hold (≥600ms) → safe-home servos then PMIC power-off
+    if (M5.BtnPWR.wasHold()) {
+        safeHome();
+        M5.Power.powerOff();
+    }
+
     wifiSupervisorTick();
 
     crescentMenu.update();  // updates g_overlayOpen + handles mode-switch taps
