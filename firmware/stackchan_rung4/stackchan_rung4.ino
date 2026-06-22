@@ -213,36 +213,113 @@ static KaraokeApp   karaokeApp;
 static GhostApp     ghostApp;
 
 // ── Servo constants ───────────────────────────────────────────────────────────
-static const int TILT_HOME = 450;
-static const int TILT_MIN  =  50;
-static const int TILT_MAX  = 850;
+static const int TILT_HOME    = 450;   // 45.0° — physical center for pitch
+static const int TILT_MIN     =  50;   // 5.0°  — rated floor (BSP allows 0, but 5° is spec)
+static const int TILT_MAX     = 850;   // 85.0° — rated ceiling (BSP allows 900 = 90°)
+// YAW_SAFE_MAX: BSP allows ±1280 (±128°). Physical build may be tighter due to cable routing.
+// 700 (70°) is a conservative safe default; tune up after verifying mechanical stop on your unit.
+static const int YAW_SAFE_MAX = 700;
 
-// ── Body language ─────────────────────────────────────────────────────────────
+// ── Rung 0 — lookAtNormalized safe wrapper ────────────────────────────────────
+// BSP maps [-1,+1] linearly to its own angle limits: pitch 0–900 (0°–90°), yaw ±1280 (±128°).
+// That overshoots rated pitch by 5° at both ends. This wrapper pre-scales inputs so
+// ±1.0 arrives at exactly the rated limits (TILT_MIN–TILT_MAX for pitch, ±YAW_SAFE_MAX for yaw).
+//
+// Verified endpoints (TILT_MIN=50, TILT_MAX=850, BSP pitch range=900):
+//   y=+1.0 → pre-scaled y=+0.889 → BSP pitch = 850 (85.0°) ✓
+//   y=-1.0 → pre-scaled y=-0.889 → BSP pitch =  50 (5.0°)  ✓
+//   y= 0.0 → pre-scaled y= 0.0   → BSP pitch = 450 (45.0°) ✓  (centers align)
+//   x=+1.0 → pre-scaled x=+0.547 → BSP yaw   = 700 (70.0°) ✓
+//   x=-1.0 → pre-scaled x=-0.547 → BSP yaw   =-700 (-70.0°) ✓
+static void lookAtNormalizedSafe(float x, float y, int speed = 500) {
+    constexpr float pitchScale = (float)(TILT_MAX - TILT_MIN) / 900.0f;   // 800/900 ≈ 0.889
+    constexpr float yawScale   = (float)YAW_SAFE_MAX / 1280.0f;            // 700/1280 ≈ 0.547
+    M5StackChan.Motion.lookAtNormalized(x * yawScale, y * pitchScale, speed);
+}
+
+// ── Rung 2 — listening orient target (settable; Beast 2 / camera swaps source) ─
+// Units: decidegrees. Call setListenTarget() from vision/camera code when available.
+static int _listenYaw   = 0;          // 0 = front-center
+static int _listenPitch = TILT_HOME;  // 45° = level gaze
+
+void setListenTarget(int yawDec, int pitchDec) {
+    _listenYaw   = constrain(yawDec,   -YAW_SAFE_MAX, YAW_SAFE_MAX);
+    _listenPitch = constrain(pitchDec, TILT_MIN,       TILT_MAX);
+}
+
+// ── Body language state ───────────────────────────────────────────────────────
 static Ph3b3Face::State _lastBLState = Ph3b3Face::BOOT;
+static uint32_t _scanNextMs  = 0;   // Rung 1: next idle waypoint time
+static uint32_t _thinkNextMs = 0;   // Rung 3: next thinking drift time
+static uint32_t _speakNextMs = 0;   // Rung 4: next speaking emphasis time
 
+// applyBodyLanguage — fires once on state transition; sets initial pose + scan timers.
 static void applyBodyLanguage(Ph3b3Face::State s) {
+    if (face.isGazeLocked()) return;
     if (s == _lastBLState) return;
     _lastBLState = s;
+    uint32_t now = millis();
     switch (s) {
         case Ph3b3Face::LISTENING:
-            M5StackChan.Motion.moveX(200, 300);
-            M5StackChan.Motion.moveY(TILT_HOME + 30, 200);
+            // Rung 2: stop scan, orient to speaker target (default = front-center).
+            M5StackChan.Motion.moveX(_listenYaw,   350);
+            M5StackChan.Motion.moveY(_listenPitch, 350);
             break;
         case Ph3b3Face::THINKING:
-            M5StackChan.Motion.moveX(0, 200);
-            M5StackChan.Motion.moveY(TILT_HOME - 50, 200);
+            // Rung 3: initial contemplative pose — slight up-right gaze, then drift.
+            M5StackChan.Motion.moveX(160, 200);    // 16° off-axis
+            M5StackChan.Motion.moveY(390, 180);    // 39° — soft upward look
+            _thinkNextMs = now + 1800;             // let pose settle before first drift
             break;
         case Ph3b3Face::SPEAKING:
-            M5StackChan.Motion.moveX(0, 200);
-            M5StackChan.Motion.moveY(TILT_HOME, 200);
+            // Rung 4: near-home for speaking; subtle life via updateBodyLanguageScan.
+            M5StackChan.Motion.moveX(0, 280);
+            M5StackChan.Motion.moveY(TILT_HOME, 280);
+            _speakNextMs = now + 800;              // first emphasis after 800ms
             break;
-        case Ph3b3Face::IDLE:
-        case Ph3b3Face::CONNECTING:
-        case Ph3b3Face::ERROR:
-        default:
-            M5StackChan.Motion.moveX(0, 200);
+        default:  // IDLE, CONNECTING, ERROR, BOOT
+            // Rung 1: home on entry, then scan begins after brief grace.
+            M5StackChan.Motion.moveX(0, 220);
             M5StackChan.Motion.moveY(TILT_HOME, 200);
+            _scanNextMs = now + 1800;              // let home move complete before scanning
             break;
+    }
+}
+
+// updateBodyLanguageScan — called every loop(); drives continuous per-state motion.
+// State-machine approach: each state has its own timer and waypoint picker.
+static void updateBodyLanguageScan(Ph3b3Face::State s) {
+    if (face.isGazeLocked()) return;
+    uint32_t now = millis();
+
+    if (s == Ph3b3Face::IDLE || s == Ph3b3Face::CONNECTING) {
+        // Rung 1 — mellow curious scan: slow pan with varied dwell + occasional tilt.
+        // Range: ±35° yaw (350 dec), 42°–49° pitch (420–490 dec). Calm, unhurried.
+        if (now < _scanNextMs) return;
+        int yTgt = random(-350, 351);
+        int pTgt = random(420, 491);
+        M5StackChan.Motion.moveX(yTgt, 160);    // slow pan
+        M5StackChan.Motion.moveY(pTgt, 130);    // very slow tilt
+        _scanNextMs = now + 2500 + random(3000); // 2.5–5.5s dwell (not metronome)
+
+    } else if (s == Ph3b3Face::THINKING) {
+        // Rung 3 — contemplative drift: small slow movements after initial pose.
+        if (now < _thinkNextMs) return;
+        int yTgt = 160 + random(-100, 101);     // ±10° around the off-axis position
+        int pTgt = 390 + random(-25, 36);       // 36.5°–42.5° gentle wander
+        M5StackChan.Motion.moveX(yTgt, 130);
+        M5StackChan.Motion.moveY(pTgt, 110);
+        _thinkNextMs = now + 1200 + random(1000); // 1.2–2.2s
+
+    } else if (s == Ph3b3Face::SPEAKING) {
+        // Rung 4 — speaking emphasis: gentle pan life on phrase boundaries.
+        // NOT syllable-synced — just enough motion to read as alive, not a statue.
+        if (now < _speakNextMs) return;
+        int yTgt = random(-200, 201);           // ±20° gentle sweep
+        int pTgt = TILT_HOME + random(-25, 26); // ±2.5° subtle nod
+        M5StackChan.Motion.moveX(yTgt, 210);
+        M5StackChan.Motion.moveY(pTgt, 190);
+        _speakNextMs = now + 900 + random(800);  // 0.9–1.7s between emphasis beats
     }
 }
 
@@ -279,6 +356,7 @@ void setup() {
     d.drawString("homing servos...", d.width() / 2, d.height() / 2 + 16);
 
     safeHome();
+    randomSeed(micros());   // vary scan waypoints across boots
     Serial.println("[rung4] homed");
 
     // WiFi — blocking connect up to 12 s on first boot cred
@@ -324,6 +402,19 @@ void loop() {
     appMgr.draw();          // app overlays (e.g. karaoke lyrics)
     crescentMenu.draw();    // mode panel slides over everything when open
     applyBodyLanguage(face.getState());
+    updateBodyLanguageScan(face.getState());
+
+    // Servo gaze consumer — fires one command on lock/unlock edge; same target as pupils.
+    // Uses safe wrapper so ±1.0 stays within rated servo travel.
+    {
+        static bool sPrevGazeLocked = false;
+        bool gazeLocked = face.isGazeLocked();
+        if (gazeLocked && !sPrevGazeLocked)
+            lookAtNormalizedSafe(face.getGazeYaw(), face.getGazePitch(), 300);
+        else if (!gazeLocked && sPrevGazeLocked)
+            M5StackChan.Motion.goHome(300);
+        sPrevGazeLocked = gazeLocked;
+    }
 
     delay(16);
 }

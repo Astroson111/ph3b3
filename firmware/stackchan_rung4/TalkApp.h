@@ -69,7 +69,6 @@ public:
         // Reserve top-left 60×60 px — crescent tab zone handled by CrescentMenu
         bool tapped = (touching && !_wasTouch) && !(tx < 60 && ty < 60);
         _wasTouch = touching;
-
         // ── State machine ──────────────────────────────────────────────────────
         switch (_phase) {
 
@@ -180,7 +179,16 @@ public:
             bool full     = (elapsed >= VAD_MAX_MS || _pttSamples >= PTT_MAX);
             bool convIdle = (_inConversation && _convLastValidMs > 0 &&
                              millis() - _convLastValidMs > CONV_IDLE_MS);
-            if (tapped || vad || full || convIdle) {
+            if (tapped && _inConversation && millis() - _recStartMs >= VAD_MIN_MS) {
+                // Tap during active conversation loop → exit cleanly without dispatching.
+                // VAD_MIN_MS guard (600ms) rejects capacitive ghost bounces from the
+                // entry tap, which arrive within ~100ms and would otherwise immediately
+                // exit the conversation before any speech is captured.
+                M5.Mic.end();
+                if (_pttBuf) { heap_caps_free(_pttBuf); _pttBuf = nullptr; }
+                _pttSamples = 0;
+                _endConversation();
+            } else if (vad || full || convIdle || tapped) {
                 _stopRecordingAndDispatch();
             }
             break;
@@ -235,7 +243,7 @@ private:
     // VAD consts — millis()-based so timing is correct regardless of M5.Mic.record() blocking
     static constexpr uint32_t VAD_CALIBRATE_MS = 200;    // noise floor window
     static constexpr uint32_t VAD_MIN_MS       = 600;    // minimum recording before VAD fires
-    static constexpr uint32_t VAD_SILENCE_MS   = 900;    // continuous silence → end turn (was 1800 — too long for noisy room)
+    static constexpr uint32_t VAD_SILENCE_MS   = 700;    // 700ms: was 1800 (laggy) -> 900 (still long) -> 500 (clipped natural pauses) -> 700, tuned for hesitant first-time speakers at the public demo.
     static constexpr uint32_t VAD_MAX_MS       = 12000;  // hard time cap (backup for PTT_MAX)
     static constexpr float    VAD_THRESH_MULT  = 5.0f;   // threshold = noise_floor × this (was 3.0 — ambient spikes kept resetting window)
     static constexpr float    VAD_FLOOR_MIN    = 0.003f; // abs. minimum threshold
@@ -317,6 +325,7 @@ private:
         _awaitCalibEnd = millis() + VAD_CALIBRATE_MS;
         _wasTouch      = false;  // tap that ended previous recording must not suppress first new tap
         face.setState(Ph3b3Face::IDLE);
+        face.clearBubble();
         _phase = PH_AWAITING;
         Serial.println("[await] armed — waiting for speech");
     }
@@ -354,6 +363,7 @@ private:
         M5.Mic.begin();
 
         face.setState(Ph3b3Face::LISTENING);
+        face.clearBubble();
         _phase = PH_RECORDING;
     }
 
@@ -391,8 +401,11 @@ private:
                       numSamples, _sessionId.c_str(), (int)_inConversation,
                       _convLastValidMs ? millis() - _convLastValidMs : 0);
 
-        // Idle check before expensive work — if conversation timed out, skip entirely
-        if (_inConversation && _convLastValidMs > 0 &&
+        // Idle check: only abort pre-dispatch if we're not in a conversation loop.
+        // In the conversation loop, the re-arm calls _startRecording() immediately —
+        // recording can run up to VAD_MAX_MS (12 s), which exceeds CONV_IDLE_MS.
+        // Unlimited loop exit is via tap or farewell phrase only.
+        if (!_inConversation && _convLastValidMs > 0 &&
             millis() - _convLastValidMs > CONV_IDLE_MS) {
             Serial.println("[D1] idle timeout at dispatch entry — ending conv");
             _endConversation();
@@ -482,6 +495,9 @@ private:
             return;
         }
 
+        // Gaze intent — on-device keyword match, no server contract change
+        if (_isGazeIntent(_heardText)) face.setGaze(0.0f, 0.0f);
+
         // Junk filter: short transcripts (noise artifacts) don't trigger /chat
         if (_isJunkTranscript(_heardText)) {
             Serial.printf("[talk] junk transcript '%s' — discarded\n", _heardText.c_str());
@@ -491,11 +507,14 @@ private:
             _startAwaiting(); return;  // always re-await; idle clock unchanged
         }
 
-        // Exit word detection — will end conversation after current SPEAK
-        _exitAfterTurn = _isExitWord(_heardText);
+        // Exit phrase detection — "goodbye" + Phoebe-name variant required; bare "goodbye" stays in loop
+        _exitAfterTurn = _isFarewellToName(_heardText);
 
         face.setState(Ph3b3Face::THINKING);
         face.update();
+        // Thinking tell — direct servo command: loop() is blocked here, can't use applyBodyLanguage.
+        M5StackChan.Motion.moveX(160, 200);   // 16° off-axis contemplative look
+        M5StackChan.Motion.moveY(390, 180);   // 39° — soft upward gaze
 
         // ── Step 3: POST /chat ────────────────────────────────────────────────
         Serial.printf("[D3] /chat heard='%s'\n", _heardText.c_str());
@@ -509,6 +528,7 @@ private:
             _bargeIn = false;
             _exitAfterTurn = false;
             if (ok) _convLastValidMs = millis();
+            face.releaseGaze();
             _startRecording();
             return;
         }
@@ -523,20 +543,17 @@ private:
             return;
         }
 
-        bool convIdle = (_inConversation && _convLastValidMs > 0 &&
-                         millis() - _convLastValidMs > CONV_IDLE_MS);
-
-        // Continuous loop: SPEAK done → re-arm always-listening (re-calibrate to clear TTS tail)
-        if (ok && _inConversation && !convIdle) {
-            Serial.println("[D5] CC re-arm → AWAIT");
-            _startAwaiting();
+        // Continuous loop: SPEAK done → re-arm directly to LISTENING (no ambient wait).
+        // Exit conditions are tap (handled in PH_RECORDING) and farewell phrase only.
+        if (ok && _inConversation) {
+            _convLastValidMs = millis();
+            face.releaseGaze();   // release any gaze lock so LISTENING settle fires in loop()
+            Serial.println("[D5] CC re-arm → LISTEN");
+            _startRecording();
             return;
         }
 
-        Serial.printf("[D5] conv end ok=%d convIdle=%d inConv=%d\n",
-                      (int)ok, (int)convIdle, (int)_inConversation);
-        // Conversation over (idle timeout, error, or normal end)
-        if (!ok || convIdle) _inConversation = false;
+        Serial.printf("[D5] conv end ok=%d inConv=%d\n", (int)ok, (int)_inConversation);
         face.setState(ok ? Ph3b3Face::IDLE : Ph3b3Face::ERROR);
         _phase = ok ? PH_DONE : PH_ERROR;
     }
@@ -547,20 +564,36 @@ private:
         return t.length() < (uint32_t)JUNK_MIN_LEN;
     }
 
-    bool _isExitWord(const String& text) {
+    bool _isGazeIntent(const String& text) {
+        String t = text; t.toLowerCase();
+        return t.indexOf("look at me")  >= 0
+            || t.indexOf("face me")     >= 0
+            || t.indexOf("eyes up")     >= 0
+            || t.indexOf("look here")   >= 0;
+    }
+
+    bool _isPhoebeName(const String& t) {
+        // t must already be lowercased; covers common Whisper transcription variants
+        return t.indexOf("phoebe")  >= 0
+            || t.indexOf("pheobe")  >= 0
+            || t.indexOf("phoeby")  >= 0
+            || t.indexOf("feeby")   >= 0
+            || t.indexOf("phoebee") >= 0
+            || t.indexOf("phoebi")  >= 0
+            || t.indexOf("feebs")   >= 0
+            || t.indexOf("foebe")   >= 0
+            || t.indexOf("pheeby")  >= 0
+            || t.indexOf("feebe")   >= 0;
+    }
+
+    bool _isFarewellToName(const String& text) {
         String t = text; t.toLowerCase(); t.trim();
-        if (t.indexOf("goodbye")          >= 0) return true;
-        if (t.indexOf("bye")              >= 0) return true;
-        if (t.indexOf("stop listening")    >= 0) return true;
-        if (t.indexOf("that's all")       >= 0) return true;
-        if (t.indexOf("thats all")        >= 0) return true;
-        if (t.indexOf("thanks phoebe")    >= 0) return true;
-        if (t.indexOf("thank you phoebe") >= 0) return true;
-        if (t.indexOf("see you later")    >= 0) return true;
-        return false;
+        bool hasGoodbye = t.indexOf("goodbye") >= 0 || t.indexOf("good bye") >= 0;
+        return hasGoodbye && _isPhoebeName(t);
     }
 
     void _endConversation() {
+        face.releaseGaze();
         _inConversation  = false;
         _exitAfterTurn   = false;
         _convLastValidMs = 0;
@@ -609,10 +642,16 @@ private:
         const char* resp = jdoc["response"];
         String responseText = (resp && *resp) ? String(resp) : "";
 
+        uint32_t speakSweepMs = 0;  // speaking emphasis timer; first sweep after 800ms
         if (responseText.length() > 0) {
             _applyMoodReaction(responseText);
             face.setState(Ph3b3Face::SPEAKING);
+            face.setBubble(responseText);
             face.update();
+            // Speaking start pose — direct command (loop() blocked by _doChatAndPlay).
+            M5StackChan.Motion.moveX(0, 280);
+            M5StackChan.Motion.moveY(450, 280);
+            speakSweepMs = millis() + 800;
         }
 
         // ── Phase B: stream-decode "audio":"<base64>" field ──────────────────
@@ -706,6 +745,12 @@ private:
                         _bargeIn   = true;
                         keepGoing  = false;
                         break;
+                    }
+                    // Speaking emphasis: gentle pan/tilt on phrase boundaries during playback.
+                    if (speakSweepMs > 0 && millis() >= speakSweepMs) {
+                        M5StackChan.Motion.moveX(random(-200, 201), 210);
+                        M5StackChan.Motion.moveY(450 + random(-25, 26), 190);
+                        speakSweepMs = millis() + 900 + random(800);
                     }
                     delay(1);
                 }
