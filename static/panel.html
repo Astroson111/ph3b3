@@ -304,6 +304,85 @@
     .net-msg.ok  { color: var(--ok); }
     .net-msg.err { color: var(--err); }
 
+    /* ── Karaoke ── */
+    .kar-hero { display:flex; align-items:center; gap:.9rem;
+      background:linear-gradient(135deg,rgba(43,15,95,.95),rgba(10,3,26,.98)); }
+    .kar-title { font-size:1rem; font-weight:700; letter-spacing:.15em;
+      background:linear-gradient(90deg,var(--magenta),var(--cyan));
+      -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+    .kar-tagline { font-size:.67rem; color:var(--dim); font-style:italic; margin-top:.15rem; }
+    .kar-drop { border:2px dashed rgba(124,58,237,.42); border-radius:10px;
+      padding:1.55rem 1rem; text-align:center; position:relative; cursor:pointer;
+      transition:border-color .2s,box-shadow .2s; }
+    .kar-drop.dragover,.kar-drop:focus-within { border-color:var(--cyan);
+      box-shadow:0 0 18px rgba(0,229,255,.14); }
+    .kar-drop-lbl { font-size:.81rem; color:var(--dim); pointer-events:none; }
+    .kar-drop input[type=file] { position:absolute; inset:0; opacity:0; cursor:pointer;
+      width:100%; height:100%; }
+    .kar-file-name { font-size:.73rem; margin-top:.38rem; color:var(--cyan);
+      font-family:'SF Mono','Cascadia Code','Consolas',monospace;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .kar-preset { display:flex; border-radius:8px; overflow:hidden;
+      border:1px solid var(--border); margin:.6rem 0; }
+    .kar-preset-btn { flex:1; padding:.46rem; border:none; cursor:pointer;
+      font-family:inherit; font-size:.76rem; font-weight:700; letter-spacing:.04em;
+      background:rgba(15,6,36,.7); color:var(--dim); transition:background .15s,color .15s; }
+    .kar-preset-btn.active { background:linear-gradient(135deg,var(--magenta),#b5006e); color:#fff; }
+    .kar-convert { width:100%; padding:.62rem; border:none; border-radius:8px; cursor:pointer;
+      font-family:inherit; font-size:.87rem; font-weight:700; letter-spacing:.05em;
+      background:linear-gradient(135deg,var(--purple),#4c1d95); color:#fff;
+      display:flex; align-items:center; justify-content:center; gap:.42rem;
+      transition:opacity .15s; }
+    .kar-convert:disabled { opacity:.4; cursor:not-allowed; }
+    .kar-convert:not(:disabled):hover { opacity:.85; }
+    .kar-log { display:none; margin-top:.5rem; padding:.48rem .65rem;
+      background:rgba(10,3,26,.8); border:1px solid rgba(124,58,237,.2); border-radius:8px;
+      font-family:'SF Mono','Cascadia Code','Consolas',monospace;
+      font-size:.72rem; max-height:90px; overflow-y:auto; color:var(--dim); }
+    .kar-log.vis { display:block; }
+    .kar-log-ok  { color:var(--ok); }
+    .kar-log-err { color:var(--err); }
+    .kar-sd { font-size:.67rem; color:var(--dim);
+      font-family:'SF Mono','Cascadia Code','Consolas',monospace; margin-bottom:.45rem; }
+    .kar-empty { text-align:center; padding:1.4rem; color:var(--dim);
+      font-size:.81rem; font-style:italic; line-height:1.65; }
+    .kar-track { padding:.5rem .62rem; border-radius:8px; margin-bottom:.38rem;
+      background:rgba(15,6,36,.55); border:1px solid rgba(124,58,237,.2);
+      border-left:3px solid transparent; transition:border-left-color .2s; }
+    .kar-track.on-sd { border-left-color:var(--cyan); }
+    .kar-track-top { display:flex; align-items:center; gap:.38rem; flex-wrap:wrap; }
+    .kar-name { font-family:'SF Mono','Cascadia Code','Consolas',monospace;
+      font-size:.81rem; font-weight:700; color:var(--text); flex:1 1 auto; }
+    .kar-bdg { font-size:.63rem; font-weight:700; padding:.08rem .34rem; border-radius:10px; }
+    .kar-bdg-sd  { background:rgba(0,229,255,.12); color:var(--cyan); border:1px solid rgba(0,229,255,.28); }
+    .kar-bdg-lrc { background:rgba(124,58,237,.14); color:#a78bfa; border:1px solid rgba(124,58,237,.28); }
+    .kar-bdg-sz  { color:var(--dim); font-size:.63rem; }
+    .kar-actions { display:flex; gap:.28rem; margin-top:.38rem; }
+    .kar-btn { font-family:inherit; font-size:.69rem; font-weight:700; padding:.19rem .52rem;
+      border-radius:6px; cursor:pointer; transition:opacity .15s; }
+    .kar-btn:disabled { opacity:.35; cursor:not-allowed; }
+    .kar-btn-edit { background:rgba(124,58,237,.14); border:1px solid var(--border); color:var(--dim); }
+    .kar-btn-push { background:rgba(0,229,255,.09); border:1px solid rgba(0,229,255,.28); color:var(--cyan); }
+    .kar-btn-del  { background:rgba(248,113,113,.07); border:1px solid rgba(248,113,113,.26); color:var(--err); }
+    .kar-lrc-wrap { display:none; margin-top:.48rem; border:2px solid var(--purple);
+      border-radius:10px; overflow:hidden; box-shadow:0 0 14px rgba(124,58,237,.22); }
+    .kar-lrc-wrap.open { display:block; }
+    .kar-lrc-hd { padding:.28rem .62rem; font-size:.65rem; font-weight:700; letter-spacing:.08em;
+      text-transform:uppercase;
+      background:linear-gradient(90deg,rgba(233,30,140,.78),rgba(0,229,255,.55)); color:#fff; }
+    .kar-lrc-ta { display:block; width:100%; border:none; outline:none; resize:none;
+      background:rgba(8,3,20,.92); color:var(--text);
+      font-family:'SF Mono','Cascadia Code','Consolas',monospace;
+      font-size:.76rem; line-height:1.55; padding:.6rem .68rem; min-height:116px; }
+    .kar-lrc-ft { display:flex; justify-content:flex-end; gap:.32rem; padding:.32rem .52rem;
+      background:rgba(15,6,36,.7); border-top:1px solid var(--border); }
+    .kar-lrc-save { font-family:inherit; font-size:.72rem; font-weight:700; padding:.23rem .62rem;
+      border-radius:6px; border:none; cursor:pointer;
+      background:linear-gradient(135deg,var(--purple),#4c1d95); color:#fff; }
+    .kar-lrc-cancel { font-family:inherit; font-size:.72rem; padding:.23rem .52rem;
+      border-radius:6px; border:1px solid var(--border); background:none; color:var(--dim); cursor:pointer; }
+    @media (prefers-reduced-motion:reduce) { .kar-drop,.kar-track { transition:none; } }
+
     /* ── Bottom tabs ── */
     .tabs {
       display: flex;
@@ -410,6 +489,48 @@
     <div class="ts" id="scNetTs"></div>
   </section>
 
+  <!-- KARAOKE -->
+  <section id="paneKaraoke" class="pane">
+
+    <div class="card kar-hero">
+      <svg width="44" height="44" viewBox="0 0 44 44" fill="none" style="flex-shrink:0;filter:drop-shadow(0 0 7px rgba(0,229,255,.55))">
+        <defs>
+          <mask id="kmask">
+            <circle cx="22" cy="22" r="17" fill="white"/>
+            <circle cx="30" cy="17" r="13" fill="black"/>
+          </mask>
+        </defs>
+        <circle cx="22" cy="22" r="17" fill="var(--cyan)" opacity=".88" mask="url(#kmask)"/>
+      </svg>
+      <div>
+        <div class="kar-title">KARAOKE</div>
+        <div class="kar-tagline">she's a world karaoke machine</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Prep</div>
+      <div class="kar-drop" id="karDrop">
+        <div class="kar-drop-lbl">🎵&ensp;Drop a track here · or Browse</div>
+        <div class="kar-file-name" id="karFileName"></div>
+        <input type="file" id="karFile" accept="audio/*">
+      </div>
+      <div class="kar-preset">
+        <button class="kar-preset-btn" data-preset="voice">VOICE&ensp;16kHz mono</button>
+        <button class="kar-preset-btn active" data-preset="cd">CD&ensp;44.1kHz stereo</button>
+      </div>
+      <button class="kar-convert" id="karConvert">Convert + Prep</button>
+      <div class="kar-log" id="karLog"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Library</div>
+      <div class="kar-sd" id="karSd"></div>
+      <div id="karLibrary"><div class="kar-empty">Loading…</div></div>
+    </div>
+
+  </section>
+
   <!-- DEVICES -->
   <section id="paneDevices" class="pane">
     <div class="card">
@@ -440,6 +561,10 @@
   <button class="tab" data-pane="Stackchan">
     <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="10" r="2"/><circle cx="15" cy="10" r="2"/><path d="M8 16s1 2 4 2 4-2 4-2"/></svg>
     SC
+  </button>
+  <button class="tab" data-pane="Karaoke">
+    <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+    Karaoke
   </button>
   <button class="tab" data-pane="Devices">
     <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -808,6 +933,184 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
     scNetMsg.className = 'net-msg err';
   }
 });
+
+// ── Karaoke ───────────────────────────────────────────────────────────────────
+(function () {
+  let karPreset = 'cd';
+
+  document.querySelectorAll('.kar-preset-btn').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('.kar-preset-btn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    karPreset = b.dataset.preset;
+  }));
+
+  const dropEl    = document.getElementById('karDrop');
+  const fileIn    = document.getElementById('karFile');
+  const fileNameEl = document.getElementById('karFileName');
+  let _droppedFile = null;
+
+  dropEl.addEventListener('dragover',  e => { e.preventDefault(); dropEl.classList.add('dragover'); });
+  dropEl.addEventListener('dragleave', () => dropEl.classList.remove('dragover'));
+  dropEl.addEventListener('drop', e => {
+    e.preventDefault(); dropEl.classList.remove('dragover');
+    const f = e.dataTransfer.files[0];
+    if (f) { _droppedFile = f; fileNameEl.textContent = f.name; }
+  });
+  fileIn.addEventListener('change', () => {
+    _droppedFile = null;
+    fileNameEl.textContent = fileIn.files[0]?.name || '';
+  });
+
+  const logEl = document.getElementById('karLog');
+  function logClear() { logEl.innerHTML = ''; logEl.classList.remove('vis'); }
+  function logLine(text, cls) {
+    const d = document.createElement('div');
+    if (cls) d.className = cls;
+    d.textContent = text;
+    logEl.appendChild(d);
+    logEl.classList.add('vis');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  const convertBtn = document.getElementById('karConvert');
+  convertBtn.addEventListener('click', async () => {
+    const file = _droppedFile || fileIn.files[0];
+    if (!file) { logClear(); logLine('Pick a track first.', 'kar-log-err'); return; }
+    convertBtn.disabled = true;
+    convertBtn.innerHTML =
+      '<div class="bars"><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>&ensp;Converting…';
+    logClear();
+    logLine('Uploading…');
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('preset', karPreset);
+    try {
+      const res  = await fetch('/karaoke/convert', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) { logLine(data.detail || 'Server error', 'kar-log-err'); return; }
+      (data.log || []).forEach(l =>
+        logLine(l, l.startsWith('✓') ? 'kar-log-ok' : l.startsWith('✗') ? 'kar-log-err' : ''));
+      logLine('Ready.', 'kar-log-ok');
+      await refreshLibrary();
+    } catch (e) {
+      logLine('Error: ' + e.message, 'kar-log-err');
+    } finally {
+      convertBtn.disabled = false;
+      convertBtn.innerHTML = 'Convert + Prep';
+    }
+  });
+
+  const libEl = document.getElementById('karLibrary');
+  const sdEl  = document.getElementById('karSd');
+
+  function fmtBytes(n) {
+    if (n < 1048576) return (n / 1024).toFixed(0) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+  }
+
+  async function refreshLibrary() {
+    try {
+      const data = await fetch('/karaoke/library').then(r => r.json());
+      sdEl.textContent = data.sd_path ? '→ SD: ' + data.sd_path : 'No SD card detected';
+      if (!data.tracks.length) {
+        libEl.innerHTML = '<div class="kar-empty">No tracks yet —<br>drop a song above and let her sing.</div>';
+        return;
+      }
+      libEl.innerHTML = '';
+      data.tracks.forEach(t => libEl.appendChild(buildRow(t)));
+    } catch {
+      libEl.innerHTML = '<div class="kar-empty">Cannot reach server.</div>';
+    }
+  }
+
+  function buildRow(t) {
+    const div = document.createElement('div');
+    div.className = 'kar-track' + (t.on_sd ? ' on-sd' : '');
+    div.innerHTML = `
+      <div class="kar-track-top">
+        <span class="kar-name">${t.name}.wav</span>
+        <span class="kar-bdg kar-bdg-sz">${fmtBytes(t.wav_bytes)}</span>
+        ${t.lrc_exists ? '<span class="kar-bdg kar-bdg-lrc">LRC</span>' : ''}
+        ${t.on_sd      ? '<span class="kar-bdg kar-bdg-sd">ON SD</span>'  : ''}
+      </div>
+      <div class="kar-actions">
+        <button class="kar-btn kar-btn-edit">Edit LRC</button>
+        <button class="kar-btn kar-btn-push">Push to SD</button>
+        <button class="kar-btn kar-btn-del">Delete</button>
+      </div>
+      <div class="kar-lrc-wrap">
+        <div class="kar-lrc-hd">✦ lyrics · ${t.name}</div>
+        <textarea class="kar-lrc-ta" rows="7" spellcheck="false"></textarea>
+        <div class="kar-lrc-ft">
+          <button class="kar-lrc-cancel">Cancel</button>
+          <button class="kar-lrc-save">Save LRC</button>
+        </div>
+      </div>`;
+
+    const editBtn   = div.querySelector('.kar-btn-edit');
+    const pushBtn   = div.querySelector('.kar-btn-push');
+    const delBtn    = div.querySelector('.kar-btn-del');
+    const lrcWrap   = div.querySelector('.kar-lrc-wrap');
+    const lrcTa     = div.querySelector('.kar-lrc-ta');
+    const saveBtn   = div.querySelector('.kar-lrc-save');
+    const cancelBtn = div.querySelector('.kar-lrc-cancel');
+
+    editBtn.addEventListener('click', async () => {
+      if (lrcWrap.classList.contains('open')) { lrcWrap.classList.remove('open'); return; }
+      editBtn.disabled = true;
+      try {
+        const r = await fetch(`/karaoke/lrc/${t.name}`);
+        lrcTa.value = r.ok ? (await r.json()).text || '' : '';
+      } catch { lrcTa.value = ''; }
+      lrcWrap.classList.add('open');
+      lrcTa.focus();
+      editBtn.disabled = false;
+    });
+
+    cancelBtn.addEventListener('click', () => lrcWrap.classList.remove('open'));
+
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      try {
+        await fetch(`/karaoke/lrc/${t.name}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: lrcTa.value }),
+        });
+        lrcWrap.classList.remove('open');
+        await refreshLibrary();
+      } finally { saveBtn.disabled = false; }
+    });
+
+    pushBtn.addEventListener('click', async () => {
+      pushBtn.disabled = true; pushBtn.textContent = '…';
+      try {
+        const res = await fetch(`/karaoke/push/${t.name}`, { method: 'POST' });
+        const d   = await res.json();
+        if (!res.ok) alert(d.detail || 'Push failed');
+        else await refreshLibrary();
+      } finally { pushBtn.disabled = false; pushBtn.textContent = 'Push to SD'; }
+    });
+
+    delBtn.addEventListener('click', async () => {
+      if (!confirm(`Delete "${t.name}" from library?`)) return;
+      delBtn.disabled = true;
+      try {
+        await fetch(`/karaoke/track/${t.name}`, { method: 'DELETE' });
+        await refreshLibrary();
+      } finally { delBtn.disabled = false; }
+    });
+
+    return div;
+  }
+
+  // refresh when pane becomes active
+  document.querySelector('.tab[data-pane="Karaoke"]')
+    ?.addEventListener('click', refreshLibrary);
+
+  // initial load if this pane is shown on page load (handles future default tab changes)
+  if (document.getElementById('paneKaraoke').classList.contains('active')) refreshLibrary();
+})();
 
 // ── service worker ────────────────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
