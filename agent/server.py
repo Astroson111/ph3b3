@@ -17,7 +17,7 @@ import getpass
 import shutil
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 from dotenv import load_dotenv
@@ -35,6 +35,10 @@ AUTH_USER = os.getenv("PH3B3_USER", "admin")
 AUTH_PASS = os.getenv("PH3B3_PASSWORD", "")
 if not AUTH_PASS:
     logging.error("PH3B3_PASSWORD not set in .env — all requests will be refused until it is configured")
+
+_SESSION_COOKIE = "ph3b3_session"
+_SESSION_MAX_AGE = 86400 * 7          # 7 days
+_sessions: dict[str, str] = {}        # token → username (in-memory; resets on restart)
 
 OLLAMA_HOST  = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 HEAVY_MODEL  = os.getenv("PH3B3_HEAVY_MODEL", os.getenv("PH3B3_MODEL", "hermes3:latest"))
@@ -154,31 +158,51 @@ app.add_middleware(
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
-    # Let CORS preflights through — CORSMiddleware handles OPTIONS, not us.
+    # CORS preflights — let CORSMiddleware handle these.
     if request.method == "OPTIONS":
         return await call_next(request)
+
+    # Login / logout pages are public.
+    if request.url.path in ("/login", "/logout"):
+        return await call_next(request)
+
     if not AUTH_PASS:
         return Response(
             content="Ph3b3 is not configured for access — set PH3B3_PASSWORD in .env",
             status_code=503,
         )
-    auth = request.headers.get("Authorization", "")
+
     authed = False
-    if auth.startswith("Basic "):
-        try:
-            creds = base64.b64decode(auth[6:]).decode("utf-8", errors="replace")
-            user, _, pw = creds.partition(":")
-            if (secrets.compare_digest(user.encode(), AUTH_USER.encode()) and
-                    secrets.compare_digest(pw.encode(), AUTH_PASS.encode())):
-                authed = True
-        except Exception:
-            pass
+
+    # 1. Session cookie — browser clients that went through /login.
+    token = request.cookies.get(_SESSION_COOKIE, "")
+    if token and token in _sessions:
+        authed = True
+
+    # 2. HTTP Basic Auth — curl / device / API clients.
     if not authed:
+        auth_hdr = request.headers.get("Authorization", "")
+        if auth_hdr.startswith("Basic "):
+            try:
+                creds = base64.b64decode(auth_hdr[6:]).decode("utf-8", errors="replace")
+                user, _, pw = creds.partition(":")
+                if (secrets.compare_digest(user.encode(), AUTH_USER.encode()) and
+                        secrets.compare_digest(pw.encode(), AUTH_PASS.encode())):
+                    authed = True
+            except Exception:
+                pass
+
+    if not authed:
+        # Browser requests (Accept: text/html) → redirect to login page.
+        if "text/html" in request.headers.get("Accept", ""):
+            return RedirectResponse(url="/login", status_code=303)
+        # API / device clients → 401 with WWW-Authenticate challenge.
         return Response(
             content="Unauthorized",
             status_code=401,
             headers={"WWW-Authenticate": 'Basic realm="Ph3b3"'},
         )
+
     device = request.headers.get("X-Ph3b3-Device", "unidentified")
     _device_roster[device] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return await call_next(request)
@@ -1203,6 +1227,122 @@ async def karaoke_attribution(name: str):
     if not attr_file.exists():
         raise HTTPException(status_code=404, detail=f"No attribution for '{name}'")
     return {"attribution": json.loads(attr_file.read_text())}
+
+
+def _login_html(error: bool = False) -> str:
+    err_block = (
+        '<div class="login-err">Wrong username or password.</div>' if error else ""
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0f0624">
+  <title>Ph3b3 — Login</title>
+  <style>
+    :root{{--bg:#0f0624;--surface:rgba(43,15,95,.75);--border:rgba(124,58,237,.32);
+      --purple:#7c3aed;--magenta:#e91e8c;--cyan:#00e5ff;--text:#e8d5ff;--dim:#9d7eca;
+      --err:#f87171;}}
+    *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0;}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+      background-color:var(--bg);
+      background-image:linear-gradient(45deg,transparent 48%,rgba(0,229,255,.045) 49%,rgba(0,229,255,.045) 51%,transparent 52%),
+        linear-gradient(-45deg,transparent 48%,rgba(247,37,133,.045) 49%,rgba(247,37,133,.045) 51%,transparent 52%);
+      background-size:28px 28px;color:var(--text);min-height:100vh;
+      display:flex;align-items:center;justify-content:center;}}
+    .card{{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+      padding:2rem 1.75rem;width:min(340px,90vw);backdrop-filter:blur(8px);
+      -webkit-backdrop-filter:blur(8px);}}
+    .logo{{display:flex;align-items:center;gap:.75rem;margin-bottom:1.4rem;}}
+    .logo-moon svg{{filter:drop-shadow(0 0 7px rgba(0,229,255,.55));}}
+    .logo-title{{font-size:1.1rem;font-weight:700;letter-spacing:.15em;
+      background:linear-gradient(90deg,var(--magenta),var(--cyan));
+      -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}}
+    .logo-sub{{font-size:.67rem;color:var(--dim);font-style:italic;margin-top:.12rem;}}
+    label{{display:block;font-size:.72rem;font-weight:700;letter-spacing:.06em;
+      text-transform:uppercase;color:var(--dim);margin-bottom:.32rem;margin-top:.9rem;}}
+    label:first-of-type{{margin-top:0;}}
+    input{{width:100%;background:rgba(43,15,95,.6);border:1px solid var(--border);
+      border-radius:8px;padding:.6rem .8rem;color:var(--text);font-size:.9rem;
+      outline:none;font-family:inherit;}}
+    input:focus{{border-color:var(--purple);}}
+    .login-err{{margin-top:.75rem;padding:.44rem .7rem;border-radius:8px;font-size:.78rem;
+      color:var(--err);background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.28);}}
+    button{{width:100%;margin-top:1.2rem;padding:.65rem;border:none;border-radius:8px;
+      cursor:pointer;font-family:inherit;font-size:.9rem;font-weight:700;letter-spacing:.04em;
+      background:linear-gradient(135deg,var(--magenta),#b5006e);color:#fff;
+      transition:opacity .15s;}}
+    button:hover{{opacity:.85;}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <span class="logo-moon">
+        <svg width="36" height="36" viewBox="0 0 44 44" fill="none">
+          <defs><mask id="lm"><circle cx="22" cy="22" r="17" fill="white"/>
+            <circle cx="30" cy="17" r="13" fill="black"/></mask></defs>
+          <circle cx="22" cy="22" r="17" fill="#00e5ff" opacity=".88" mask="url(#lm)"/>
+        </svg>
+      </span>
+      <div>
+        <div class="logo-title">PH3B3</div>
+        <div class="logo-sub">made with soul, baby</div>
+      </div>
+    </div>
+    <form method="post" action="/login" autocomplete="on">
+      <label for="user">Username</label>
+      <input id="user" name="user" type="text" autocomplete="username"
+             autofocus required>
+      <label for="pass">Password</label>
+      <input id="pass" name="pass" type="password" autocomplete="current-password" required>
+      {err_block}
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+</body>
+</html>"""
+
+
+@app.get("/login")
+async def login_page(request: Request):
+    # Already logged in → go straight to panel.
+    token = request.cookies.get(_SESSION_COOKIE, "")
+    if token and token in _sessions:
+        return RedirectResponse(url="/panel", status_code=303)
+    return HTMLResponse(content=_login_html())
+
+
+@app.post("/login")
+async def login_submit(request: Request):
+    form = await request.form()
+    user = str(form.get("user", "")).strip()
+    pw   = str(form.get("pass", ""))
+    if (AUTH_PASS
+            and secrets.compare_digest(user.encode(), AUTH_USER.encode())
+            and secrets.compare_digest(pw.encode(),   AUTH_PASS.encode())):
+        token = secrets.token_hex(32)
+        _sessions[token] = user
+        resp = RedirectResponse(url="/panel", status_code=303)
+        resp.set_cookie(
+            _SESSION_COOKIE, token,
+            max_age=_SESSION_MAX_AGE,
+            httponly=True,
+            secure=bool(SSL_CERT),
+            samesite="strict",
+        )
+        return resp
+    return HTMLResponse(content=_login_html(error=True), status_code=401)
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    token = request.cookies.get(_SESSION_COOKIE, "")
+    _sessions.pop(token, None)
+    resp = RedirectResponse(url="/login", status_code=303)
+    resp.delete_cookie(_SESSION_COOKIE)
+    return resp
 
 
 @app.get("/panel")
