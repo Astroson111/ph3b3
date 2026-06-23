@@ -234,7 +234,11 @@ public:
         _exitAfterTurn  = false;
         // Drop the persistent TLS socket when leaving TalkApp — it will be
         // stale by the time the user returns anyway.
+        // Cap the TLS close-notify wait to 500ms: with setReuse(true) the socket
+        // may be live (keep-alive), and the default 30s timeout would freeze the
+        // display for up to 30 seconds while the TCP FIN/ACK completes.
         _http.end();
+        _tls.setTimeout(500);
         _tls.stop();
     }
 

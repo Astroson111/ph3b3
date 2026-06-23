@@ -51,7 +51,15 @@ public:
         Serial.printf("[KAR] face.begin(320,160) %lums\n", millis()-_karT); // [KAR] strip
         face.setState(Ph3b3Face::IDLE);
 
-        // Mic — start continuous short recordings for VU meter
+        // Mount SD once per mode entry — avoids 200-500ms SPI init blocking every tap.
+        _sdMounted = SD.begin(4);
+        if (!_sdMounted) Serial.println("[KAR] SD not found at init");
+        Serial.printf("[KAR] SD.begin %lums\n", millis()-_karT); // [KAR] strip
+
+        // 30ms settle: BCK/WS lines are shared with speaker I2S (GPIO 34/33).
+        // TalkApp.exit() calls Speaker.end() immediately before we run; without
+        // this delay Mic.begin() can initialise against an unsettled clock.
+        delay(30);
         M5.Mic.begin();
         Serial.printf("[KAR] Mic.begin %lums\n", millis()-_karT); // [KAR] strip
         Serial.printf("[KAR] KaraokeApp init done %lums total\n", millis()-_karT); // [KAR] strip
@@ -60,6 +68,7 @@ public:
     void exit() override {
         _stopPlayback();
         M5.Mic.end();
+        _sdMounted = false;  // reset so next init() re-mounts (handles card swap)
         face.begin();                           // restore full-screen face
     }
 
@@ -104,6 +113,7 @@ private:
     bool   _wasTouch  = false;
 
     // ── Playback ────────────────────────────────────────────────────────────
+    bool     _sdMounted    = false;
     File     _wavFile;
     int16_t  _audioBuf[2][K_CHUNK];
     int      _fillIdx      = 0;
@@ -172,9 +182,10 @@ private:
     }
 
     void _startPlayback() {
-        if (!SD.begin(4)) {
-            Serial.println("[karaoke] no SD card");
-            return;
+        if (!_sdMounted) {
+            // SD absent at init — try once more in case card was inserted after entry
+            _sdMounted = SD.begin(4);
+            if (!_sdMounted) { Serial.println("[karaoke] no SD card"); return; }
         }
         _wavFile = SD.open(TRACK_WAV);
         if (!_wavFile) {
