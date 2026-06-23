@@ -216,18 +216,13 @@ public:
     void draw() override {}
 
     void exit() override {
-        uint32_t _karT = millis(); // [KAR] strip
-        Serial.println("[KAR] TalkApp exit enter"); // [KAR] strip
         if (_phase == PH_RECORDING || _phase == PH_AWAITING) {
             M5.Mic.end();
-            Serial.printf("[KAR] Mic.end %lums\n", millis()-_karT); // [KAR] strip
         }
         if (_pttBuf) { heap_caps_free(_pttBuf); _pttBuf = nullptr; }
         M5.Speaker.stop(0);
         M5.Speaker.end();
-        Serial.printf("[KAR] Speaker.end %lums\n", millis()-_karT); // [KAR] strip
         face.begin();  // restore full-screen face
-        Serial.printf("[KAR] face.begin(full) %lums\n", millis()-_karT); // [KAR] strip
         _phase          = PH_IDLE;
         _sessionId      = "";  // will be regenerated on next init()
         _inConversation = false;
@@ -700,7 +695,6 @@ private:
                 }
                 face.setSpeakingLevel(min(1.0f, sqrtf(rms / chunkPos) * 5.0f));
                 // Queue next chunk as soon as there's room
-                if (M5.Speaker.isPlaying(0) == 0) Serial.println("[FB2] UNDERRUN-flush"); // strip
                 while (M5.Speaker.isPlaying(0) >= 2) delay(1);
                 if (!keepGoing) return;
                 M5.Speaker.playRaw(pcmBuf[fillIdx], chunkPos, 22050, false, 1, 0);
@@ -714,7 +708,6 @@ private:
                 // Race guard: pcmBuf[fillIdx] was queued two iterations ago and may
                 // still be playing. Wait until it leaves the queue before overwriting it.
                 if (chunkPos == 0) {
-                    if (M5.Speaker.isPlaying(0) == 0) Serial.println("[FB2] UNDERRUN-push"); // strip
                     while (M5.Speaker.isPlaying(0) >= 2) delay(1);
                 }
                 pcmBuf[fillIdx][chunkPos++] = (int16_t)((b << 8) | halfLo);
@@ -749,9 +742,7 @@ private:
                 face.update();
 
                 uint32_t deadline = millis() + 90000;
-                uint32_t _fb2Max = 0, _fb2FaceMax = 0, _fb2N = 0; // [FB2] strip
                 while (keepGoing && millis() < deadline) {
-                    uint32_t _fb2T0 = millis(); // [FB2] strip
                     // Drain all available TCP bytes before doing any UI work —
                     // single-byte reads with M5.update() between each byte was
                     // too slow (≈200 chars/s) to sustain 22050 Hz audio decode.
@@ -760,17 +751,9 @@ private:
                     }
                     // Touch/face update only when TCP buffer is momentarily empty
                     M5.update();
-                    uint32_t _faceT0 = millis();                                // [FB2] strip
                     face.update();
-                    uint32_t _faceDt = millis() - _faceT0;                      // [FB2] strip
-                    uint32_t _loopDt = millis() - _fb2T0;                       // [FB2] strip
-                    if (_loopDt > _fb2Max) _fb2Max = _loopDt;                   // [FB2] strip
-                    if (_faceDt > _fb2FaceMax) _fb2FaceMax = _faceDt;           // [FB2] strip
-                    _fb2N++;                                                      // [FB2] strip
                     int16_t tx2, ty2;
                     bool _touched = M5StackChan.Display().getTouch(&tx2, &ty2);
-                    Serial.printf("[FB2] n=%lu face=%lums loop=%lums touch=%d\n", // [FB2] strip
-                                  _fb2N, _faceDt, _loopDt, (int)_touched);       // [FB2] strip
                     if (_touched) {
                         M5.Speaker.stop(0);
                         M5.Speaker.end();  // fully release I2S before mic can start
@@ -787,8 +770,6 @@ private:
                     }
                     delay(1);
                 }
-                Serial.printf("[FB2] DONE n=%lu worst-loop=%lums worst-face=%lums\n", // [FB2] strip
-                              _fb2N, _fb2Max, _fb2FaceMax);                            // [FB2] strip
             }
 
             flushChunk();
