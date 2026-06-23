@@ -381,7 +381,48 @@
       background:linear-gradient(135deg,var(--purple),#4c1d95); color:#fff; }
     .kar-lrc-cancel { font-family:inherit; font-size:.72rem; padding:.23rem .52rem;
       border-radius:6px; border:1px solid var(--border); background:none; color:var(--dim); cursor:pointer; }
-    @media (prefers-reduced-motion:reduce) { .kar-drop,.kar-track { transition:none; } }
+    @media (prefers-reduced-motion:reduce) { .kar-drop,.kar-track,.kar-disc-result { transition:none; } }
+
+    /* ── Karaoke: Discover card ── */
+    .kar-disc-toggle { cursor:pointer; user-select:none; }
+    .kar-disc-chev { margin-left:auto; font-size:.78rem; color:var(--dim); font-style:normal;
+      display:inline-block; transition:transform .18s; }
+    .kar-disc-chev.open { transform:rotate(90deg); }
+    @media (prefers-reduced-motion:reduce) { .kar-disc-chev { transition:none; } }
+    .kar-disc-surprise { width:100%; padding:.62rem; border:none; border-radius:8px;
+      cursor:pointer; font-family:inherit; font-size:.87rem; font-weight:700;
+      letter-spacing:.05em; background:linear-gradient(135deg,var(--magenta),#b5006e);
+      color:#fff; display:flex; align-items:center; justify-content:center; gap:.42rem;
+      transition:opacity .15s; margin-bottom:.55rem; }
+    .kar-disc-surprise:disabled { opacity:.4; cursor:not-allowed; }
+    .kar-disc-surprise:not(:disabled):hover { opacity:.85; }
+    .kar-disc-row { display:flex; gap:.4rem; margin-bottom:.55rem; }
+    .kar-disc-qin { flex:1; background:rgba(43,15,95,.6); border:1px solid var(--border);
+      border-radius:8px; padding:.52rem .72rem; color:var(--text); font-size:.84rem;
+      outline:none; font-family:inherit; min-width:0; }
+    .kar-disc-qin:focus { border-color:var(--purple); }
+    .kar-disc-sbtn { background:rgba(233,30,140,.13); border:1px solid rgba(233,30,140,.35);
+      color:var(--magenta); border-radius:8px; padding:.52rem .88rem; font-family:inherit;
+      font-size:.8rem; font-weight:700; cursor:pointer; white-space:nowrap;
+      transition:opacity .15s; }
+    .kar-disc-sbtn:disabled { opacity:.4; cursor:not-allowed; }
+    .kar-disc-sbtn:not(:disabled):hover { opacity:.8; }
+    .kar-disc-result { padding:.5rem .62rem; border-radius:8px; margin-bottom:.38rem;
+      background:rgba(15,6,36,.55); border:1px solid rgba(124,58,237,.2);
+      border-left:3px solid var(--magenta); }
+    .kar-disc-name { font-family:'SF Mono','Cascadia Code','Consolas',monospace;
+      font-size:.81rem; font-weight:700; color:var(--text); }
+    .kar-disc-sub { font-size:.71rem; color:var(--dim); margin:.16rem 0 .32rem;
+      display:flex; align-items:center; gap:.34rem; flex-wrap:wrap; }
+    .kar-disc-sub a { color:var(--dim); text-decoration:underline dotted; }
+    .kar-disc-sub a:hover { color:var(--cyan); }
+    .kar-disc-hint { text-align:center; padding:1.2rem; color:var(--dim);
+      font-size:.81rem; font-style:italic; }
+    .kar-disc-loading { display:flex; align-items:center; justify-content:center;
+      gap:.5rem; padding:1.1rem; color:var(--dim); font-size:.81rem; }
+    @media (prefers-reduced-motion:reduce) { .kar-disc-loading .bar { animation:none; height:8px; } }
+    .kar-disc-warn { background:rgba(251,191,36,.08); border:1px solid rgba(251,191,36,.32);
+      border-radius:8px; padding:.52rem .75rem; font-size:.78rem; color:var(--warn); }
 
     /* ── Bottom tabs ── */
     .tabs {
@@ -505,6 +546,26 @@
       <div>
         <div class="kar-title">KARAOKE</div>
         <div class="kar-tagline">she's a world karaoke machine</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title kar-disc-toggle" id="karDiscToggle" tabindex="0" role="button"
+           aria-expanded="true" aria-controls="karDiscBody">
+        Discover
+        <span class="kar-disc-chev open" id="karDiscChev" aria-hidden="true">&#9658;</span>
+      </div>
+      <div id="karDiscBody">
+        <button class="kar-disc-surprise" id="karSurprise">&#10022;&ensp;Surprise me</button>
+        <div class="kar-disc-row">
+          <input class="kar-disc-qin" id="karDiscQuery" type="text"
+                 placeholder="mood, genre or title…" autocomplete="off"
+                 aria-label="Search Jamendo tracks">
+          <button class="kar-disc-sbtn" id="karDiscSearch">Search</button>
+        </div>
+        <div id="karDiscResults" aria-live="polite">
+          <div class="kar-disc-hint">Tap 'Surprise me' to begin.</div>
+        </div>
       </div>
     </div>
 
@@ -1103,6 +1164,131 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
 
     return div;
   }
+
+  // ── Discover ──────────────────────────────────────────────────────────────
+  (function () {
+    const toggle = document.getElementById('karDiscToggle');
+    const chev   = document.getElementById('karDiscChev');
+    const body   = document.getElementById('karDiscBody');
+    const surBtn = document.getElementById('karSurprise');
+    const qIn    = document.getElementById('karDiscQuery');
+    const schBtn = document.getElementById('karDiscSearch');
+    const resEl  = document.getElementById('karDiscResults');
+
+    let open = true;
+    function doToggle() {
+      open = !open;
+      body.hidden = !open;
+      chev.classList.toggle('open', open);
+      toggle.setAttribute('aria-expanded', String(open));
+    }
+    toggle.addEventListener('click', doToggle);
+    toggle.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); doToggle(); } });
+
+    function fmtDur(s) {
+      return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    }
+
+    function ccLabel(url) {
+      if (!url) return 'CC';
+      const m = url.match(/licenses\/([^/]+)/);
+      return m ? 'CC ' + m[1].toUpperCase() : 'CC';
+    }
+
+    function setLoading() {
+      resEl.innerHTML =
+        '<div class="kar-disc-loading">' +
+        '<div class="bars"><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>' +
+        '&ensp;Discovering…</div>';
+    }
+
+    function buildCard(t) {
+      const wrap = document.createElement('div');
+      wrap.className = 'kar-disc-result';
+      const licLabel = ccLabel(t.license_ccurl);
+      const durPart  = t.duration ? `<span>&middot;</span><span>${fmtDur(t.duration)}</span>` : '';
+      const licPart  = t.license_ccurl
+        ? `<span>&middot;</span><a href="${t.license_ccurl}" target="_blank" rel="noopener">${licLabel}</a>`
+        : '';
+      wrap.innerHTML =
+        `<div class="kar-disc-name">${t.name}</div>` +
+        `<div class="kar-disc-sub"><span>${t.artist_name}</span>${durPart}${licPart}</div>` +
+        `<div class="kar-actions"><button class="kar-btn kar-btn-push kar-disc-pull">Pull to Library</button></div>`;
+
+      const btn = wrap.querySelector('.kar-disc-pull');
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.innerHTML =
+          '<span class="bars" style="display:inline-flex;vertical-align:middle">' +
+          '<span class="bar"></span><span class="bar"></span><span class="bar"></span>' +
+          '</span>&ensp;Pulling…';
+        try {
+          const res  = await fetch('/karaoke/pull', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ track_id: t.id }),
+          });
+          const data = await res.json();
+          if (res.status === 409) {
+            btn.textContent  = '✓ Already here';
+            btn.style.color  = 'var(--ok)';
+          } else if (!res.ok) {
+            btn.textContent  = '✗ ' + (data.detail || 'Failed');
+            btn.style.color  = 'var(--err)';
+            btn.disabled     = false;
+          } else {
+            btn.textContent  = '✓ In Library';
+            btn.style.color  = 'var(--ok)';
+            await refreshLibrary();
+          }
+        } catch {
+          btn.textContent = '✗ Network error';
+          btn.style.color = 'var(--err)';
+          btn.disabled    = false;
+        }
+      });
+
+      return wrap;
+    }
+
+    async function doDiscover(params) {
+      setLoading();
+      surBtn.disabled = true;
+      schBtn.disabled = true;
+      try {
+        const qs  = params ? '?' + new URLSearchParams(params).toString() : '';
+        const res = await fetch('/karaoke/discover' + qs);
+        if (res.status === 503) {
+          resEl.innerHTML =
+            '<div class="kar-disc-warn">⚠️&ensp;Jamendo not configured — ' +
+            'add JAMENDO_CLIENT_ID to .env</div>';
+          return;
+        }
+        const data = await res.json();
+        if (!res.ok || !data.tracks?.length) {
+          resEl.innerHTML = '<div class="kar-disc-hint">Nothing found — try a different mood.</div>';
+          return;
+        }
+        resEl.innerHTML = '';
+        data.tracks.forEach(t => resEl.appendChild(buildCard(t)));
+      } catch {
+        resEl.innerHTML = '<div class="kar-disc-hint">Cannot reach server.</div>';
+      } finally {
+        surBtn.disabled = false;
+        schBtn.disabled = false;
+      }
+    }
+
+    surBtn.addEventListener('click', () => doDiscover(null));
+
+    function doSearch() {
+      const q = qIn.value.trim();
+      if (!q) { doDiscover(null); return; }
+      doDiscover(q.includes(',') ? { tags: q } : { query: q });
+    }
+    schBtn.addEventListener('click', doSearch);
+    qIn.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  })();
 
   // refresh when pane becomes active
   document.querySelector('.tab[data-pane="Karaoke"]')
