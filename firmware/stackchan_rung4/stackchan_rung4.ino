@@ -411,8 +411,11 @@ void setup() {
 void loop() {
     M5StackChan.update();
 
-    // Side-button tap → safe-home servos then PMIC power-off
-    if (M5.BtnPWR.wasClicked()) {
+    // Side-button deliberate hold → safe-home servos then PMIC power-off.
+    // Power = 1000ms deliberate hold (AXP2101 hardware floor, register 0x27 bits[3:2]=0b00).
+    // Intentional: prevents accidental power-off on the demo body. Tap does not trigger power.
+    // AXP2101 mapping: wasHold() = long press (>=1s fired while held); wasClicked() = short tap (<1s, on release).
+    if (M5.BtnPWR.wasHold()) {
         safeHome();
         M5.Power.powerOff();
     }
@@ -424,6 +427,7 @@ void loop() {
     face.update();          // renders face + crescent tab onto canvas, pushes to display
     appMgr.draw();          // app overlays (e.g. karaoke lyrics)
     crescentMenu.draw();    // mode panel slides over everything when open
+
     applyBodyLanguage(face.getState());
     updateBodyLanguageScan(face.getState());
 

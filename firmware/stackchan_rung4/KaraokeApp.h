@@ -45,11 +45,8 @@ struct WavHdr {
 class KaraokeApp : public AppBase {
 public:
     void init() override {
-        uint32_t _karT = millis(); // [KAR] strip
-        Serial.println("[KAR] KaraokeApp init enter"); // [KAR] strip
         _state = BROWSING;
         face.begin(320, 160);  // top 160 px for face, bottom 80 for browser/lyrics
-        Serial.printf("[KAR] face.begin(320,160) %lums\n", millis()-_karT); // [KAR] strip
         face.setState(Ph3b3Face::IDLE);
 
         // Mount SD once per mode entry — avoids 200-500ms SPI init blocking every tap.
@@ -57,19 +54,16 @@ public:
         if (_sdMounted) {
             _scanTracks();
         } else {
-            Serial.println("[KAR] SD not found at init");
+            Serial.println("[karaoke] no SD card at init");
             _tracks.clear();
         }
         if (_trackSel >= (int)_tracks.size()) _trackSel = 0;
-        Serial.printf("[KAR] SD.begin + scan %lums\n", millis()-_karT); // [KAR] strip
 
         // 30ms settle: BCK/WS lines are shared with speaker I2S (GPIO 34/33).
         // TalkApp.exit() calls Speaker.end() immediately before we run; without
         // this delay Mic.begin() can initialise against an unsettled clock.
         delay(30);
         M5.Mic.begin();
-        Serial.printf("[KAR] Mic.begin %lums\n", millis()-_karT); // [KAR] strip
-        Serial.printf("[KAR] KaraokeApp init done %lums total\n", millis()-_karT); // [KAR] strip
     }
 
     void exit() override {
@@ -162,6 +156,7 @@ private:
     // ── Mic VU ──────────────────────────────────────────────────────────────
     int16_t  _micBuf[K_MIC_SAMPLES];
     uint8_t  _vuLevel    = 0;
+
 
     // ────────────────────────────────────────────────────────────────────────
 
@@ -289,9 +284,9 @@ private:
         }
 
         _loadLyrics(lrcPath.c_str());
-        _lyricIdx    = 0;
-        _playStartMs = millis();
-        _fillIdx     = 0;
+        _lyricIdx       = 0;
+        _playStartMs    = millis();
+        _fillIdx        = 0;
         M5.Speaker.begin();
         M5.Speaker.setVolume(200);
         _state = PLAYING;

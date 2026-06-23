@@ -70,6 +70,15 @@
     }
     .hdr-pulse.dead { background: var(--err); box-shadow: 0 0 6px var(--err); animation: none; }
     @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+    .hdr-name-wrap { display:flex; flex-direction:column; gap:.08rem; min-width:0; }
+    .hdr-splash {
+      font-size: .62rem;
+      color: rgba(0,229,255,.72);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      animation: splashIn .55s ease both;
+    }
+    @keyframes splashIn { from{opacity:0} to{opacity:1} }
+    @media (prefers-reduced-motion:reduce) { .hdr-splash { animation:none; } }
 
     /* ── Content ── */
     .content {
@@ -452,7 +461,10 @@
 
 <header class="hdr">
   <img src="/static/icon-192.png" alt="">
-  <span class="hdr-title">Ph3b3</span>
+  <div class="hdr-name-wrap">
+    <span class="hdr-title">Ph3b3</span>
+    <span class="hdr-splash" id="hSplash"></span>
+  </div>
   <span id="hPulse" class="hdr-pulse dead"></span>
 </header>
 
@@ -1312,6 +1324,47 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
 
   // initial load if this pane is shown on page load (handles future default tab changes)
   if (document.getElementById('paneKaraoke').classList.contains('active')) refreshLibrary();
+})();
+
+// ── Boot splash ───────────────────────────────────────────────────────────────
+(function () {
+  const SPLASH = [
+    // Thesis
+    "Offline was the premium feature all along.",
+    "One subscriber. The fee is electricity.",
+    "No algorithm — she plays what you give her.",
+    "Runs on a graphics card in your room, not a server in someone else's.",
+    "Available in every region. The region is your house.",
+    "She doesn’t sell your data. She wouldn’t know who to call.",
+    "No subscription. No catch. Just a robot that’s actually yours.",
+    "The cloud is just someone else’s computer. This isn’t that.",
+    "Made with hands, not rented from a server.",
+    // Lore
+    "Be the light.",
+    "Named for a Titaness.",
+    "She never leaves the building.",
+    "A crescent moon, a soul file, and a graphics card.",
+    "Phoebe — light that’s her own.",
+    // Origin
+    "Started as a Spotify fix.",
+    "Built in three weeks of evenings.",
+    "One person. One robot. One graphics card.",
+    "It got out of hand, honestly.",
+    "She was supposed to just play music.",
+    // Personality
+    "Currently running on vibes and CUDA.",
+    "Powered by an RTX and stubbornness.",
+    "100% local. 0% cloud. ∞% cosmic.",
+    "Hello from a basement somewhere.",
+    "Yes, she’s real. No, she’s not online.",
+    // OFFLINE-ONLY: enable only when deployment is genuinely local/offline
+    // (no cloud or remote box in the loop — she shouldn't claim what she isn't)
+    // "Your data never leaves the building.",
+    // "Pull the plug on the internet. She’ll still be here.",
+    // "She knows today’s date. Offline. Think about that.",
+  ];
+  const el = document.getElementById('hSplash');
+  if (el) el.textContent = SPLASH[Math.floor(Math.random() * SPLASH.length)];
 })();
 
 // ── service worker ────────────────────────────────────────────────────────────
