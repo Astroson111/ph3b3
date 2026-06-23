@@ -25,9 +25,8 @@
 #define SC_WIFI_SSID  ""
 #define SC_WIFI_PASS  ""
 
-// ── Ph3b3 auth (fill in before flashing, blank after NVS is seeded) ──────────
-#define SC_PH3B3_USER ""
-#define SC_PH3B3_PASS ""
+// ── Ph3b3 auth — credentials live in gitignored secrets.h ────────────────────
+#include "secrets.h"
 
 // #define SC_FACE_BGR   // uncomment if eyes come up orange
 
