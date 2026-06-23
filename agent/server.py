@@ -1424,7 +1424,7 @@ def _setup_html(errors: list[str] | None = None) -> str:
     </div>
     <div class="field">
       <label for="password">Choose a password</label>
-      <input id="password" name="password" type="password" required
+      <input id="password" name="password" type="password" required minlength="12"
              placeholder="at least 12 characters" autocomplete="new-password">
       <p class="hint">Let's make it a strong one — at least 12 characters, something you haven't used elsewhere.</p>
     </div>
