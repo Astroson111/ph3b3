@@ -18,6 +18,7 @@ Drag-drop needs the optional 'tkinterdnd2' package; without it, use the Browse
 button (always works).  ffmpeg must be installed (sudo apt install ffmpeg).
 """
 
+import getpass
 import json
 import os
 import pathlib
@@ -25,7 +26,7 @@ import shutil
 import subprocess
 import threading
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import messagebox, ttk, filedialog
 
 # optional drag-and-drop support
 try:
@@ -48,6 +49,36 @@ LRC_STUB = """[ti:{title}]
 """
 
 CONFIG_FILE = pathlib.Path.home() / ".config" / "ph3b3" / "karaoke_prefs.json"
+
+
+def _find_removable():
+    """Return (initial_dir, volumes) for removable-media picker.
+
+    Searches mount roots in priority order:
+      /media/$USER  →  /run/media/$USER  →  /media  →  /mnt
+
+    Returns the first root that is non-empty (has mounted subdirs).
+    volumes is a list of (display_name, pathlib.Path) tuples.
+    initial_dir is the best root to use as askdirectory initialdir.
+    Falls back to home dir if nothing is found.
+    """
+    user = getpass.getuser()
+    roots = [
+        pathlib.Path(f"/media/{user}"),
+        pathlib.Path(f"/run/media/{user}"),
+        pathlib.Path("/media"),
+        pathlib.Path("/mnt"),
+    ]
+    first_existing = None
+    for root in roots:
+        if not root.is_dir():
+            continue
+        if first_existing is None:
+            first_existing = root
+        vols = sorted(v for v in root.iterdir() if v.is_dir())
+        if vols:
+            return root, [(v.name, v) for v in vols]
+    return (first_existing or pathlib.Path.home()), []
 
 
 def _load_prefs():
@@ -156,9 +187,68 @@ class App:
         self.sd_row.pack(fill="x", pady=4) if self.copy_sd.get() else self.sd_row.pack_forget()
 
     def _pick_sd(self):
-        d = filedialog.askdirectory(title="Pick the SD card's /karaoke/ folder")
-        if d:
-            self.sd_path.set(d)
+        initial_dir, volumes = _find_removable()
+        chosen = [None]
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Select SD / USB drive")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        def _select_volume(vol_path):
+            karaoke = vol_path / "karaoke"
+            if not karaoke.exists():
+                if messagebox.askyesno(
+                    "Create folder?",
+                    f"Create /karaoke/ folder on '{vol_path.name}'?\n\n{karaoke}",
+                    parent=dlg,
+                ):
+                    karaoke.mkdir(parents=True, exist_ok=True)
+                else:
+                    chosen[0] = str(vol_path)
+                    dlg.destroy()
+                    return
+            chosen[0] = str(karaoke)
+            dlg.destroy()
+
+        def _browse():
+            dlg.destroy()
+            d = filedialog.askdirectory(
+                title="Pick the SD card's /karaoke/ folder",
+                initialdir=str(initial_dir),
+            )
+            chosen[0] = d or None
+
+        tk.Label(dlg, text="Select SD / USB drive",
+                 font=("", 11, "bold"), pady=10).pack()
+
+        if volumes:
+            tk.Label(dlg, text="Detected drives:", anchor="w",
+                     fg="#555").pack(fill="x", padx=14)
+            btn_frame = tk.Frame(dlg)
+            btn_frame.pack(padx=14, pady=6)
+            for name, path in volumes:
+                tk.Button(
+                    btn_frame, text=f"  {name}  ",
+                    width=18, height=2, bg="#e8f4e8",
+                    command=lambda p=path: _select_volume(p),
+                ).pack(side="left", padx=4)
+        else:
+            tk.Label(
+                dlg,
+                text="No SD/USB drive detected.\n"
+                     "Plug one in, or browse manually.",
+                fg="#b33", pady=10,
+            ).pack(padx=18)
+
+        ttk.Separator(dlg, orient="horizontal").pack(fill="x", padx=14, pady=8)
+        tk.Button(dlg, text="Browse manually…", command=_browse).pack(pady=2)
+        tk.Button(dlg, text="Cancel", command=dlg.destroy,
+                  fg="#555").pack(pady=(2, 10))
+
+        dlg.wait_window()
+        if chosen[0]:
+            self.sd_path.set(chosen[0])
 
     def _run_threaded(self):
         threading.Thread(target=self._run, daemon=True).start()
