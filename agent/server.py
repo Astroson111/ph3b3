@@ -13,7 +13,9 @@ import threading
 import time
 from pathlib import Path
 import httpx
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+import getpass
+import shutil
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
@@ -981,6 +983,170 @@ async def sc_remove_network(ssid: str):
     nets = [n for n in _load_sc_networks() if n["ssid"] != ssid]
     _save_sc_networks(nets)
     return {"ok": True}
+
+# ── Karaoke ───────────────────────────────────────────────────────────────────
+
+KARAOKE_LIB = Path.home() / "ph3b3_data" / "karaoke"
+
+_LRC_STUB = """\
+[ti:track]
+[ar:Artist]
+[00:00.00] (intro)
+[00:05.00] first line of lyrics here
+[00:10.00] next line here
+"""
+
+
+def _karaoke_lib() -> Path:
+    KARAOKE_LIB.mkdir(parents=True, exist_ok=True)
+    return KARAOKE_LIB
+
+
+def _find_karaoke_sd() -> Path | None:
+    """Return /karaoke/ dir on the first detected removable volume, or None.
+    KARAOKE_SD_PATH env var overrides (must point to the /karaoke/ dir itself)."""
+    override = os.getenv("KARAOKE_SD_PATH", "").strip()
+    if override:
+        return Path(override)
+    user = getpass.getuser()
+    roots = [
+        Path(f"/media/{user}"),
+        Path(f"/run/media/{user}"),
+        Path("/media"),
+        Path("/mnt"),
+    ]
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for vol in sorted(root.iterdir()):
+            if vol.is_dir():
+                return vol / "karaoke"
+    return None
+
+
+def _track_info(name: str) -> dict:
+    lib = _karaoke_lib()
+    wav = lib / f"{name}.wav"
+    lrc = lib / f"{name}.lrc"
+    sd  = _find_karaoke_sd()
+    on_sd = bool(sd and (sd / f"{name}.wav").exists())
+    return {
+        "name": name,
+        "wav_bytes": wav.stat().st_size if wav.exists() else 0,
+        "lrc_exists": lrc.exists(),
+        "on_sd": on_sd,
+    }
+
+
+def _ffmpeg_convert(src: str, dst: str, rate: int, channels: int) -> list[str]:
+    """Run ffmpeg synchronously (call in executor). Returns log lines."""
+    import subprocess
+    cmd = [
+        "ffmpeg", "-y", "-i", src,
+        "-ar", str(rate), "-ac", str(channels),
+        "-c:a", "pcm_s16le", dst,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr[-800:])
+    lines = [f"ffmpeg -ar {rate} -ac {channels} pcm_s16le → {Path(dst).name}"]
+    lines.append("✓ conversion complete")
+    return lines
+
+
+@app.post("/karaoke/convert")
+async def karaoke_convert(file: UploadFile = File(...), preset: str = Form("cd")):
+    presets = {
+        "voice": (16000, 1),
+        "cd":    (44100, 2),
+    }
+    if preset not in presets:
+        raise HTTPException(status_code=400, detail=f"preset must be 'voice' or 'cd', got {preset!r}")
+    rate, channels = presets[preset]
+    lib = _karaoke_lib()
+    dst = str(lib / "track.wav")
+    lrc_path = lib / "track.lrc"
+    log_lines: list[str] = []
+
+    with tempfile.NamedTemporaryFile(suffix=Path(file.filename or "audio").suffix, delete=False) as tmp:
+        tmp_path = tmp.name
+        tmp.write(await file.read())
+    log_lines.append(f"received {file.filename!r} ({Path(tmp_path).stat().st_size} bytes)")
+
+    loop = asyncio.get_event_loop()
+    try:
+        new_lines = await loop.run_in_executor(
+            None, _ffmpeg_convert, tmp_path, dst, rate, channels
+        )
+        log_lines.extend(new_lines)
+    except RuntimeError as exc:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    lrc_written = False
+    if not lrc_path.exists():
+        lrc_path.write_text(_LRC_STUB)
+        lrc_written = True
+        log_lines.append("✓ wrote track.lrc stub")
+    else:
+        log_lines.append("· track.lrc already exists, left alone")
+
+    return {"ok": True, "name": "track", "lrc_written": lrc_written, "log": log_lines}
+
+
+@app.get("/karaoke/library")
+async def karaoke_library():
+    lib = _karaoke_lib()
+    sd = _find_karaoke_sd()
+    tracks = [_track_info(p.stem) for p in sorted(lib.glob("*.wav"))]
+    return {"tracks": tracks, "sd_path": str(sd) if sd else None}
+
+
+@app.post("/karaoke/push/{name}")
+async def karaoke_push(name: str):
+    lib = _karaoke_lib()
+    wav = lib / f"{name}.wav"
+    if not wav.exists():
+        raise HTTPException(status_code=404, detail=f"track '{name}' not found in library")
+    sd = _find_karaoke_sd()
+    if sd is None:
+        raise HTTPException(
+            status_code=503,
+            detail="No SD card detected. Insert one or set KARAOKE_SD_PATH to override.",
+        )
+    sd.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(wav, sd / wav.name)
+    lrc = lib / f"{name}.lrc"
+    if lrc.exists():
+        shutil.copy2(lrc, sd / lrc.name)
+    return {"ok": True, "dest": str(sd)}
+
+
+@app.get("/karaoke/lrc/{name}")
+async def karaoke_get_lrc(name: str):
+    lrc = _karaoke_lib() / f"{name}.lrc"
+    if not lrc.exists():
+        raise HTTPException(status_code=404, detail=f"no .lrc for '{name}'")
+    return {"text": lrc.read_text()}
+
+
+@app.put("/karaoke/lrc/{name}")
+async def karaoke_put_lrc(name: str, body: dict):
+    text = body.get("text", "")
+    lrc = _karaoke_lib() / f"{name}.lrc"
+    lrc.write_text(text)
+    return {"ok": True}
+
+
+@app.delete("/karaoke/track/{name}")
+async def karaoke_delete(name: str):
+    lib = _karaoke_lib()
+    (lib / f"{name}.wav").unlink(missing_ok=True)
+    (lib / f"{name}.lrc").unlink(missing_ok=True)
+    return {"ok": True}
+
 
 @app.get("/panel")
 async def panel():
