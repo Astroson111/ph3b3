@@ -203,7 +203,7 @@
     @keyframes ba { 0%,100%{height:3px} 50%{height:13px} }
     .chat-foot {
       display: flex; gap: .5rem;
-      padding: .65rem .75rem calc(.65rem + env(safe-area-inset-bottom,0px));
+      padding: .65rem .75rem calc(.65rem + max(env(safe-area-inset-bottom,0px), var(--sab,0px)));
       border-top: 1px solid var(--border);
       background: rgba(15,6,36,.7); flex-shrink: 0;
     }
@@ -441,7 +441,7 @@
       flex-shrink: 0;
       position: relative;
       z-index: 10;
-      padding-bottom: env(safe-area-inset-bottom, 0px);
+      padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--sab, 0px));
     }
     .tab {
       flex: 1; display: flex; flex-direction: column;
@@ -1365,6 +1365,24 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
   ];
   const el = document.getElementById('hSplash');
   if (el) el.textContent = SPLASH[Math.floor(Math.random() * SPLASH.length)];
+})();
+
+// ── Android nav-bar safe-area fallback ────────────────────────────────────────
+// env(safe-area-inset-bottom) returns 0 on many Android Chrome builds even when
+// the system nav bar overlaps the viewport in edge-to-edge / gesture-nav mode.
+// visualViewport gives the authoritative remaining height; we use the gap between
+// window.innerHeight and the visual viewport as a reliable bottom inset value.
+(function syncSafeBottom() {
+  function update() {
+    const vv  = window.visualViewport;
+    const gap = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+    document.documentElement.style.setProperty('--sab', gap + 'px');
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', update);
+    window.visualViewport.addEventListener('scroll', update);
+  }
+  update();
 })();
 
 // ── service worker ────────────────────────────────────────────────────────────
