@@ -21,6 +21,7 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 from dotenv import load_dotenv
+import mnemosyne
 
 load_dotenv()
 
@@ -137,6 +138,7 @@ async def lifespan(app):
         if reminder_msg:
             tts.speak(reminder_msg, blocking=False)
     threading.Thread(target=_greet, daemon=True).start()
+    mnemosyne.init(os.getenv("JAMENDO_CLIENT_ID", ""))
     yield
     if _ec_mod._session and _ec_mod._session.is_running():
         _ec_mod.tool_stop_evening_capture()
@@ -1028,13 +1030,22 @@ def _track_info(name: str) -> dict:
     lib = _karaoke_lib()
     wav = lib / f"{name}.wav"
     lrc = lib / f"{name}.lrc"
+    attr_file = lib / f"{name}.attribution.json"
     sd  = _find_karaoke_sd()
     on_sd = bool(sd and (sd / f"{name}.wav").exists())
+    attribution = None
+    if attr_file.exists():
+        try:
+            attribution = json.loads(attr_file.read_text())
+        except Exception:
+            pass
     return {
-        "name": name,
-        "wav_bytes": wav.stat().st_size if wav.exists() else 0,
-        "lrc_exists": lrc.exists(),
-        "on_sd": on_sd,
+        "name":        name,
+        "wav_bytes":   wav.stat().st_size if wav.exists() else 0,
+        "lrc_exists":  lrc.exists(),
+        "on_sd":       on_sd,
+        "source":      "jamendo" if attribution else "upload",
+        "attribution": attribution,
     }
 
 
@@ -1145,7 +1156,53 @@ async def karaoke_delete(name: str):
     lib = _karaoke_lib()
     (lib / f"{name}.wav").unlink(missing_ok=True)
     (lib / f"{name}.lrc").unlink(missing_ok=True)
+    (lib / f"{name}.attribution.json").unlink(missing_ok=True)
     return {"ok": True}
+
+
+# ── Karaoke — Mnemosyne / Jamendo discover + pull ────────────────────────────
+
+@app.get("/karaoke/discover")
+async def karaoke_discover(query: str | None = None, tags: str | None = None, limit: int = 6):
+    if not os.getenv("JAMENDO_CLIENT_ID"):
+        raise HTTPException(status_code=503, detail="JAMENDO_CLIENT_ID not configured in .env")
+    try:
+        tracks = await mnemosyne.discover(query=query, tags=tags, limit=min(limit, 12))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Jamendo error: {exc}")
+    return {"tracks": tracks}
+
+
+@app.post("/karaoke/pull")
+async def karaoke_pull(body: dict):
+    track_id = str(body.get("track_id", "")).strip()
+    if not track_id:
+        raise HTTPException(status_code=400, detail="track_id required")
+    if not os.getenv("JAMENDO_CLIENT_ID"):
+        raise HTTPException(status_code=503, detail="JAMENDO_CLIENT_ID not configured in .env")
+    lib = _karaoke_lib()
+    try:
+        result = await mnemosyne.pull(track_id, lib)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {
+        "ok":    True,
+        "name":  result["stem"],
+        "log":   result["log"],
+        "track": _track_info(result["stem"]),
+    }
+
+
+@app.get("/karaoke/attribution/{name}")
+async def karaoke_attribution(name: str):
+    attr_file = _karaoke_lib() / f"{name}.attribution.json"
+    if not attr_file.exists():
+        raise HTTPException(status_code=404, detail=f"No attribution for '{name}'")
+    return {"attribution": json.loads(attr_file.read_text())}
 
 
 @app.get("/panel")
