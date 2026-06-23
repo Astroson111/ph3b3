@@ -636,6 +636,20 @@
 </nav>
 
 <script>
+// ── global 401 interceptor ────────────────────────────────────────────────────
+// Any API call that gets 401 (stale session after server restart) redirects to
+// /login instead of propagating a raw text body that callers try to JSON.parse.
+// Covers every fetch in this file without touching individual call sites.
+(function() {
+  const _fetch = window.fetch;
+  window.fetch = function(...args) {
+    return _fetch.apply(this, args).then(resp => {
+      if (resp.status === 401) { window.location.replace('/login'); return new Promise(() => {}); }
+      return resp;
+    });
+  };
+})();
+
 // ── session id ────────────────────────────────────────────────────────────────
 const SID = (() => {
   let id = localStorage.getItem('ph3b3_sid');
