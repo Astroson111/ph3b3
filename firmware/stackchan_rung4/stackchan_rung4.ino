@@ -329,11 +329,27 @@ static void waitAxis(bool (*fn)()) {
     while (fn() && millis() - t0 < 5000) delay(10);
 }
 
+// safeHome — used on power-off path (side-button). Speed 200 is acceptable there.
 static void safeHome() {
     M5StackChan.Motion.moveY(TILT_HOME, 200);
     waitAxis([]() { return M5StackChan.Motion.isYMoving(); });
     delay(200);
     M5StackChan.Motion.moveX(0, 200);
+    waitAxis([]() { return M5StackChan.Motion.isXMoving(); });
+}
+
+// gentleHome — boot-only homing sequence. Servo::init() leaves torque disabled;
+// this re-enables it explicitly and eases to neutral over ~1.5s so the first
+// visible motion is a glide, not a snap.
+// speed=50 → spring stiffness≈11.6 (critically damped) → 98% settle ≈ 1.5s.
+// Tilt first (heavier axis, gravity bias), then pan.
+static void gentleHome() {
+    M5StackChan.Motion.setAutoAngleSyncEnabled(true);  // spring starts from physical pos
+    M5StackChan.Motion.setTorqueEnabled(true);         // re-engage motor output
+    M5StackChan.Motion.moveY(TILT_HOME, 50);
+    waitAxis([]() { return M5StackChan.Motion.isYMoving(); });
+    delay(100);
+    M5StackChan.Motion.moveX(0, 50);
     waitAxis([]() { return M5StackChan.Motion.isXMoving(); });
 }
 
@@ -355,7 +371,7 @@ void setup() {
     d.setTextColor(TFT_WHITE, TFT_BLACK);
     d.drawString("homing servos...", d.width() / 2, d.height() / 2 + 16);
 
-    safeHome();
+    gentleHome();
     randomSeed(micros());   // vary scan waypoints across boots
     Serial.println("[rung4] homed");
 
