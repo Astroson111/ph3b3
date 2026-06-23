@@ -196,12 +196,12 @@ async def basic_auth(request: Request, call_next):
         # Browser requests (Accept: text/html) → redirect to login page.
         if "text/html" in request.headers.get("Accept", ""):
             return RedirectResponse(url="/login", status_code=303)
-        # API / device clients → 401 with WWW-Authenticate challenge.
-        return Response(
-            content="Unauthorized",
-            status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="Ph3b3"'},
-        )
+        # API / device clients → plain 401.
+        # No WWW-Authenticate: device clients (Iris, Stack-Chan, curl -u) send
+        # Basic auth proactively and never need the challenge header.
+        # Sending it would trigger Firefox's native Basic Auth dialog for any
+        # unauthenticated JS fetch from the panel — the "second auth screen."
+        return Response(content="Unauthorized", status_code=401)
 
     device = request.headers.get("X-Ph3b3-Device", "unidentified")
     _device_roster[device] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -1330,7 +1330,7 @@ async def login_submit(request: Request):
             max_age=_SESSION_MAX_AGE,
             httponly=True,
             secure=bool(SSL_CERT),
-            samesite="strict",
+            samesite="lax",
         )
         return resp
     return HTMLResponse(content=_login_html(error=True), status_code=401)
