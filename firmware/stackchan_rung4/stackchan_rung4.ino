@@ -25,6 +25,10 @@
 #define SC_WIFI_SSID  ""
 #define SC_WIFI_PASS  ""
 
+// ── Ph3b3 auth (fill in before flashing, blank after NVS is seeded) ──────────
+#define SC_PH3B3_USER ""
+#define SC_PH3B3_PASS ""
+
 // #define SC_FACE_BGR   // uncomment if eyes come up orange
 
 #include <WiFi.h>
@@ -131,7 +135,7 @@ static void _syncNetworks() {
     tls.setTimeout(8000);
     HTTPClient http;
     http.begin(tls, "ph3b3.tailfb118a.ts.net", 443, "/stackchan/networks", true);
-    http.setAuthorization("REDACTED", "REDACTED");
+    http.setAuthorization(SC_PH3B3_USER, SC_PH3B3_PASS);
     http.addHeader("X-Ph3b3-Device", "stackchan");
     http.setTimeout(8000);
     if (http.GET() != HTTP_CODE_OK) { http.end(); return; }
