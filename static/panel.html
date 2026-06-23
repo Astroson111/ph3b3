@@ -80,7 +80,7 @@
     }
 
     /* ── Panes ── */
-    .pane { display: none; flex-direction: column; gap: .7rem; flex: 1; overflow-y: auto; padding: .85rem .85rem 0; }
+    .pane { display: none; flex-direction: column; gap: .7rem; flex: 1; overflow-y: auto; padding: .85rem .85rem .85rem; }
     .pane.active { display: flex; }
 
     /* ── Card ── */
@@ -430,6 +430,8 @@
       background: rgba(10,3,26,.96);
       border-top: 1px solid var(--border);
       flex-shrink: 0;
+      position: relative;
+      z-index: 10;
       padding-bottom: env(safe-area-inset-bottom, 0px);
     }
     .tab {
