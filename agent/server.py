@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 import mnemosyne
 
 load_dotenv()
@@ -31,9 +31,15 @@ MODULES_DIR = ROOT / "modules"
 SKILL_LOG = Path.home() / "ph3b3_data" / "skills" / "skill_log.jsonl"
 SKILL_LOG.parent.mkdir(parents=True, exist_ok=True)
 
+DATA_DIR = Path.home() / "ph3b3_data"
+_SETUP_COMPLETE_FILE = DATA_DIR / "setup_complete"
+_SETUP_COMPLETE = _SETUP_COMPLETE_FILE.exists()
+
 AUTH_USER = os.getenv("PH3B3_USER", "admin")
 AUTH_PASS = os.getenv("PH3B3_PASSWORD", "")
-if not AUTH_PASS:
+if not _SETUP_COMPLETE and not AUTH_PASS:
+    logging.info("Ph3b3 first-run mode — /setup is open, all other routes gated.")
+elif not AUTH_PASS:
     logging.error("PH3B3_PASSWORD not set in .env — all requests will be refused until it is configured")
 
 _SESSION_COOKIE = "ph3b3_session"
@@ -161,6 +167,13 @@ async def basic_auth(request: Request, call_next):
     # CORS preflights — let CORSMiddleware handle these.
     if request.method == "OPTIONS":
         return await call_next(request)
+
+    # First-run gate: /setup and /static are the only open paths until setup is complete.
+    if not _SETUP_COMPLETE:
+        p = request.url.path
+        if p == "/setup" or p.startswith("/static"):
+            return await call_next(request)
+        return RedirectResponse(url="/setup", status_code=303)
 
     # Login / logout pages are public.
     if request.url.path in ("/login", "/logout"):
@@ -1229,6 +1242,228 @@ async def karaoke_attribution(name: str):
     return {"attribution": json.loads(attr_file.read_text())}
 
 
+_COMMON_PASSWORDS = {
+    "password","password1","password123","123456","123456789","12345678","12345",
+    "1234567","1234567890","qwerty","abc123","monkey","1234","letmein","dragon",
+    "master","sunshine","princess","welcome","shadow","superman","michael",
+    "football","baseball","iloveyou","trustno1","batman","access","hello",
+    "charlie","donald","password2","qwerty123","admin","admin123","root","toor",
+    "pass","test","guest","login","changeme","secret","11111111","000000",
+    "1q2w3e4r","passw0rd","p@ssword","p@ssw0rd","abc12345","qwertyui",
+    "mustang","starwars","cheese","andrew","jessica","pepper","121212",
+    "hannah","daniel","computer","696969","thomas","hunter","ranger","joshua",
+    "harley","jordan","robert","soccer","tigger","pokemon","maverick",
+}
+
+def _check_password_strength(pw: str) -> str | None:
+    """Return an error string if the password is too weak, None if it passes."""
+    if len(pw) < 12:
+        return "Password must be at least 12 characters long."
+    if pw.lower() in _COMMON_PASSWORDS:
+        return "That one's too easy to guess — let's pick something more unique."
+    classes = sum([
+        any(c.isupper() for c in pw),
+        any(c.islower() for c in pw),
+        any(c.isdigit() for c in pw),
+        any(not c.isalnum() for c in pw),
+    ])
+    if classes < 2:
+        return "Mix it up a bit — try adding numbers, capitals, or a symbol."
+    return None
+
+
+_FACE_SLEEPY = """<svg viewBox="0 0 200 200" width="140" height="140" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="100" cy="100" r="92" fill="#3B1F60" opacity="0.35"/>
+  <circle cx="100" cy="100" r="84" fill="#6B3FA0"/>
+  <line x1="16" y1="88" x2="42" y2="88" stroke="#22D4E8" stroke-width="1.5" opacity="0.55"/>
+  <line x1="42" y1="88" x2="42" y2="70" stroke="#22D4E8" stroke-width="1.5" opacity="0.55"/>
+  <circle cx="16" cy="88" r="2.5" fill="#22D4E8" opacity="0.75"/>
+  <line x1="184" y1="88" x2="158" y2="88" stroke="#E0408A" stroke-width="1.5" opacity="0.55"/>
+  <line x1="158" y1="88" x2="158" y2="70" stroke="#E0408A" stroke-width="1.5" opacity="0.55"/>
+  <circle cx="184" cy="88" r="2.5" fill="#E0408A" opacity="0.75"/>
+  <ellipse cx="72" cy="97" rx="20" ry="23" fill="#1A0830"/>
+  <ellipse cx="128" cy="97" rx="20" ry="23" fill="#1A0830"/>
+  <path d="M 52 88 Q 72 82 92 88" fill="#6B3FA0"/>
+  <path d="M 108 88 Q 128 82 148 88" fill="#6B3FA0"/>
+  <circle cx="67" cy="97" r="4" fill="white" opacity="0.55"/>
+  <circle cx="123" cy="97" r="4" fill="white" opacity="0.55"/>
+  <path d="M 82 130 Q 100 139 118 130" stroke="#E0408A" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  <text x="138" y="60" font-size="13" fill="#E0408A" opacity="0.45" font-family="system-ui,sans-serif">z</text>
+  <text x="148" y="48" font-size="10" fill="#E0408A" opacity="0.28" font-family="system-ui,sans-serif">z</text>
+</svg>"""
+
+_FACE_HAPPY = """<svg viewBox="0 0 200 200" width="140" height="140" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="100" cy="100" r="92" fill="#8B3FC0" opacity="0.35"/>
+  <circle cx="100" cy="100" r="84" fill="#6B3FA0"/>
+  <line x1="16" y1="88" x2="42" y2="88" stroke="#22D4E8" stroke-width="1.5" opacity="0.9"/>
+  <line x1="42" y1="88" x2="42" y2="70" stroke="#22D4E8" stroke-width="1.5" opacity="0.9"/>
+  <circle cx="16" cy="88" r="2.5" fill="#22D4E8"/>
+  <line x1="184" y1="88" x2="158" y2="88" stroke="#E0408A" stroke-width="1.5" opacity="0.9"/>
+  <line x1="158" y1="88" x2="158" y2="70" stroke="#E0408A" stroke-width="1.5" opacity="0.9"/>
+  <circle cx="184" cy="88" r="2.5" fill="#E0408A"/>
+  <ellipse cx="72" cy="97" rx="22" ry="26" fill="#1A0830"/>
+  <ellipse cx="128" cy="97" rx="22" ry="26" fill="#1A0830"/>
+  <circle cx="65" cy="89" r="6" fill="white" opacity="0.95"/>
+  <circle cx="64" cy="88" r="2.5" fill="#22D4E8"/>
+  <circle cx="121" cy="89" r="6" fill="white" opacity="0.95"/>
+  <circle cx="120" cy="88" r="2.5" fill="#22D4E8"/>
+  <circle cx="79" cy="91" r="1.5" fill="white" opacity="0.45"/>
+  <circle cx="135" cy="91" r="1.5" fill="white" opacity="0.45"/>
+  <path d="M 65 128 Q 100 160 135 128" stroke="#E0408A" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <circle cx="100" cy="26" r="3" fill="#E0408A" opacity="0.8"/>
+  <circle cx="87" cy="34" r="2" fill="#22D4E8" opacity="0.65"/>
+  <circle cx="113" cy="34" r="2" fill="#22D4E8" opacity="0.65"/>
+</svg>"""
+
+_SETUP_CSS = """
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #0A0A14;
+      --surface:  #0F0F1E;
+      --border:   #2A1F4A;
+      --violet:   #6B3FA0;
+      --violet-l: #8B5FC0;
+      --magenta:  #E0408A;
+      --cyan:     #22D4E8;
+      --text:     #E8E0F0;
+      --dim:      #7868A0;
+      --err-bg:   rgba(224,64,138,0.10);
+      --err-bd:   rgba(224,64,138,0.30);
+    }
+    body {
+      background: var(--bg);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui,-apple-system,'Segoe UI',sans-serif;
+      color: var(--text);
+      padding: 1.5rem;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 2.5rem 2rem;
+      width: 100%;
+      max-width: 420px;
+      text-align: center;
+    }
+    .face { display: flex; justify-content: center; margin-bottom: 1.25rem; }
+    h1 { font-size: 1.45rem; font-weight: 700; margin-bottom: .45rem; }
+    .tagline { color: var(--dim); font-size: .88rem; line-height: 1.55; margin-bottom: 1.25rem; }
+    .badge {
+      display: inline-flex; align-items: center; gap: .35rem;
+      font-size: .72rem; color: var(--cyan);
+      background: rgba(34,212,232,.08); border: 1px solid rgba(34,212,232,.2);
+      border-radius: 100px; padding: .25rem .75rem; margin-bottom: 1.5rem;
+    }
+    .errors {
+      background: var(--err-bg); border: 1px solid var(--err-bd);
+      border-radius: 10px; padding: .7rem 1rem; margin-bottom: 1rem; text-align: left;
+    }
+    .errors p { font-size: .82rem; color: var(--magenta); line-height: 1.5; }
+    .errors p + p { margin-top: .2rem; }
+    .field { text-align: left; margin-bottom: .95rem; }
+    label { display: block; font-size: .78rem; color: var(--dim); margin-bottom: .3rem; letter-spacing: .03em; }
+    input {
+      width: 100%; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 10px; padding: .7rem .9rem; color: var(--text);
+      font-size: .95rem; outline: none; transition: border-color .15s;
+    }
+    input:focus { border-color: var(--violet-l); }
+    .hint { font-size: .73rem; color: var(--dim); margin-top: .3rem; line-height: 1.45; }
+    button {
+      width: 100%; margin-top: .35rem; background: var(--violet); color: #fff;
+      border: none; border-radius: 12px; padding: .85rem; font-size: 1rem;
+      font-weight: 600; cursor: pointer; transition: background .15s, transform .1s;
+      letter-spacing: .01em;
+    }
+    button:hover { background: var(--violet-l); }
+    button:active { transform: scale(.98); }
+    .note { margin-top: 1.2rem; font-size: .73rem; color: var(--dim); line-height: 1.5; }
+    .ok { color: #22C55E; font-size: .9rem; margin: .75rem 0 1rem; line-height: 1.5; }
+    a.go {
+      display: inline-block; background: var(--violet); color: #fff;
+      text-decoration: none; border-radius: 12px; padding: .75rem 2.25rem;
+      font-size: .95rem; font-weight: 600; transition: background .15s;
+    }
+    a.go:hover { background: var(--violet-l); }
+"""
+
+
+def _setup_html(errors: list[str] | None = None) -> str:
+    err_block = ""
+    if errors:
+        items = "".join(f"<p>{e}</p>" for e in errors)
+        err_block = f'<div class="errors">{items}</div>'
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0A0A14">
+  <title>Meet Ph3b3</title>
+  <style>{_SETUP_CSS}</style>
+</head>
+<body>
+<div class="card">
+  <div class="face">{_FACE_SLEEPY}</div>
+  <h1>Hi — I'm Ph3b3.</h1>
+  <p class="tagline">I'm not quite awake yet. Let's set up your access so we can get started. It'll only take a moment.</p>
+  <span class="badge">
+    <svg width="10" height="10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="3.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="5" cy="5" r="1.5" fill="currentColor"/></svg>
+    Everything stays on this device — nothing goes online
+  </span>
+  {err_block}
+  <form method="post" action="/setup" autocomplete="off">
+    <div class="field">
+      <label for="username">Your username</label>
+      <input id="username" name="username" type="text" required minlength="2" maxlength="64"
+             placeholder="e.g. your first name" autocomplete="username">
+    </div>
+    <div class="field">
+      <label for="password">Choose a password</label>
+      <input id="password" name="password" type="password" required
+             placeholder="at least 12 characters" autocomplete="new-password">
+      <p class="hint">Let's make it a strong one — at least 12 characters, something you haven't used elsewhere.</p>
+    </div>
+    <div class="field">
+      <label for="confirm">Confirm password</label>
+      <input id="confirm" name="confirm" type="password" required
+             placeholder="same again" autocomplete="new-password">
+    </div>
+    <button type="submit">Wake me up &#8594;</button>
+  </form>
+  <p class="note">Ph3b3 runs entirely on your own hardware. These credentials never leave this device.</p>
+</div>
+</body>
+</html>"""
+
+
+def _setup_done_html(username: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0A0A14">
+  <title>Ph3b3 is awake</title>
+  <style>{_SETUP_CSS}</style>
+</head>
+<body>
+<div class="card">
+  <div class="face">{_FACE_HAPPY}</div>
+  <h1>I'm awake!</h1>
+  <p class="tagline">Welcome, {username}. Your credentials are saved and this setup page is now permanently closed — it won't be reachable again.</p>
+  <p class="ok">&#10003; Setup complete &mdash; fully local, nothing shared.</p>
+  <a class="go" href="/login">Open Ph3b3 &#8594;</a>
+  <p class="note" style="margin-top:1.5rem">Bookmark <strong>/panel</strong> for quick access. Enjoy.</p>
+</div>
+</body>
+</html>"""
+
+
 def _login_html(error: bool = False) -> str:
     err_block = (
         '<div class="login-err">Wrong username or password.</div>' if error else ""
@@ -1303,6 +1538,53 @@ def _login_html(error: bool = False) -> str:
   </div>
 </body>
 </html>"""
+
+
+@app.get("/setup")
+async def setup_page():
+    if _SETUP_COMPLETE:
+        raise HTTPException(status_code=404)
+    return HTMLResponse(content=_setup_html())
+
+
+@app.post("/setup")
+async def setup_submit(request: Request):
+    global _SETUP_COMPLETE, AUTH_USER, AUTH_PASS
+    if _SETUP_COMPLETE:
+        raise HTTPException(status_code=404)
+
+    form    = await request.form()
+    username = (form.get("username") or "").strip()
+    password = (form.get("password") or "")
+    confirm  = (form.get("confirm")  or "")
+
+    errors: list[str] = []
+    if len(username) < 2:
+        errors.append("Username must be at least 2 characters.")
+    strength_err = _check_password_strength(password)
+    if strength_err:
+        errors.append(strength_err)
+    elif password != confirm:
+        errors.append("Passwords don't match — give it another go.")
+
+    if errors:
+        return HTMLResponse(content=_setup_html(errors=errors), status_code=400)
+
+    # Write credentials to .env (preserves all other settings).
+    env_file = ROOT / ".env"
+    env_file.touch()
+    set_key(str(env_file), "PH3B3_USER", username)
+    set_key(str(env_file), "PH3B3_PASSWORD", password)
+
+    # Write sentinel file, then flip in-memory state.
+    # Order matters: sentinel first so the flag is on disk before memory flips.
+    _SETUP_COMPLETE_FILE.touch()
+    _SETUP_COMPLETE = True
+    AUTH_USER = username
+    AUTH_PASS = password
+
+    log.info("First-run setup complete — /setup is now closed.")
+    return HTMLResponse(content=_setup_done_html(username))
 
 
 @app.get("/login")

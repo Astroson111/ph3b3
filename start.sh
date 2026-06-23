@@ -54,5 +54,17 @@ if [ "$SCHEME" = "https" ]; then
     echo "  (self-signed cert — browser will warn once; click Advanced → Proceed)"
 fi
 
+if [ ! -f "$HOME/ph3b3_data/setup_complete" ]; then
+    echo ""
+    echo "┌─────────────────────────────────────────────────────────┐"
+    echo "│  Ph3b3 FIRST-TIME SETUP                                 │"
+    echo "│  Open either address in any browser on this network:    │"
+    echo "│                                                         │"
+    echo "│  http://ph3b3.local:$PORT/setup                             │"
+    echo "│  http://$HOST_IP:$PORT/setup                        │"
+    echo "└─────────────────────────────────────────────────────────┘"
+    echo ""
+fi
+
 cd "$PH3B3_DIR"
 exec python agent/server.py
