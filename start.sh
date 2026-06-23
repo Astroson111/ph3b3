@@ -58,10 +58,10 @@ if [ ! -f "$HOME/ph3b3_data/setup_complete" ]; then
     echo ""
     echo "┌─────────────────────────────────────────────────────────┐"
     echo "│  Ph3b3 FIRST-TIME SETUP                                 │"
-    echo "│  Open either address in any browser on this network:    │"
+    echo "│  Open this address in any browser on this network:      │"
     echo "│                                                         │"
-    echo "│  http://ph3b3.local:$PORT/setup                             │"
-    echo "│  http://$HOST_IP:$PORT/setup                        │"
+    echo "│  $SCHEME://$HOST_IP:$PORT/setup"
+    echo "│                                                         │"
     echo "└─────────────────────────────────────────────────────────┘"
     echo ""
 fi
