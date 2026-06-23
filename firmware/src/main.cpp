@@ -6,8 +6,7 @@
 #include <ESP32Servo.h>
 
 // ── Credentials & endpoints ──────────────────────────────────────────────────
-#define WIFI_SSID     "your-ssid"
-#define WIFI_PASSWORD "your-password"
+#include "secrets.h"
 #define PH3B3_HOST    "192.168.0.16"
 #define PH3B3_PORT    7331
 #define PH3B3_PATH    "/ws/stackchan"
