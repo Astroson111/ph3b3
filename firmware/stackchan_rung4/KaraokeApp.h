@@ -5,6 +5,7 @@ extern bool g_overlayOpen;
 #include <M5Unified.h>
 #include <SD.h>
 #include <vector>
+#include <algorithm>
 
 // ── Servo tilt safe window (BSP angle units: 10 = 1°) ──────────────────────
 static const int K_TILT_MIN  =  50;  //  5°
@@ -46,15 +47,21 @@ public:
     void init() override {
         uint32_t _karT = millis(); // [KAR] strip
         Serial.println("[KAR] KaraokeApp init enter"); // [KAR] strip
-        _state = STOPPED;
-        face.begin(320, 160);  // top 160 px for face, bottom 80 for lyrics
+        _state = BROWSING;
+        face.begin(320, 160);  // top 160 px for face, bottom 80 for browser/lyrics
         Serial.printf("[KAR] face.begin(320,160) %lums\n", millis()-_karT); // [KAR] strip
         face.setState(Ph3b3Face::IDLE);
 
         // Mount SD once per mode entry — avoids 200-500ms SPI init blocking every tap.
         _sdMounted = SD.begin(4);
-        if (!_sdMounted) Serial.println("[KAR] SD not found at init");
-        Serial.printf("[KAR] SD.begin %lums\n", millis()-_karT); // [KAR] strip
+        if (_sdMounted) {
+            _scanTracks();
+        } else {
+            Serial.println("[KAR] SD not found at init");
+            _tracks.clear();
+        }
+        if (_trackSel >= (int)_tracks.size()) _trackSel = 0;
+        Serial.printf("[KAR] SD.begin + scan %lums\n", millis()-_karT); // [KAR] strip
 
         // 30ms settle: BCK/WS lines are shared with speaker I2S (GPIO 34/33).
         // TalkApp.exit() calls Speaker.end() immediately before we run; without
@@ -69,6 +76,7 @@ public:
         _stopPlayback();
         M5.Mic.end();
         _sdMounted = false;  // reset so next init() re-mounts (handles card swap)
+        _tracks.clear();
         face.begin();                           // restore full-screen face
     }
 
@@ -76,13 +84,28 @@ public:
         if (!g_overlayOpen) {
             int16_t tx = 0, ty = 0;
             bool touching = M5StackChan.Display().getTouch(&tx, &ty);
-            // Reserve top-left 36×36 px for crescent tab
+            // Reserve top-left 60×60 px for crescent tab
             bool tapped = (touching && !_wasTouch) && !(tx < 60 && ty < 60);
             _wasTouch = touching;
 
             if (tapped) {
-                if (_state == STOPPED) _startPlayback();
-                else                   _stopPlayback();
+                if (_state == BROWSING) {
+                    int H = M5StackChan.Display().height();  // 240
+                    if (ty < H / 3) {
+                        // Top third → prev track (wraps)
+                        if (!_tracks.empty())
+                            _trackSel = (_trackSel > 0) ? _trackSel - 1 : (int)_tracks.size() - 1;
+                    } else if (ty > 2 * H / 3) {
+                        // Bottom third → next track (wraps)
+                        if (!_tracks.empty())
+                            _trackSel = (_trackSel + 1) % (int)_tracks.size();
+                    } else {
+                        // Centre → play selected track
+                        if (!_tracks.empty()) _startPlayback();
+                    }
+                } else {
+                    _stopPlayback();
+                }
             }
         } else {
             int16_t _tx, _ty;
@@ -101,16 +124,20 @@ public:
     }
 
     void draw() override {
-        // Lyrics in the bottom 80 px (y 160–240), drawn after face.update() pushes face sprite
         if (_state == PLAYING) _drawCurrentLyric();
+        else                   _drawBrowser();
     }
 
     const char* name() const override { return "Karaoke"; }
 
 private:
-    enum KState { STOPPED, PLAYING };
-    KState _state     = STOPPED;
-    bool   _wasTouch  = false;
+    enum KState { BROWSING, PLAYING };
+    KState _state    = BROWSING;
+    bool   _wasTouch = false;
+
+    // ── Track browser ────────────────────────────────────────────────────────
+    std::vector<String> _tracks;
+    int      _trackSel    = 0;
 
     // ── Playback ────────────────────────────────────────────────────────────
     bool     _sdMounted    = false;
@@ -127,20 +154,80 @@ private:
     uint32_t _playStartMs  = 0;
 
     // ── Body language ───────────────────────────────────────────────────────
-    bool     _nodUp        = false;
-    uint32_t _nodTickMs    = 0;
-    int      _panDir       = 1;
-    uint32_t _swayTickMs   = 0;
+    bool     _nodUp      = false;
+    uint32_t _nodTickMs  = 0;
+    int      _panDir     = 1;
+    uint32_t _swayTickMs = 0;
 
     // ── Mic VU ──────────────────────────────────────────────────────────────
     int16_t  _micBuf[K_MIC_SAMPLES];
-    uint8_t  _vuLevel      = 0;
-
-    // ── SD path helpers ─────────────────────────────────────────────────────
-    static constexpr const char* TRACK_WAV = "/karaoke/track.wav";
-    static constexpr const char* TRACK_LRC = "/karaoke/track.lrc";
+    uint8_t  _vuLevel    = 0;
 
     // ────────────────────────────────────────────────────────────────────────
+
+    // Scan /karaoke/ for .wav files and populate _tracks with their stems.
+    void _scanTracks() {
+        _tracks.clear();
+        File dir = SD.open("/karaoke");
+        if (!dir || !dir.isDirectory()) {
+            Serial.println("[KAR] /karaoke dir not found");
+            return;
+        }
+        for (;;) {
+            File f = dir.openNextFile();
+            if (!f) break;
+            String nm = String(f.name());
+            f.close();
+            // SD lib may return just the filename or the full path — normalise.
+            int slash = nm.lastIndexOf('/');
+            if (slash >= 0) nm = nm.substring(slash + 1);
+            String lower = nm; lower.toLowerCase();
+            if (lower.endsWith(".wav"))
+                _tracks.push_back(nm.substring(0, nm.length() - 4));
+        }
+        dir.close();
+        std::sort(_tracks.begin(), _tracks.end());
+        Serial.printf("[KAR] found %d track(s)\n", (int)_tracks.size());
+    }
+
+    // Draw track browser in the bottom 80 px strip (y 160–239).
+    // Full-screen touch zones: top third = prev, centre = play, bottom third = next.
+    void _drawBrowser() {
+        auto& d = M5StackChan.Display();
+        int W = d.width();  // 320
+        d.fillRect(0, 160, W, 80, TFT_BLACK);
+        d.drawFastHLine(0, 161, W, d.color565(40, 20, 80));
+
+        if (_tracks.empty()) {
+            d.setTextDatum(middle_center);
+            d.setTextSize(1);
+            d.setTextColor(_sdMounted ? d.color565(160, 80, 80) : d.color565(120, 60, 60), TFT_BLACK);
+            d.drawString(_sdMounted ? "no tracks on SD" : "no SD card", W / 2, 200);
+            return;
+        }
+
+        // Navigation hint
+        d.setTextDatum(top_center);
+        d.setTextSize(1);
+        d.setTextColor(d.color565(60, 40, 100), TFT_BLACK);
+        d.drawString("^ prev  |  center: play  |  next v", W / 2, 164);
+
+        // Track name — dashes → spaces, truncate to 20 chars
+        String nm = _tracks[_trackSel];
+        for (int i = 0; i < (int)nm.length(); i++) if (nm[i] == '-') nm[i] = ' ';
+        if ((int)nm.length() > 20) { nm = nm.substring(0, 18); nm += ".."; }
+
+        d.setTextDatum(middle_center);
+        d.setTextSize(2);
+        d.setTextColor(TFT_CYAN, TFT_BLACK);
+        d.drawString(nm, W / 2, 196);
+
+        // Track counter
+        d.setTextDatum(bottom_center);
+        d.setTextSize(1);
+        d.setTextColor(d.color565(100, 80, 160), TFT_BLACK);
+        d.drawString(String(_trackSel + 1) + " / " + String(_tracks.size()), W / 2, 237);
+    }
 
     bool _parseWavHeader() {
         WavHdr hdr;
@@ -158,14 +245,12 @@ private:
         while (lrc.available()) {
             String line = lrc.readStringUntil('\n');
             line.trim();
-            // Expect [mm:ss.xx] or [mm:ss.xxx]
             if (line.length() < 9 || line[0] != '[') continue;
             int close = line.indexOf(']');
             if (close < 0) continue;
-            String ts = line.substring(1, close);
+            String ts   = line.substring(1, close);
             String text = line.substring(close + 1);
             text.trim();
-            // Parse mm:ss.xx
             int colon = ts.indexOf(':');
             int dot   = ts.indexOf('.');
             if (colon < 0 || dot < 0) continue;
@@ -183,45 +268,46 @@ private:
 
     void _startPlayback() {
         if (!_sdMounted) {
-            // SD absent at init — try once more in case card was inserted after entry
             _sdMounted = SD.begin(4);
             if (!_sdMounted) { Serial.println("[karaoke] no SD card"); return; }
         }
-        _wavFile = SD.open(TRACK_WAV);
+
+        String stem    = _tracks[_trackSel];
+        String wavPath = "/karaoke/" + stem + ".wav";
+        String lrcPath = "/karaoke/" + stem + ".lrc";
+
+        _wavFile = SD.open(wavPath.c_str());
         if (!_wavFile) {
-            Serial.println("[karaoke] no track.wav");
+            Serial.printf("[karaoke] can't open %s\n", wavPath.c_str());
             return;
         }
-        _trackName = String(TRACK_WAV).substring(9);
+        _trackName = stem;
         if (!_parseWavHeader()) {
             Serial.println("[karaoke] bad WAV header");
             _wavFile.close();
             return;
         }
 
-        _loadLyrics(TRACK_LRC);
-        _lyricIdx   = 0;
+        _loadLyrics(lrcPath.c_str());
+        _lyricIdx    = 0;
         _playStartMs = millis();
         _fillIdx     = 0;
         M5.Speaker.begin();
         M5.Speaker.setVolume(200);
         _state = PLAYING;
 
-        // Pan to centre, set SPEAKING body language
         M5StackChan.Motion.moveX(0, 300);
         M5StackChan.Motion.moveY(K_TILT_HOME, 200);
-
-        // Initial LED flash
         M5StackChan.showRgbColor(20, 0, 60);
+        Serial.printf("[karaoke] playing: %s\n", stem.c_str());
     }
 
     void _stopPlayback() {
         if (_state != PLAYING) return;
         M5.Speaker.stop();
         _wavFile.close();
-        _state = STOPPED;
+        _state = BROWSING;
 
-        // Return servos to neutral
         M5StackChan.Motion.moveX(0, 200);
         M5StackChan.Motion.moveY(K_TILT_HOME, 200);
         M5StackChan.showRgbColor(0, 0, 0);
@@ -229,9 +315,8 @@ private:
 
     // ── Subsystem A+C: stream WAV from SD → M5.Speaker double-buffer ────────
     void _streamAudio() {
-        // Queue next chunk only when the speaker channel has room
         if (!_wavFile.available()) { _stopPlayback(); return; }
-        if (M5.Speaker.isPlaying(K_CHAN) >= 2) return;  // queue full, try next tick
+        if (M5.Speaker.isPlaying(K_CHAN) >= 2) return;
 
         size_t bytes = _wavFile.read(
             (uint8_t*)_audioBuf[_fillIdx],
@@ -250,7 +335,6 @@ private:
         if (_lyrics.empty()) return;
         uint32_t elapsed = millis() - _playStartMs;
 
-        // Advance lyric index
         while (_lyricIdx + 1 < (int)_lyrics.size() &&
                _lyrics[_lyricIdx + 1].ms <= elapsed) {
             _lyricIdx++;
@@ -258,16 +342,12 @@ private:
 
         auto& d = M5StackChan.Display();
         int W = d.width();
-        // Clear the lyric strip (below face canvas at y=160)
         d.fillRect(0, 160, W, 80, TFT_BLACK);
         d.setTextDatum(middle_center);
         d.setTextColor(TFT_YELLOW, TFT_BLACK);
         d.setTextSize(2);
-
-        // Current line
         d.drawString(_lyrics[_lyricIdx].text, W / 2, 185);
 
-        // Next line (preview, dimmed)
         if (_lyricIdx + 1 < (int)_lyrics.size()) {
             d.setTextColor(TFT_DARKGREY, TFT_BLACK);
             d.setTextSize(1);
@@ -279,7 +359,6 @@ private:
     void _tickNod() {
         uint32_t now = millis();
 
-        // Nod: alternate tilt every 600 ms while SPEAKING
         if (now - _nodTickMs > 600) {
             _nodTickMs = now;
             int tilt = _nodUp ? K_TILT_HOME + 30 : K_TILT_HOME - 30;
@@ -288,7 +367,6 @@ private:
             _nodUp = !_nodUp;
         }
 
-        // Sway: pan left/right every 1500 ms
         if (now - _swayTickMs > 1500) {
             _swayTickMs = now;
             M5StackChan.Motion.moveX(_panDir * K_PAN_RANGE, 600);
@@ -298,9 +376,7 @@ private:
 
     // ── Subsystem E: RGB LED beat flash ─────────────────────────────────────
     void _tickLeds() {
-        // Simple alternating colour pulse — 500 ms period
-        // Replace with FFT beat detection in a future rung
-        static uint32_t ledMs = 0;
+        static uint32_t ledMs    = 0;
         static int      ledPhase = 0;
         if (millis() - ledMs < 500) return;
         ledMs = millis();
@@ -308,7 +384,6 @@ private:
         static const uint8_t cols[4][3] = {
             {40,0,80}, {0,20,80}, {80,0,40}, {0,40,80}
         };
-        // Left side: one colour, right side: complementary
         for (int i = 0; i < 6; i++)
             M5StackChan.setRgbColor(i,
                 cols[ledPhase][0], cols[ledPhase][1], cols[ledPhase][2]);
@@ -324,17 +399,15 @@ private:
     // If speaker audio cuts out when mic is active, disable Mic.begin() in init()
     // and comment out this function call in update(). Needs runtime verification.
     void _tickMic() {
-        if (M5.Mic.isRecording()) return;  // wait for previous capture to finish
+        if (M5.Mic.isRecording()) return;
         M5.Mic.record(_micBuf, K_MIC_SAMPLES, 16000, false);
 
-        // Compute RMS as speaking level for face lip-sync
         int64_t sum = 0;
         for (int i = 0; i < K_MIC_SAMPLES; i++) sum += (int64_t)_micBuf[i] * _micBuf[i];
-        float rms = sqrtf((float)(sum / K_MIC_SAMPLES));
+        float rms   = sqrtf((float)(sum / K_MIC_SAMPLES));
         float level = constrain(rms / 8000.0f, 0.0f, 1.0f);
         face.setSpeakingLevel(level);
 
-        // LED brightness scales with singer's level
         uint8_t bright = (uint8_t)(level * 80);
         M5StackChan.showRgbColor(bright, 0, bright / 2);
     }
