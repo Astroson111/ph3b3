@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import base64
+import subprocess
 from contextlib import asynccontextmanager
 from datetime import datetime
 import json
@@ -275,8 +276,7 @@ TOOLS = [
     {"type":"function","function":{"name":"spotify_now_playing","description":"Get currently playing track","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"dnd_lookup","description":"Look up D&D rules spells monsters lore","parameters":{"type":"object","properties":{"query":{"type":"string"},"category":{"type":"string","default":"any"},"edition":{"type":"string","default":"5e"}},"required":["query"]}}},
     {"type":"function","function":{"name":"film_lookup","description":"Look up obscure films or get recommendations","parameters":{"type":"object","properties":{"query":{"type":"string"},"mode":{"type":"string","default":"lookup"}},"required":["query"]}}},
-    {"type":"function","function":{"name":"translate_text","description":"Translate text to any language, fully offline after language pack is installed","parameters":{"type":"object","properties":{"text":{"type":"string"},"target_lang":{"type":"string"},"from_lang":{"type":"string","default":"en","description":"Source language code (default: en)"}},"required":["text","target_lang"]}}},
-    {"type":"function","function":{"name":"translate_install_pack","description":"Download and install a translation language pack one time. Requires network access for the download only — all translation is local after this.","parameters":{"type":"object","properties":{"from_lang":{"type":"string","default":"en"},"to_lang":{"type":"string"}},"required":["to_lang"]}}},
+    {"type":"function","function":{"name":"translate_text","description":"Translate text to any language using Google Translate (requires internet). Source language is auto-detected.","parameters":{"type":"object","properties":{"text":{"type":"string"},"target_lang":{"type":"string","description":"Target language code, e.g. 'es' for Spanish, 'ja' for Japanese, 'fr' for French"}},"required":["text","target_lang"]}}},
     {"type":"function","function":{"name":"remember_fact","description":"Remember a fact permanently","parameters":{"type":"object","properties":{"key":{"type":"string"},"value":{"type":"string"}},"required":["key","value"]}}},
     {"type":"function","function":{"name":"log_anomaly","description":"Log a detected anomaly","parameters":{"type":"object","properties":{"description":{"type":"string"},"source":{"type":"string","default":"camera"}},"required":["description"]}}},
     {"type":"function","function":{"name":"recall_memory","description":"Search long-term memory","parameters":{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"]}}},
@@ -463,19 +463,11 @@ async def execute_tool(name, args):
         elif name == "dnd_lookup": result = dnd.lookup(args["query"], args.get("category","any"), args.get("edition","5e"))
         elif name == "film_lookup": result = film.lookup(args["query"], args.get("mode","lookup"))
         elif name == "translate_text":
-            r = translation.translate(args["text"], args.get("target_lang"), args.get("from_lang","en"))
-            if r.get("needs_install"):
-                tts.speak(
-                    f"I need to download the {r['from_code']} to {r['to_code']} language pack. "
-                    "After that, all translation stays on Nyx with no data leaving. Say yes and I'll install it."
-                )
-                result = r["error"]
-            elif r.get("error"):
+            r = translation.translate(args["text"], args.get("target_lang"))
+            if r.get("error"):
                 result = f"Error: {r['error']}"
             else:
                 result = r.get("translated", "")
-        elif name == "translate_install_pack":
-            result = translation.install_language_pack(args.get("from_lang","en"), args.get("to_lang"))
         elif name == "remember_fact": result = memory.remember_fact(args["key"], args["value"])
         elif name == "log_anomaly": result = memory.log_anomaly(args["description"], args.get("source","camera"))
         elif name == "recall_memory": result = memory.recall(args["topic"])
@@ -945,6 +937,28 @@ async def transcribe_audio(body: dict):
         except OSError:
             pass
 
+
+def _wg_tunnel_up() -> bool:
+    """Return True if wg0 exists and is UP — reads live kernel state, never a cached flag."""
+    r = subprocess.run(["ip", "link", "show", "wg0"], capture_output=True, text=True)
+    return r.returncode == 0 and "UP" in r.stdout
+
+@app.get("/iris/tunnel")
+async def iris_tunnel_status():
+    return {"up": _wg_tunnel_up()}
+
+@app.post("/iris/tunnel")
+async def iris_tunnel_toggle(body: dict):
+    action = body.get("action", "")
+    if action not in frozenset({"up", "down"}):
+        raise HTTPException(400, "action must be 'up' or 'down'")
+    # List form, shell=False — no shell ever sees these args.
+    # "wg0" is a literal here, never derived from request data.
+    cmd = ["sudo", "/usr/bin/wg-quick", action, "wg0"]
+    r = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise HTTPException(500, (r.stderr or r.stdout)[:200] or "wg-quick failed")
+    return {"up": _wg_tunnel_up()}
 
 def _load_iris_networks() -> list:
     if not IRIS_NETWORKS_FILE.exists():
