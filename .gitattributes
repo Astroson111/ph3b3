@@ -1,0 +1,10 @@
+# Normalize text files to LF in repo + working tree.
+# Ends cross-OS (Windows/WSL) and OneDrive CRLF churn.
+* text=auto eol=lf
+
+# Shell scripts must stay LF (Linux / ESP toolchain).
+*.sh text eol=lf
+
+# Binary assets - never touch line endings.
+*.png binary
+*.ico binary
