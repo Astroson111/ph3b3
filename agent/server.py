@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+import wave as _wave
 from pathlib import Path
 import httpx
 import getpass
@@ -1077,6 +1078,14 @@ def _find_karaoke_sd() -> Path | None:
     return None
 
 
+def _wav_duration_s(path) -> float:
+    try:
+        with _wave.open(str(path), 'rb') as w:
+            return round(w.getnframes() / w.getframerate(), 1)
+    except Exception:
+        return 0.0
+
+
 def _track_info(name: str) -> dict:
     lib = _karaoke_lib()
     wav = lib / f"{name}.wav"
@@ -1093,6 +1102,7 @@ def _track_info(name: str) -> dict:
     return {
         "name":        name,
         "wav_bytes":   wav.stat().st_size if wav.exists() else 0,
+        "duration_s":  _wav_duration_s(wav) if wav.exists() else 0.0,
         "lrc_exists":  lrc.exists(),
         "on_sd":       on_sd,
         "source":      "jamendo" if attribution else "upload",
@@ -1272,6 +1282,25 @@ async def karaoke_audio(name: str, request: Request):
     # FileResponse handles Range headers natively — required for seek/scrub in browsers
     return FileResponse(wav, media_type="audio/wav",
                         headers={"Accept-Ranges": "bytes"})
+
+
+# In-memory session: phone pushes track → TV polls and auto-plays
+_karaoke_session: dict = {"track": None, "playing": False, "ts": 0.0}
+
+
+@app.get("/karaoke/now")
+async def karaoke_session_get():
+    return _karaoke_session
+
+
+@app.put("/karaoke/now")
+async def karaoke_session_put(request: Request):
+    body = await request.json()
+    for k in ("track", "playing"):
+        if k in body:
+            _karaoke_session[k] = body[k]
+    _karaoke_session["ts"] = time.time()
+    return _karaoke_session
 
 
 _COMMON_PASSWORDS = {
