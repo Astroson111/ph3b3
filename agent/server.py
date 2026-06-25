@@ -18,7 +18,7 @@ import getpass
 import shutil
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 from dotenv import load_dotenv, set_key
@@ -1254,6 +1254,24 @@ async def karaoke_attribution(name: str):
     if not attr_file.exists():
         raise HTTPException(status_code=404, detail=f"No attribution for '{name}'")
     return {"attribution": json.loads(attr_file.read_text())}
+
+
+@app.get("/karaoke")
+async def karaoke_view():
+    return Response(
+        content=(ROOT / "static" / "karaoke.html").read_text(encoding="utf-8"),
+        media_type="text/html",
+    )
+
+
+@app.get("/karaoke/audio/{name}")
+async def karaoke_audio(name: str, request: Request):
+    wav = _karaoke_lib() / f"{name}.wav"
+    if not wav.exists():
+        raise HTTPException(status_code=404, detail=f"audio '{name}' not found")
+    # FileResponse handles Range headers natively — required for seek/scrub in browsers
+    return FileResponse(wav, media_type="audio/wav",
+                        headers={"Accept-Ranges": "bytes"})
 
 
 _COMMON_PASSWORDS = {

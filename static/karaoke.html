@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ph3b3 Karaoke</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:      #0a0318;
+  --bg2:     #0d0525;
+  --violet:  #6B3FA0;
+  --violet-l:#a855f7;
+  --magenta: #E0408A;
+  --dim:     #2d1060;
+  --dim2:    #4a2d80;
+  --rim:     #3d1f7a;
+  --text:    #e0d4ff;
+  --moon-col:#a855f7;
+  --moon-glow:#7c3aed;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Stage ─────────────────────────────────────────────────────────────── */
+#stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3vh 8vw;
+  position: relative;
+  gap: 2.5vh;
+}
+
+/* Subtle animated background gradient */
+#stage::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 40% at 50% 60%, rgba(107,63,160,.12) 0%, transparent 70%),
+    radial-gradient(ellipse 40% 30% at 20% 80%, rgba(224,64,138,.06) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+/* ── Lyric lines ─────────────────────────────────────────────────────────── */
+.lyric-prev,
+.lyric-next {
+  font-size: clamp(1.2rem, 2.6vw, 2.4rem);
+  color: var(--dim2);
+  text-align: center;
+  min-height: 1.4em;
+  transition: opacity .3s;
+  letter-spacing: .01em;
+  width: 100%;
+}
+
+/* The active-line row: moon floats here */
+#lyric-row {
+  position: relative;
+  width: 100%;
+  text-align: center;
+  /* Extra top padding so moon has room above */
+  padding-top: 64px;
+}
+
+#moon {
+  position: absolute;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  /* Two-circle crescent — matches Iris face sprite exactly:
+     outer violet circle, dark carve at top-right → waxing crescent */
+  background:
+    radial-gradient(circle at 63% 32%, var(--bg) 37%, transparent 38%),
+    var(--moon-col);
+  filter:
+    drop-shadow(0 0 8px var(--moon-col))
+    drop-shadow(0 0 22px var(--moon-glow));
+  pointer-events: none;
+  will-change: transform;
+  z-index: 10;
+  /* Default: parked top-left of the row, hidden */
+  top: 0;
+  left: 0;
+  opacity: 0;
+  transition: opacity .15s;
+}
+
+#lyric-current {
+  font-size: clamp(2rem, 5.5vw, 5.5rem);
+  font-weight: 700;
+  color: var(--magenta);
+  text-align: center;
+  line-height: 1.25;
+  min-height: 1.25em;
+  letter-spacing: .025em;
+  text-shadow: 0 0 48px rgba(224,64,138,.35);
+  transition: transform .18s cubic-bezier(.34,1.56,.64,1);
+  display: inline-block;
+  max-width: 100%;
+}
+
+/* ── Transport bar ───────────────────────────────────────────────────────── */
+#transport {
+  flex-shrink: 0;
+  padding: 1.2vh 2.5vw;
+  background: var(--bg2);
+  border-top: 1px solid var(--rim);
+  display: flex;
+  align-items: center;
+  gap: 1.2vw;
+  flex-wrap: wrap;
+}
+
+select#track-sel {
+  background: #1a0a38;
+  color: var(--violet-l);
+  border: 1px solid var(--rim);
+  border-radius: 6px;
+  padding: .35em .75em;
+  font-size: clamp(.75rem, 1.1vw, 1rem);
+  cursor: pointer;
+  max-width: 28vw;
+}
+
+.btn {
+  background: #1a0a38;
+  border: 1px solid var(--rim);
+  border-radius: 7px;
+  color: var(--violet-l);
+  font-size: clamp(1rem, 1.5vw, 1.4rem);
+  padding: .25em .65em;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+  line-height: 1;
+}
+.btn:hover  { background: var(--rim); color: var(--text); }
+.btn:active { background: var(--violet); }
+
+/* Progress track */
+#progress-wrap {
+  flex: 1;
+  min-width: 120px;
+  height: 5px;
+  background: #1a0a38;
+  border-radius: 3px;
+  cursor: pointer;
+  position: relative;
+}
+#progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, var(--violet), var(--magenta));
+  border-radius: 3px;
+  width: 0%;
+  pointer-events: none;
+}
+#progress-thumb {
+  position: absolute;
+  width: 12px; height: 12px;
+  background: var(--magenta);
+  border-radius: 50%;
+  top: 50%; left: 0%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  transition: box-shadow .12s;
+}
+#progress-wrap:hover #progress-thumb {
+  box-shadow: 0 0 0 4px rgba(224,64,138,.3);
+}
+
+#time-disp {
+  font-size: clamp(.7rem, 1vw, .95rem);
+  color: var(--dim2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 9ch;
+}
+
+#attr-line {
+  font-size: clamp(.6rem, .85vw, .8rem);
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 28vw;
+}
+#attr-line a { color: var(--dim2); text-decoration: none; }
+#attr-line a:hover { color: var(--violet-l); }
+
+/* ── Idle / loading hints ────────────────────────────────────────────────── */
+.hint {
+  color: var(--dim2);
+  font-size: clamp(1.5rem, 3vw, 3rem);
+  font-weight: 300;
+  letter-spacing: .08em;
+}
+
+/* Fullscreen toggle */
+#btn-fs { margin-left: auto; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div class="lyric-prev" id="lyric-prev"></div>
+
+  <div id="lyric-row">
+    <div id="moon"></div>
+    <span id="lyric-current" class="hint">☽ &nbsp; Ph3b3 Karaoke</span>
+  </div>
+
+  <div class="lyric-next" id="lyric-next"></div>
+</div>
+
+<div id="transport">
+  <select id="track-sel"><option value="">— pick a track —</option></select>
+  <button class="btn" id="btn-restart" title="Restart (↺)">↺</button>
+  <button class="btn" id="btn-play"    title="Play / Pause">▶</button>
+  <div id="progress-wrap">
+    <div id="progress-fill"></div>
+    <div id="progress-thumb"></div>
+  </div>
+  <span id="time-disp">0:00 / 0:00</span>
+  <span id="attr-line"></span>
+  <button class="btn" id="btn-fs" title="Fullscreen">⛶</button>
+</div>
+
+<audio id="player" preload="auto"></audio>
+
+<script>
+// ── DOM refs ──────────────────────────────────────────────────────────────
+const player   = document.getElementById('player');
+const moon     = document.getElementById('moon');
+const lyricRow = document.getElementById('lyric-row');
+const elPrev   = document.getElementById('lyric-prev');
+const elCurr   = document.getElementById('lyric-current');
+const elNext   = document.getElementById('lyric-next');
+const elFill   = document.getElementById('progress-fill');
+const elThumb  = document.getElementById('progress-thumb');
+const elTime   = document.getElementById('time-disp');
+const elAttr   = document.getElementById('attr-line');
+const btnPlay  = document.getElementById('btn-play');
+const btnRst   = document.getElementById('btn-restart');
+const btnFs    = document.getElementById('btn-fs');
+const trackSel = document.getElementById('track-sel');
+const progWrap = document.getElementById('progress-wrap');
+
+// ── State ─────────────────────────────────────────────────────────────────
+let lines      = [];   // [{time:float, text:string}]
+let curIdx     = -1;
+let moonActive = false;
+let seeking    = false;
+
+// ── LRC parser ────────────────────────────────────────────────────────────
+function parseLRC(raw) {
+  const re = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    const ms = m[3].length === 3 ? parseInt(m[3]) : parseInt(m[3]) * 10;
+    const t  = parseInt(m[1]) * 60 + parseInt(m[2]) + ms / 1000;
+    out.push({ time: t, text: m[4].trim() });
+  }
+  return out.sort((a, b) => a.time - b.time);
+}
+
+// ── Active line index ─────────────────────────────────────────────────────
+function activeIdx(t) {
+  // Binary search
+  let lo = 0, hi = lines.length - 1, idx = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (lines[mid].time <= t) { idx = mid; lo = mid + 1; }
+    else                       hi = mid - 1;
+  }
+  return idx;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+function isSpacer(text) {
+  // ♪ / (…) markers — moon hides during these
+  return !text || text === '♪' || /^[♪(]/.test(text);
+}
+
+// ── Animation loop ────────────────────────────────────────────────────────
+function tick() {
+  requestAnimationFrame(tick);
+
+  const t   = player.currentTime || 0;
+  const dur = player.duration    || 0;
+
+  // Progress bar
+  if (dur > 0 && !seeking) {
+    const pct = (t / dur * 100).toFixed(2) + '%';
+    elFill.style.width  = pct;
+    elThumb.style.left  = pct;
+  }
+  elTime.textContent = `${fmt(t)} / ${fmt(dur || 0)}`;
+
+  if (!lines.length) return;
+
+  // Line advance
+  const idx = activeIdx(t);
+  if (idx !== curIdx) {
+    curIdx = idx;
+    const curr = idx >= 0 ? lines[idx].text    : '';
+    const prev = idx > 0  ? lines[idx - 1].text : '';
+    const next = idx + 1 < lines.length ? lines[idx + 1].text : '';
+
+    elPrev.textContent = isSpacer(prev) ? '' : prev;
+    elNext.textContent = isSpacer(next) ? '' : next;
+
+    moonActive = idx >= 0 && !isSpacer(curr);
+
+    if (moonActive) {
+      elCurr.className = '';
+      elCurr.textContent = curr;
+      // Heartbeat pulse on line change
+      elCurr.style.transform = 'scale(1.05)';
+      setTimeout(() => { elCurr.style.transform = ''; }, 200);
+    } else {
+      elCurr.className = 'hint';
+      elCurr.textContent = curr || '♪';
+      moon.style.opacity = '0';
+    }
+  }
+
+  // Moon position
+  if (!moonActive || player.paused) {
+    if (player.paused) return;  // keep last position frozen on pause
+    return;
+  }
+
+  const lineStart = lines[curIdx].time;
+  const lineEnd   = curIdx + 1 < lines.length
+    ? lines[curIdx + 1].time
+    : lineStart + 6;
+  const progress  = Math.min(1, Math.max(0, (t - lineStart) / (lineEnd - lineStart)));
+
+  // Measure text element
+  const textRect = elCurr.getBoundingClientRect();
+  const rowRect  = lyricRow.getBoundingClientRect();
+  const mW = 46;
+
+  // Horizontal: moon center sweeps from left edge of text to right edge
+  const xStart = textRect.left - rowRect.left;
+  const xEnd   = textRect.right - rowRect.left - mW;
+  const moonX  = xStart + progress * (xEnd - xStart);
+
+  // Vertical: 1.5 sine arcs above the lyric row (bounces between 0 and -36px)
+  const bounce = Math.abs(Math.sin(progress * Math.PI * 3));
+  const moonY  = 8 - bounce * 36;           // sits within the 64px padding-top of lyric-row
+
+  moon.style.transform = `translate(${moonX.toFixed(1)}px, ${moonY.toFixed(1)}px)`;
+  moon.style.opacity   = '1';
+}
+
+// ── Track loading ─────────────────────────────────────────────────────────
+async function loadTrack(name) {
+  curIdx = -1;
+  lines  = [];
+  moon.style.opacity = '0';
+  elPrev.textContent = '';
+  elNext.textContent = '';
+  elCurr.className   = 'hint';
+  elCurr.textContent = '♪ loading…';
+  elAttr.innerHTML   = '';
+
+  // LRC
+  try {
+    const r = await fetch(`/karaoke/lrc/${encodeURIComponent(name)}`);
+    if (r.ok) lines = parseLRC((await r.json()).text);
+  } catch (e) { console.warn('lrc:', e); }
+
+  // Audio
+  player.src = `/karaoke/audio/${encodeURIComponent(name)}`;
+  player.load();
+
+  // Attribution
+  try {
+    const r = await fetch(`/karaoke/attribution/${encodeURIComponent(name)}`);
+    if (r.ok) {
+      const { attribution: a } = await r.json();
+      elAttr.innerHTML =
+        `<a href="${a.jamendo_url}" target="_blank" rel="noopener">` +
+        `${a.track_name} — ${a.artist_name}</a> &nbsp;(CC)`;
+    }
+  } catch {}
+
+  // Prime display
+  if (lines.length) {
+    elCurr.className   = 'hint';
+    elCurr.textContent = '▶ press play';
+    elNext.textContent = lines[0].text;
+  } else {
+    elCurr.textContent = '▶ press play (no LRC)';
+  }
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────
+btnPlay.addEventListener('click', () => {
+  if (!player.src || player.src === window.location.href) return;
+  if (player.paused) { player.play(); btnPlay.textContent = '⏸'; }
+  else               { player.pause(); btnPlay.textContent = '▶'; }
+});
+
+btnRst.addEventListener('click', () => {
+  player.currentTime = 0;
+  curIdx = -1;
+  if (player.paused && player.src) { player.play(); btnPlay.textContent = '⏸'; }
+});
+
+player.addEventListener('play',  () => { btnPlay.textContent = '⏸'; });
+player.addEventListener('pause', () => { btnPlay.textContent = '▶'; });
+player.addEventListener('ended', () => {
+  btnPlay.textContent = '▶';
+  moon.style.opacity  = '0';
+  elCurr.className    = 'hint';
+  elCurr.textContent  = '☽  fin';
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && e.target === document.body) {
+    e.preventDefault(); btnPlay.click();
+  }
+  if (e.code === 'KeyR') btnRst.click();
+  if (e.code === 'KeyF') btnFs.click();
+});
+
+// Seek
+function seekTo(e) {
+  const r = progWrap.getBoundingClientRect();
+  const p = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  player.currentTime = p * (player.duration || 0);
+  curIdx = -1;   // force line re-scan after seek
+}
+progWrap.addEventListener('mousedown', e => { seeking = true; seekTo(e); });
+document.addEventListener('mousemove', e => { if (seeking) seekTo(e); });
+document.addEventListener('mouseup',   () => { seeking = false; });
+
+// Fullscreen
+btnFs.addEventListener('click', () => {
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+  else                              document.exitFullscreen?.();
+});
+
+trackSel.addEventListener('change', () => {
+  if (trackSel.value) loadTrack(trackSel.value);
+});
+
+// ── Init: populate track list ─────────────────────────────────────────────
+async function init() {
+  requestAnimationFrame(tick);
+  try {
+    const r = await fetch('/karaoke/library');
+    if (!r.ok) return;
+    const { tracks } = await r.json();
+
+    const withLRC = tracks.filter(t => t.lrc_exists);
+    const noLRC   = tracks.filter(t => !t.lrc_exists);
+
+    for (const t of withLRC) {
+      const o = document.createElement('option');
+      o.value = t.name;
+      o.textContent = t.name.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      trackSel.appendChild(o);
+    }
+    if (noLRC.length && withLRC.length) {
+      const sep = document.createElement('option');
+      sep.disabled = true; sep.textContent = '── no LRC ──';
+      trackSel.appendChild(sep);
+    }
+    for (const t of noLRC) {
+      const o = document.createElement('option');
+      o.value = t.name; o.disabled = true;
+      o.textContent = t.name.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) + ' (no LRC)';
+      trackSel.appendChild(o);
+    }
+
+    // Auto-load first track that has LRC
+    if (withLRC.length) {
+      trackSel.value = withLRC[0].name;
+      await loadTrack(withLRC[0].name);
+    }
+  } catch (e) { console.error(e); }
+}
+
+init();
+</script>
+</body>
+</html>
