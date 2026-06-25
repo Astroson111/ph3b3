@@ -28,7 +28,7 @@
 // ── Ph3b3 auth — credentials live in gitignored secrets.h ────────────────────
 #include "secrets.h"
 
-// #define SC_FACE_BGR   // uncomment if eyes come up orange
+#define SC_FACE_BGR   // CoreS3 ILI9342 is BGR; swap R↔B so violet renders violet, not cyan
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>

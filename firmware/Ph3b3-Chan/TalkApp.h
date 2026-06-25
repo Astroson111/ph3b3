@@ -45,10 +45,11 @@ public:
         _awaitOnsetMs    = 0;
         _awaitCalibEnd   = 0;
         // One-time TLS setup — cert pointer stays valid (ISRG_ROOT_X1 is in flash).
+        // setTimeout() takes SECONDS on WiFiClientSecure — 90s covers LLM+TTS latency.
         // setReuse(true) tells HTTPClient to preserve the socket after http.end()
         // when the server responds with Connection: keep-alive.
         _tls.setCACert(ISRG_ROOT_X1);
-        _tls.setTimeout(30000);
+        _tls.setTimeout(90);
         _http.setReuse(true);
     }
 
@@ -624,8 +625,8 @@ private:
         if (!_http.begin(_tls, HOST, PORT, "/chat", true))
             return String("ERR: begin failed");
 
-        _http.setConnectTimeout(30000);
-        _http.setTimeout(60000);
+        _http.setConnectTimeout(90000);
+        _http.setTimeout(120000);
         _http.setAuthorization(USER, PASS);
         _http.addHeader("Content-Type", "application/json");
         _http.addHeader("X-Ph3b3-Device", "stackchan");
@@ -644,11 +645,28 @@ private:
         face.update();
 
         // ── Phase A: first 6 KB captures the "response" text field ───────────
+        // Poll available() rather than blocking readBytes(6144) — the response body
+        // may be smaller than 6KB, causing readBytes to hang until socket timeout.
         static const int PEEK_MAX = 6144;
         static char peek[PEEK_MAX + 1];
-        WiFiClient* raw = _http.getStreamPtr();
-        raw->setTimeout(60000);
-        int peekLen = raw->readBytes(peek, PEEK_MAX);
+        auto* raw = _http.getStreamPtr();
+        raw->setTimeout(30000);
+        int peekLen = 0;
+        uint32_t peekDeadline = millis() + 60000;
+        while (peekLen < PEEK_MAX && millis() < peekDeadline) {
+            int avail = raw->available();
+            if (avail > 0) {
+                int n = min(avail, PEEK_MAX - peekLen);
+                peekLen += raw->readBytes(peek + peekLen, n);
+                peek[peekLen] = '\0';
+                if (peekLen > 50 && strstr(peek, "\"audio\":\"")) break;
+            } else if (!raw->connected()) {
+                break;
+            } else {
+                face.update();
+                delay(10);
+            }
+        }
         peek[peekLen] = '\0';
 
         JsonDocument filter; filter["response"] = true;
