@@ -313,6 +313,20 @@
     .net-msg.ok  { color: var(--ok); }
     .net-msg.err { color: var(--err); }
 
+    /* ── WireGuard tunnel toggle ── */
+    .wg-badge { font-size:.65rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+      padding:.2rem .55rem; border-radius:100px; }
+    .wg-badge.wg-on  { background:rgba(224,64,138,.18); color:var(--magenta); border:1px solid rgba(224,64,138,.35); }
+    .wg-badge.wg-off { background:rgba(107,63,160,.15); color:var(--dim);     border:1px solid rgba(107,63,160,.25); }
+    .wg-row  { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.35rem 0; }
+    .wg-desc { font-size:.85rem; color:var(--dim); flex:1; }
+    .wg-toggle { background:var(--violet); color:#fff; border:none; border-radius:8px;
+      padding:.45rem 1rem; font-size:.85rem; font-weight:600; cursor:pointer; white-space:nowrap;
+      transition:background .15s; }
+    .wg-toggle:hover     { background:var(--violet-l); }
+    .wg-toggle.wg-danger { background:var(--magenta); }
+    .wg-toggle.wg-danger:hover { background:#c0306a; }
+
     /* ── Karaoke ── */
     .kar-hero { display:flex; align-items:center; gap:.9rem;
       background:linear-gradient(135deg,rgba(43,15,95,.95),rgba(10,3,26,.98)); }
@@ -521,6 +535,16 @@
       </div>
     </div>
     <div class="ts" id="netTs"></div>
+    <div class="card">
+      <div class="card-title">
+        Remote Tunnel (WireGuard)
+        <span id="wgBadge" class="wg-badge wg-off">Offline</span>
+      </div>
+      <div class="wg-row">
+        <span id="wgDesc" class="wg-desc">Tunnel is <strong>down</strong> — zero exposure at home</span>
+        <button class="wg-toggle" id="wgToggleBtn">Enable</button>
+      </div>
+    </div>
   </section>
 
   <!-- STACK-CHAN -->
@@ -675,6 +699,7 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
   document.getElementById('pane' + t.dataset.pane).classList.add('active');
+  if (t.dataset.pane === 'Iris') wgRefresh();
 }));
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -970,6 +995,40 @@ document.getElementById('netAddBtn').addEventListener('click', async () => {
     netMsg.className = 'net-msg err';
   }
 });
+
+// ── WireGuard tunnel toggle ───────────────────────────────────────────────────
+async function wgRefresh() {
+  try {
+    const data = await fetch('/iris/tunnel').then(r => r.json());
+    const up   = data.up;
+    const badge = document.getElementById('wgBadge');
+    const desc  = document.getElementById('wgDesc');
+    const btn   = document.getElementById('wgToggleBtn');
+    badge.className   = 'wg-badge ' + (up ? 'wg-on' : 'wg-off');
+    badge.textContent = up ? 'Online' : 'Offline';
+    desc.innerHTML    = up
+      ? 'Tunnel is <strong>up</strong> — Ph3b3 reachable on hotspot'
+      : 'Tunnel is <strong>down</strong> — zero exposure at home';
+    btn.textContent = up ? 'Disable' : 'Enable';
+    btn.className   = 'wg-toggle' + (up ? ' wg-danger' : '');
+  } catch { /* server unreachable — leave badge as-is */ }
+}
+async function wgToggle() {
+  const btn    = document.getElementById('wgToggleBtn');
+  const action = btn.textContent === 'Enable' ? 'up' : 'down';
+  btn.disabled    = true;
+  btn.textContent = action === 'up' ? 'Enabling…' : 'Disabling…';
+  try {
+    await fetch('/iris/tunnel', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action}),
+    });
+  } catch(e) {}
+  await wgRefresh();
+  btn.disabled = false;
+}
+document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
 
 // ── Stack-Chan network management ────────────────────────────────────────────
 const scNetList = document.getElementById('scNetList');

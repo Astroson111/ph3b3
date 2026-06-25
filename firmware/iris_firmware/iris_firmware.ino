@@ -12,6 +12,7 @@
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <esp_wifi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
@@ -180,8 +181,11 @@ void applyMoodReaction(const String& text) {
 
 bool     wifiWasConnected = false;
 uint32_t lastReconnectMs  = 0;
+uint8_t  reconnectFailStreak = 0;   // consecutive failures; reset on successful connect
 // Each slot gets 12 s — enough for full auth + DHCP before we try the next.
-const uint32_t RECONNECT_INTERVAL = 12000;
+const uint32_t RECONNECT_INTERVAL  = 12000;
+// After this many consecutive failures, back off to 60 s to stop hammering the AP.
+static const uint8_t RECONNECT_FAIL_HARD = 8;
 
 String cachedScan = "";
 String portalMsg  = "";
@@ -296,12 +300,55 @@ int pickBestNetwork(const String ssids[], int netCount) {
 }
 
 // ----------------------------------------------------------------------------
+// WiFi join helper — full radio teardown + PMF-capable connect
+// ----------------------------------------------------------------------------
+// Two problems it solves:
+//
+// (a) HEAP LEAK: WiFi.disconnect() alone does not release the WPA supplicant's
+//     internal group-key IE buffers when a handshake fails with reason 26
+//     (WIFI_REASON_IE_IN_4WAY_DIFFERS) or 32 (WIFI_REASON_UNSUPP_RSN_IE_VERSION).
+//     Each failed attempt leaks ~4–8 KB of internal SRAM.  After enough retries,
+//     heap drops below the ~72 KB TLS needs → mbedtls_ssl_setup() returns
+//     ALLOC_FAILED → WiFiClientSecure aborts → ESP32 panics.
+//     Fix: WiFi.mode(WIFI_OFF) calls esp_wifi_stop + esp_wifi_deinit, which
+//     frees ALL WiFi stack heap.  WiFi.mode(WIFI_STA) reinits clean.
+//
+// (b) WPA3/PMF MISMATCH: Android S23+ hotspot defaults to WPA2/WPA3 Personal
+//     mixed mode (WPA3-SAE transition).  Some arduino-esp32 2.x builds leave
+//     pmf_cfg.capable = false, causing the AP to send DEAUTH reason 26.
+//     Fix: set pmf_cfg.capable = true so the STA signals 802.11w capability;
+//     also enable SAE PWE hash-to-element + hunt-and-peck (IDF5+) for full SAE.
+//
+// Called by supervisorTick() on every reconnect attempt.
+// NOT used by the captive portal (which manages its own STA/AP mode).
+static void wifiJoin(const char* ssid, const char* pass) {
+  WiFi.mode(WIFI_OFF);                // esp_wifi_stop + esp_wifi_deinit — releases all stack heap
+  delay(400);
+  WiFi.mode(WIFI_STA);                // esp_wifi_init + esp_wifi_start — clean slate
+  WiFi.setAutoReconnect(false);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+
+  wifi_config_t conf = {};
+  strlcpy((char*)conf.sta.ssid,     ssid, sizeof(conf.sta.ssid));
+  strlcpy((char*)conf.sta.password, pass, sizeof(conf.sta.password));
+  conf.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;   // accept WPA2, WPA2/WPA3 mixed, WPA3
+  conf.sta.pmf_cfg.capable    = true;                  // 802.11w capable — required for WPA3 APs
+  conf.sta.pmf_cfg.required   = false;                 // optional, not required, for WPA2 compat
+#if defined(WPA3_SAE_PWE_BOTH)
+  conf.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;           // IDF5+: try both SAE PWE methods
+#endif
+  esp_wifi_set_config(WIFI_IF_STA, &conf);
+  esp_wifi_connect();
+}
+
+// ----------------------------------------------------------------------------
 // WiFi supervisor — non-blocking, called every FACE-mode loop tick
 // ----------------------------------------------------------------------------
 void supervisorTick() {
   if (WiFi.status() == WL_CONNECTED) {
     if (!wifiWasConnected) {
       wifiWasConnected = true;
+      reconnectFailStreak = 0;
       face.setState(Ph3b3Face::IDLE);
       face.setStatusLine(wifiStatusStr());
     }
@@ -326,8 +373,25 @@ void supervisorTick() {
     face.setStatusLine("offline");
   }
   uint32_t now = millis();
-  if (now - lastReconnectMs < RECONNECT_INTERVAL) return;
+  // Back-off: after RECONNECT_FAIL_HARD consecutive failures, slow to 60 s so we
+  // don't hammer an AP that's actively rejecting us.
+  uint32_t interval = (reconnectFailStreak >= RECONNECT_FAIL_HARD)
+                      ? 60000U : RECONNECT_INTERVAL;
+  if (now - lastReconnectMs < interval) return;
   lastReconnectMs = now;
+
+  // Heap guard — TLS needs ~72 KB of contiguous SRAM. If we're below 80 KB,
+  // the WPA supplicant leak has already compounded; attempting WiFi.begin() now
+  // would trigger a TLS-malloc panic on the next HTTP call. Do a full radio
+  // teardown instead: WIFI_OFF → WIFI_STA frees all leaked stack buffers.
+  // Next tick arrives with a healthy heap and attempts the real join.
+  if (ESP.getMaxAllocHeap() < 80000) {
+    WiFi.mode(WIFI_OFF);
+    delay(400);
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(false);
+    return;
+  }
 
   // Alternate between stored networks each attempt — no blocking scan here,
   // that would freeze the main loop and swallow button events.
@@ -336,11 +400,9 @@ void supervisorTick() {
   if (count == 0) return;
   static int reconnectSlot = 0;
   reconnectSlot = (reconnectSlot + 1) % count;
-  String shortSsid = ssids[reconnectSlot].substring(0, 14);
-  face.setStatusLine("trying " + shortSsid + "...");
-  WiFi.disconnect();
-  delay(200);   // let the radio settle before issuing a new begin()
-  WiFi.begin(ssids[reconnectSlot].c_str(), passes[reconnectSlot].c_str());
+  reconnectFailStreak++;
+  // wifiJoin() does the full WIFI_OFF → WIFI_STA teardown + PMF-capable connect.
+  wifiJoin(ssids[reconnectSlot].c_str(), passes[reconnectSlot].c_str());
 }
 
 // ----------------------------------------------------------------------------
@@ -800,7 +862,21 @@ void connectWiFi() {
 
   face.setStatusLine("joining " + ssids[slot] + "...");
   face.update();
-  WiFi.begin(ssids[slot].c_str(), passes[slot].c_str());
+  // Use explicit config with PMF capable — same fix as wifiJoin() but without
+  // the WIFI_OFF teardown (stack is freshly inited by WiFi.mode(WIFI_STA) above).
+  {
+    wifi_config_t sta_conf = {};
+    strlcpy((char*)sta_conf.sta.ssid,     ssids[slot].c_str(), sizeof(sta_conf.sta.ssid));
+    strlcpy((char*)sta_conf.sta.password, passes[slot].c_str(), sizeof(sta_conf.sta.password));
+    sta_conf.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    sta_conf.sta.pmf_cfg.capable    = true;
+    sta_conf.sta.pmf_cfg.required   = false;
+#if defined(WPA3_SAE_PWE_BOTH)
+    sta_conf.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
+#endif
+    esp_wifi_set_config(WIFI_IF_STA, &sta_conf);
+    esp_wifi_connect();
+  }
 
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) {
