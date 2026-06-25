@@ -2,508 +2,902 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Ph3b3 Karaoke</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:      #0a0318;
-  --bg2:     #0d0525;
-  --violet:  #6B3FA0;
-  --violet-l:#a855f7;
-  --magenta: #E0408A;
-  --dim:     #2d1060;
-  --dim2:    #4a2d80;
-  --rim:     #3d1f7a;
-  --text:    #e0d4ff;
-  --moon-col:#a855f7;
-  --moon-glow:#7c3aed;
+  --bg:       #0a0318;
+  --bg2:      #0d0525;
+  --violet:   #6B3FA0;
+  --violet-l: #a855f7;
+  --magenta:  #E0408A;
+  --dim:      #2d1060;
+  --dim2:     #4a2d80;
+  --rim:      #3d1f7a;
+  --text:     #e0d4ff;
 }
 
-body {
+html, body {
   background: var(--bg);
   color: var(--text);
   font-family: 'Segoe UI', system-ui, sans-serif;
-  height: 100dvh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
+  height: 100%;
+  min-height: 100dvh;
+  overflow-x: hidden;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* ── Stage ─────────────────────────────────────────────────────────────── */
-#stage {
+/* ════════════════════════════════════════════════════════
+   VIEW: LIBRARY
+   ════════════════════════════════════════════════════════ */
+#view-lib {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+#lib-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--rim);
+  flex-wrap: wrap;
+}
+
+#lib-header .logo {
+  font-size: 1.5rem;
+  color: var(--violet-l);
+  flex-shrink: 0;
+}
+
+#lib-header h1 {
+  font-size: clamp(1rem, 3vw, 1.3rem);
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+  white-space: nowrap;
+}
+
+#search {
+  background: #1a0a38;
+  border: 1px solid var(--rim);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  flex: 1;
+  min-width: 120px;
+  max-width: 280px;
+  outline: none;
+}
+#search::placeholder { color: var(--dim2); }
+#search:focus { border-color: var(--violet-l); }
+
+.btn-tv {
+  background: #1a0a38;
+  border: 1px solid var(--rim);
+  border-radius: 8px;
+  color: var(--dim2);
+  font-size: 1.1rem;
+  padding: 7px 12px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color .15s, border-color .15s;
+  white-space: nowrap;
+}
+.btn-tv:hover { color: var(--violet-l); border-color: var(--violet-l); }
+
+#track-grid {
+  flex: 1;
+  padding: 24px 20px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  align-content: start;
+}
+
+.track-card {
+  background: #110630;
+  border: 1px solid var(--rim);
+  border-radius: 14px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: border-color .15s, background .15s;
+}
+.track-card:not(.no-lrc):hover {
+  border-color: var(--violet);
+  background: #160840;
+}
+.track-card.no-lrc {
+  opacity: .5;
+}
+
+.card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.card-moon {
+  font-size: 1.8rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.card-meta {
+  flex: 1;
+  min-width: 0;
+}
+.card-title {
+  font-size: clamp(.95rem, 2.5vw, 1.1rem);
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-artist {
+  font-size: .85rem;
+  color: var(--dim2);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-dur {
+  font-size: .8rem;
+  color: var(--dim2);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.badge {
+  font-size: .7rem;
+  padding: 2px 7px;
+  border-radius: 99px;
+  border: 1px solid;
+}
+.badge-cc   { color: #6ee7b7; border-color: #064e3b; background: #022c22; }
+.badge-nolrc { color: #f87171; border-color: #7f1d1d; background: #1f0a0a; }
+
+.btn-sing {
+  width: 100%;
+  padding: 14px;
+  font-size: clamp(1rem, 2.5vw, 1.15rem);
+  font-weight: 700;
+  background: linear-gradient(135deg, #6B3FA0, #E0408A);
+  border: none;
+  border-radius: 10px;
+  color: #fff;
+  cursor: pointer;
+  letter-spacing: .04em;
+  transition: opacity .15s, transform .1s;
+}
+.btn-sing:active { transform: scale(.97); opacity: .85; }
+.btn-sing:disabled {
+  background: var(--dim);
+  color: var(--dim2);
+  cursor: default;
+}
+
+/* ════════════════════════════════════════════════════════
+   VIEW: PLAYER  (full-screen overlay)
+   ════════════════════════════════════════════════════════ */
+#view-player {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: var(--bg);
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* top HUD */
+#player-hud {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  gap: 10px;
+  background: rgba(10,3,24,.7);
+  border-bottom: 1px solid var(--rim);
+}
+
+.hud-btn {
+  background: transparent;
+  border: 1px solid var(--rim);
+  border-radius: 8px;
+  color: var(--violet-l);
+  font-size: clamp(.9rem, 2vw, 1.2rem);
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background .12s;
+  white-space: nowrap;
+  min-width: 40px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hud-btn:hover  { background: var(--rim); }
+.hud-btn:active { background: var(--violet); }
+
+#player-title {
+  flex: 1;
+  text-align: center;
+  font-size: clamp(.8rem, 2vw, 1rem);
+  color: var(--dim2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#hud-right { display: flex; gap: 8px; }
+
+/* stage: lyrics centred in remaining space */
+#player-stage {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 3vh 8vw;
+  padding: 24px 8vw;
+  gap: 3vh;
   position: relative;
-  gap: 2.5vh;
+  overflow: visible;
 }
 
-/* Subtle animated background gradient */
-#stage::before {
+#player-stage::before {
   content: '';
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 60% 40% at 50% 60%, rgba(107,63,160,.12) 0%, transparent 70%),
-    radial-gradient(ellipse 40% 30% at 20% 80%, rgba(224,64,138,.06) 0%, transparent 60%);
+    radial-gradient(ellipse 70% 50% at 50% 55%, rgba(107,63,160,.1) 0%, transparent 70%),
+    radial-gradient(ellipse 40% 30% at 30% 80%, rgba(224,64,138,.05) 0%, transparent 60%);
   pointer-events: none;
 }
 
-/* ── Lyric lines ─────────────────────────────────────────────────────────── */
-.lyric-prev,
-.lyric-next {
-  font-size: clamp(1.2rem, 2.6vw, 2.4rem);
+.lyr {
+  width: 100%;
+  text-align: center;
+  padding: 0 4px;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#lyr-prev, #lyr-next {
+  font-size: clamp(1rem, 2.8vw, 2.6rem);
   color: var(--dim2);
-  text-align: center;
-  min-height: 1.4em;
-  transition: opacity .3s;
-  letter-spacing: .01em;
-  width: 100%;
+  min-height: 1.3em;
 }
 
-/* The active-line row: moon floats here */
-#lyric-row {
-  position: relative;
-  width: 100%;
-  text-align: center;
-  /* Extra top padding so moon has room above */
-  padding-top: 64px;
-}
-
-#moon {
-  position: absolute;
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
-  /* Two-circle crescent — matches Iris face sprite exactly:
-     outer violet circle, dark carve at top-right → waxing crescent */
-  background:
-    radial-gradient(circle at 63% 32%, var(--bg) 37%, transparent 38%),
-    var(--moon-col);
-  filter:
-    drop-shadow(0 0 8px var(--moon-col))
-    drop-shadow(0 0 22px var(--moon-glow));
-  pointer-events: none;
-  will-change: transform;
-  z-index: 10;
-  /* Default: parked top-left of the row, hidden */
-  top: 0;
-  left: 0;
-  opacity: 0;
-  transition: opacity .15s;
-}
-
-#lyric-current {
-  font-size: clamp(2rem, 5.5vw, 5.5rem);
+#lyr-curr {
+  font-size: clamp(1.8rem, 5.5vw, 5.2rem);
   font-weight: 700;
   color: var(--magenta);
-  text-align: center;
-  line-height: 1.25;
-  min-height: 1.25em;
-  letter-spacing: .025em;
-  text-shadow: 0 0 48px rgba(224,64,138,.35);
-  transition: transform .18s cubic-bezier(.34,1.56,.64,1);
+  text-shadow: 0 0 60px rgba(224,64,138,.3);
+  letter-spacing: .02em;
+  min-height: 1.3em;
+  /* Scale-pulse on line advance uses CSS var to avoid layout thrash */
+  transition: transform .2s cubic-bezier(.34,1.56,.64,1);
   display: inline-block;
-  max-width: 100%;
+}
+.lyr-idle {
+  font-size: clamp(1.4rem, 3.5vw, 3rem) !important;
+  font-weight: 300;
+  color: var(--dim2) !important;
+  text-shadow: none !important;
+  letter-spacing: .08em;
 }
 
-/* ── Transport bar ───────────────────────────────────────────────────────── */
-#transport {
+/* footer: progress + time */
+#player-footer {
   flex-shrink: 0;
-  padding: 1.2vh 2.5vw;
-  background: var(--bg2);
-  border-top: 1px solid var(--rim);
   display: flex;
   align-items: center;
-  gap: 1.2vw;
-  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  background: rgba(10,3,24,.7);
+  border-top: 1px solid var(--rim);
 }
 
-select#track-sel {
-  background: #1a0a38;
-  color: var(--violet-l);
-  border: 1px solid var(--rim);
-  border-radius: 6px;
-  padding: .35em .75em;
-  font-size: clamp(.75rem, 1.1vw, 1rem);
-  cursor: pointer;
-  max-width: 28vw;
-}
-
-.btn {
-  background: #1a0a38;
-  border: 1px solid var(--rim);
-  border-radius: 7px;
-  color: var(--violet-l);
-  font-size: clamp(1rem, 1.5vw, 1.4rem);
-  padding: .25em .65em;
-  cursor: pointer;
-  transition: background .12s, color .12s;
-  line-height: 1;
-}
-.btn:hover  { background: var(--rim); color: var(--text); }
-.btn:active { background: var(--violet); }
-
-/* Progress track */
-#progress-wrap {
+#prog-wrap {
   flex: 1;
-  min-width: 120px;
   height: 5px;
   background: #1a0a38;
   border-radius: 3px;
   cursor: pointer;
   position: relative;
 }
-#progress-fill {
+#prog-fill {
   position: absolute;
   inset: 0 auto 0 0;
+  width: 0%;
   background: linear-gradient(90deg, var(--violet), var(--magenta));
   border-radius: 3px;
-  width: 0%;
   pointer-events: none;
 }
-#progress-thumb {
+#prog-thumb {
   position: absolute;
-  width: 12px; height: 12px;
+  width: 13px; height: 13px;
   background: var(--magenta);
   border-radius: 50%;
   top: 50%; left: 0%;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%,-50%);
   pointer-events: none;
-  transition: box-shadow .12s;
+  box-shadow: 0 0 0 0 rgba(224,64,138,.4);
+  transition: box-shadow .15s;
 }
-#progress-wrap:hover #progress-thumb {
-  box-shadow: 0 0 0 4px rgba(224,64,138,.3);
+#prog-wrap:hover #prog-thumb {
+  box-shadow: 0 0 0 5px rgba(224,64,138,.3);
 }
 
 #time-disp {
-  font-size: clamp(.7rem, 1vw, .95rem);
+  font-size: clamp(.7rem, 1.5vw, .9rem);
   color: var(--dim2);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   min-width: 9ch;
+  text-align: right;
 }
 
-#attr-line {
-  font-size: clamp(.6rem, .85vw, .8rem);
-  color: var(--dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 28vw;
+/* ════════════════════════════════════════════════════════
+   MOON — fixed overlay, sits above everything
+   ════════════════════════════════════════════════════════ */
+#moon {
+  position: fixed;
+  top: 0; left: 0;
+  width: 48px; height: 48px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 63% 32%, var(--bg) 37%, transparent 38%),
+    #a855f7;
+  filter:
+    drop-shadow(0 0 10px #a855f7)
+    drop-shadow(0 0 28px #7c3aed88);
+  pointer-events: none;
+  will-change: transform;
+  z-index: 40;
+  opacity: 0;
+  transition: opacity .2s;
 }
-#attr-line a { color: var(--dim2); text-decoration: none; }
-#attr-line a:hover { color: var(--violet-l); }
 
-/* ── Idle / loading hints ────────────────────────────────────────────────── */
-.hint {
+/* ════════════════════════════════════════════════════════
+   VIEW: TV DISPLAY WAITING SCREEN
+   ════════════════════════════════════════════════════════ */
+#view-tv {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: var(--bg);
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+#tv-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 40px;
+}
+
+#tv-moon {
+  width: 120px; height: 120px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 63% 32%, var(--bg) 37%, transparent 38%),
+    #a855f7;
+  filter:
+    drop-shadow(0 0 20px #a855f7)
+    drop-shadow(0 0 60px #7c3aed);
+  animation: tv-pulse 3s ease-in-out infinite;
+}
+@keyframes tv-pulse {
+  0%,100% { filter: drop-shadow(0 0 20px #a855f7) drop-shadow(0 0 60px #7c3aed); }
+  50%     { filter: drop-shadow(0 0 35px #a855f7) drop-shadow(0 0 100px #7c3aed); }
+}
+
+#tv-inner h1 {
+  font-size: clamp(2rem, 5vw, 4rem);
+  font-weight: 700;
+  color: var(--violet-l);
+  letter-spacing: .05em;
+}
+#tv-status {
+  font-size: clamp(1rem, 2.5vw, 1.8rem);
   color: var(--dim2);
-  font-size: clamp(1.5rem, 3vw, 3rem);
-  font-weight: 300;
-  letter-spacing: .08em;
+}
+#tv-hint {
+  font-size: clamp(.75rem, 1.5vw, 1rem);
+  color: var(--dim);
+  margin-top: 8px;
+}
+#tv-activate {
+  margin-top: 16px;
+  padding: 12px 28px;
+  background: var(--violet);
+  border: none;
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 1rem;
+  cursor: pointer;
 }
 
-/* Fullscreen toggle */
-#btn-fs { margin-left: auto; }
+/* ════════════════════════════════════════════════════════
+   MOBILE OVERRIDES  (<520px)
+   ════════════════════════════════════════════════════════ */
+@media (max-width: 520px) {
+  #track-grid {
+    grid-template-columns: 1fr;
+    padding: 16px;
+    gap: 12px;
+  }
+  #lib-header { padding: 12px 16px; gap: 8px; }
+  #lib-header h1 { font-size: 1rem; }
+  #search { max-width: none; }
+
+  /* Player: more vertical padding for lyrics */
+  #player-stage { padding: 16px 5vw; gap: 2vh; }
+  #lyr-curr { white-space: normal; word-break: break-word; }
+}
 </style>
 </head>
 <body>
 
-<div id="stage">
-  <div class="lyric-prev" id="lyric-prev"></div>
-
-  <div id="lyric-row">
-    <div id="moon"></div>
-    <span id="lyric-current" class="hint">☽ &nbsp; Ph3b3 Karaoke</span>
-  </div>
-
-  <div class="lyric-next" id="lyric-next"></div>
+<!-- ═══ VIEW: LIBRARY ═══════════════════════════════════════════════════════ -->
+<div id="view-lib">
+  <header id="lib-header">
+    <span class="logo">☽</span>
+    <h1>Ph3b3 Karaoke</h1>
+    <input type="search" id="search" placeholder="Search tracks…" autocomplete="off" autocorrect="off" spellcheck="false">
+    <a href="?tv" target="_blank" class="btn-tv" title="Open TV display on this screen">📺 TV</a>
+  </header>
+  <div id="track-grid"></div>
 </div>
 
-<div id="transport">
-  <select id="track-sel"><option value="">— pick a track —</option></select>
-  <button class="btn" id="btn-restart" title="Restart (↺)">↺</button>
-  <button class="btn" id="btn-play"    title="Play / Pause">▶</button>
-  <div id="progress-wrap">
-    <div id="progress-fill"></div>
-    <div id="progress-thumb"></div>
+<!-- ═══ VIEW: PLAYER ═════════════════════════════════════════════════════════ -->
+<div id="view-player">
+  <div id="player-hud">
+    <button class="hud-btn" id="btn-exit" title="Back to library">✕</button>
+    <span id="player-title"></span>
+    <div id="hud-right">
+      <button class="hud-btn" id="btn-rst"  title="Restart">↺</button>
+      <button class="hud-btn" id="btn-play" title="Play / Pause">▶</button>
+    </div>
   </div>
-  <span id="time-disp">0:00 / 0:00</span>
-  <span id="attr-line"></span>
-  <button class="btn" id="btn-fs" title="Fullscreen">⛶</button>
+
+  <div id="player-stage">
+    <div class="lyr" id="lyr-prev"></div>
+    <div class="lyr" id="lyr-curr"></div>
+    <div class="lyr" id="lyr-next"></div>
+  </div>
+
+  <div id="player-footer">
+    <div id="prog-wrap">
+      <div id="prog-fill"></div>
+      <div id="prog-thumb"></div>
+    </div>
+    <span id="time-disp">0:00 / 0:00</span>
+  </div>
 </div>
 
-<audio id="player" preload="auto"></audio>
+<!-- ═══ VIEW: TV WAITING ══════════════════════════════════════════════════════ -->
+<div id="view-tv">
+  <div id="tv-inner">
+    <div id="tv-moon"></div>
+    <h1>Ph3b3 Karaoke</h1>
+    <p id="tv-status">Waiting for track…</p>
+    <p id="tv-hint">Open <strong id="tv-url"></strong> on your phone</p>
+    <button id="tv-activate">Tap to activate audio</button>
+  </div>
+</div>
+
+<!-- ═══ MOON (fixed overlay) ══════════════════════════════════════════════════ -->
+<div id="moon"></div>
+
+<audio id="audio" preload="auto"></audio>
 
 <script>
 // ── DOM refs ──────────────────────────────────────────────────────────────
-const player   = document.getElementById('player');
-const moon     = document.getElementById('moon');
-const lyricRow = document.getElementById('lyric-row');
-const elPrev   = document.getElementById('lyric-prev');
-const elCurr   = document.getElementById('lyric-current');
-const elNext   = document.getElementById('lyric-next');
-const elFill   = document.getElementById('progress-fill');
-const elThumb  = document.getElementById('progress-thumb');
-const elTime   = document.getElementById('time-disp');
-const elAttr   = document.getElementById('attr-line');
-const btnPlay  = document.getElementById('btn-play');
-const btnRst   = document.getElementById('btn-restart');
-const btnFs    = document.getElementById('btn-fs');
-const trackSel = document.getElementById('track-sel');
-const progWrap = document.getElementById('progress-wrap');
+const audio     = document.getElementById('audio');
+const moon      = document.getElementById('moon');
+const lyrPrev   = document.getElementById('lyr-prev');
+const lyrCurr   = document.getElementById('lyr-curr');
+const lyrNext   = document.getElementById('lyr-next');
+const progFill  = document.getElementById('prog-fill');
+const progThumb = document.getElementById('prog-thumb');
+const timeDisp  = document.getElementById('time-disp');
+const btnPlay   = document.getElementById('btn-play');
+const btnRst    = document.getElementById('btn-rst');
+const btnExit   = document.getElementById('btn-exit');
+const playerTitle = document.getElementById('player-title');
+const progWrap  = document.getElementById('prog-wrap');
+const viewLib   = document.getElementById('view-lib');
+const viewPlayer= document.getElementById('view-player');
+const viewTv    = document.getElementById('view-tv');
+const searchEl  = document.getElementById('search');
+
+// ── Mode detection ────────────────────────────────────────────────────────
+const TV_MODE   = new URLSearchParams(location.search).has('tv');
+const isMobile  = () => window.matchMedia('(max-width:768px)').matches;
 
 // ── State ─────────────────────────────────────────────────────────────────
-let lines      = [];   // [{time:float, text:string}]
-let curIdx     = -1;
-let moonActive = false;
-let seeking    = false;
+let lines       = [];      // [{time, text}]
+let curIdx      = -1;
+let moonActive  = false;
+let seeking     = false;
+let currentName = '';
+let tvActivated = false;   // audio unlocked on TV
 
 // ── LRC parser ────────────────────────────────────────────────────────────
 function parseLRC(raw) {
-  const re = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/g;
+  const re  = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/g;
   const out = [];
   let m;
   while ((m = re.exec(raw)) !== null) {
     const ms = m[3].length === 3 ? parseInt(m[3]) : parseInt(m[3]) * 10;
     const t  = parseInt(m[1]) * 60 + parseInt(m[2]) + ms / 1000;
-    out.push({ time: t, text: m[4].trim() });
+    const tx = m[4].trim();
+    out.push({ time: t, text: tx });
   }
   return out.sort((a, b) => a.time - b.time);
 }
 
-// ── Active line index ─────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────
+const fmt = s =>
+  `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+const humanize = s =>
+  s.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+function isSpacer(t) {
+  return !t || /^[♪(]/.test(t);
+}
+
 function activeIdx(t) {
-  // Binary search
   let lo = 0, hi = lines.length - 1, idx = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     if (lines[mid].time <= t) { idx = mid; lo = mid + 1; }
-    else                       hi = mid - 1;
+    else hi = mid - 1;
   }
   return idx;
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────
-const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-
-function isSpacer(text) {
-  // ♪ / (…) markers — moon hides during these
-  return !text || text === '♪' || /^[♪(]/.test(text);
 }
 
 // ── Animation loop ────────────────────────────────────────────────────────
 function tick() {
   requestAnimationFrame(tick);
 
-  const t   = player.currentTime || 0;
-  const dur = player.duration    || 0;
+  if (viewPlayer.style.display === 'none') {
+    moon.style.opacity = '0';
+    return;
+  }
+
+  const t   = audio.currentTime || 0;
+  const dur = audio.duration    || 0;
 
   // Progress bar
   if (dur > 0 && !seeking) {
     const pct = (t / dur * 100).toFixed(2) + '%';
-    elFill.style.width  = pct;
-    elThumb.style.left  = pct;
+    progFill.style.width  = pct;
+    progThumb.style.left  = pct;
   }
-  elTime.textContent = `${fmt(t)} / ${fmt(dur || 0)}`;
+  timeDisp.textContent = `${fmt(t)} / ${fmt(dur || 0)}`;
 
   if (!lines.length) return;
 
-  // Line advance
+  // Line change
   const idx = activeIdx(t);
   if (idx !== curIdx) {
     curIdx = idx;
     const curr = idx >= 0 ? lines[idx].text    : '';
-    const prev = idx > 0  ? lines[idx - 1].text : '';
-    const next = idx + 1 < lines.length ? lines[idx + 1].text : '';
+    const prev = idx >  0 ? lines[idx-1].text  : '';
+    const next = idx + 1 < lines.length ? lines[idx+1].text : '';
 
-    elPrev.textContent = isSpacer(prev) ? '' : prev;
-    elNext.textContent = isSpacer(next) ? '' : next;
+    lyrPrev.textContent = isSpacer(prev) ? '' : prev;
+    lyrNext.textContent = isSpacer(next) ? '' : next;
 
-    moonActive = idx >= 0 && !isSpacer(curr);
+    moonActive = (idx >= 0) && !isSpacer(curr);
 
     if (moonActive) {
-      elCurr.className = '';
-      elCurr.textContent = curr;
-      // Heartbeat pulse on line change
-      elCurr.style.transform = 'scale(1.05)';
-      setTimeout(() => { elCurr.style.transform = ''; }, 200);
+      lyrCurr.className = 'lyr';
+      lyrCurr.textContent = curr;
+      lyrCurr.style.transform = 'scale(1.06)';
+      setTimeout(() => { lyrCurr.style.transform = ''; }, 220);
     } else {
-      elCurr.className = 'hint';
-      elCurr.textContent = curr || '♪';
+      lyrCurr.className = 'lyr lyr-idle';
+      lyrCurr.textContent = curr || '♪';
       moon.style.opacity = '0';
     }
   }
 
-  // Moon position
-  if (!moonActive || player.paused) {
-    if (player.paused) return;  // keep last position frozen on pause
-    return;
-  }
+  if (!moonActive) return;
 
+  // ── Moon position ──────────────────────────────────────────────────────
+  // Use viewport-absolute coords (getBoundingClientRect) so the fixed-position
+  // moon aligns exactly with the rendered text regardless of layout.
   const lineStart = lines[curIdx].time;
-  const lineEnd   = curIdx + 1 < lines.length
-    ? lines[curIdx + 1].time
-    : lineStart + 6;
+  const lineEnd   = curIdx + 1 < lines.length ? lines[curIdx+1].time : lineStart + 6;
   const progress  = Math.min(1, Math.max(0, (t - lineStart) / (lineEnd - lineStart)));
 
-  // Measure text element
-  const textRect = elCurr.getBoundingClientRect();
-  const rowRect  = lyricRow.getBoundingClientRect();
-  const mW = 46;
+  const textRect = lyrCurr.getBoundingClientRect();
+  if (textRect.width === 0) return;   // not laid out yet
 
-  // Horizontal: moon center sweeps from left edge of text to right edge
-  const xStart = textRect.left - rowRect.left;
-  const xEnd   = textRect.right - rowRect.left - mW;
-  const moonX  = xStart + progress * (xEnd - xStart);
+  const mW = 48, mH = 48;
 
-  // Vertical: 1.5 sine arcs above the lyric row (bounces between 0 and -36px)
-  const bounce = Math.abs(Math.sin(progress * Math.PI * 3));
-  const moonY  = 8 - bounce * 36;           // sits within the 64px padding-top of lyric-row
+  // Sweep left-to-right across the rendered text
+  const xL = textRect.left;
+  const xR = textRect.right - mW;
+  const moonX = xL + progress * (xR - xL);
 
-  moon.style.transform = `translate(${moonX.toFixed(1)}px, ${moonY.toFixed(1)}px)`;
+  // Bounce: 3 arcs per line, 72px amplitude, baseline 20px above text
+  const bounce  = Math.abs(Math.sin(progress * Math.PI * 3));
+  const baseline = textRect.top - mH - 20;
+  const moonY    = baseline - bounce * 72;
+
+  moon.style.transform = `translate(${moonX.toFixed(1)}px,${moonY.toFixed(1)}px)`;
   moon.style.opacity   = '1';
 }
 
-// ── Track loading ─────────────────────────────────────────────────────────
-async function loadTrack(name) {
-  curIdx = -1;
+// ── Player: load and immediately play a track ─────────────────────────────
+async function sing(name) {
+  currentName = name;
   lines  = [];
+  curIdx = -1;
   moon.style.opacity = '0';
-  elPrev.textContent = '';
-  elNext.textContent = '';
-  elCurr.className   = 'hint';
-  elCurr.textContent = '♪ loading…';
-  elAttr.innerHTML   = '';
 
-  // LRC
+  playerTitle.textContent = humanize(name);
+  lyrPrev.textContent = '';
+  lyrNext.textContent = '';
+  lyrCurr.className   = 'lyr lyr-idle';
+  lyrCurr.textContent = '♪ loading…';
+
+  // Show player immediately so the user gets feedback
+  viewPlayer.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+
+  // Load LRC
   try {
     const r = await fetch(`/karaoke/lrc/${encodeURIComponent(name)}`);
     if (r.ok) lines = parseLRC((await r.json()).text);
-  } catch (e) { console.warn('lrc:', e); }
-
-  // Audio
-  player.src = `/karaoke/audio/${encodeURIComponent(name)}`;
-  player.load();
-
-  // Attribution
-  try {
-    const r = await fetch(`/karaoke/attribution/${encodeURIComponent(name)}`);
-    if (r.ok) {
-      const { attribution: a } = await r.json();
-      elAttr.innerHTML =
-        `<a href="${a.jamendo_url}" target="_blank" rel="noopener">` +
-        `${a.track_name} — ${a.artist_name}</a> &nbsp;(CC)`;
-    }
   } catch {}
+
+  // Set audio source and play
+  audio.src = `/karaoke/audio/${encodeURIComponent(name)}`;
+  audio.load();
+  audio.play().catch(() => {});   // best effort; browser may block until gesture
 
   // Prime display
   if (lines.length) {
-    elCurr.className   = 'hint';
-    elCurr.textContent = '▶ press play';
-    elNext.textContent = lines[0].text;
+    lyrCurr.textContent = lines[0].text;
+    lyrNext.textContent = lines[1]?.text || '';
   } else {
-    elCurr.textContent = '▶ press play (no LRC)';
+    lyrCurr.className = 'lyr lyr-idle';
+    lyrCurr.textContent = '♪';
   }
 }
 
-// ── Controls ──────────────────────────────────────────────────────────────
-btnPlay.addEventListener('click', () => {
-  if (!player.src || player.src === window.location.href) return;
-  if (player.paused) { player.play(); btnPlay.textContent = '⏸'; }
-  else               { player.pause(); btnPlay.textContent = '▶'; }
-});
+// ── Library ───────────────────────────────────────────────────────────────
+let allTracks = [];
 
-btnRst.addEventListener('click', () => {
-  player.currentTime = 0;
-  curIdx = -1;
-  if (player.paused && player.src) { player.play(); btnPlay.textContent = '⏸'; }
-});
+function buildCard(t) {
+  const hasLRC = t.lrc_exists;
+  const attr   = t.attribution;
+  const title  = attr?.track_name  || humanize(t.name);
+  const artist = attr?.artist_name || '';
+  const dur    = t.duration_s > 0
+    ? `${Math.floor(t.duration_s/60)}:${String(Math.floor(t.duration_s%60)).padStart(2,'0')}`
+    : '';
 
-player.addEventListener('play',  () => { btnPlay.textContent = '⏸'; });
-player.addEventListener('pause', () => { btnPlay.textContent = '▶'; });
-player.addEventListener('ended', () => {
-  btnPlay.textContent = '▶';
-  moon.style.opacity  = '0';
-  elCurr.className    = 'hint';
-  elCurr.textContent  = '☽  fin';
-});
+  const card = document.createElement('div');
+  card.className = 'track-card' + (hasLRC ? '' : ' no-lrc');
+  card.dataset.name   = t.name;
+  card.dataset.search = (title + ' ' + artist).toLowerCase();
 
-// Keyboard shortcuts
-document.addEventListener('keydown', e => {
-  if (e.code === 'Space' && e.target === document.body) {
-    e.preventDefault(); btnPlay.click();
+  card.innerHTML = `
+    <div class="card-top">
+      <div class="card-moon">☽</div>
+      <div class="card-meta">
+        <div class="card-title">${title}</div>
+        ${artist ? `<div class="card-artist">${artist}</div>` : ''}
+        ${dur    ? `<div class="card-dur">${dur}</div>` : ''}
+      </div>
+    </div>
+    <div class="card-badges">
+      ${attr?.license ? `<span class="badge badge-cc">${attr.license}</span>` : ''}
+      ${!hasLRC ? `<span class="badge badge-nolrc">No lyrics</span>` : ''}
+    </div>
+    <button class="btn-sing" ${hasLRC ? '' : 'disabled'}>▶ &nbsp;SING</button>
+  `;
+
+  if (hasLRC) {
+    card.querySelector('.btn-sing').addEventListener('click', () => singFromLibrary(t.name));
   }
-  if (e.code === 'KeyR') btnRst.click();
-  if (e.code === 'KeyF') btnFs.click();
-});
-
-// Seek
-function seekTo(e) {
-  const r = progWrap.getBoundingClientRect();
-  const p = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-  player.currentTime = p * (player.duration || 0);
-  curIdx = -1;   // force line re-scan after seek
+  return card;
 }
-progWrap.addEventListener('mousedown', e => { seeking = true; seekTo(e); });
-document.addEventListener('mousemove', e => { if (seeking) seekTo(e); });
-document.addEventListener('mouseup',   () => { seeking = false; });
 
-// Fullscreen
-btnFs.addEventListener('click', () => {
-  if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
-  else                              document.exitFullscreen?.();
-});
+async function singFromLibrary(name) {
+  // Push to TV session so any TV display auto-loads this track
+  try {
+    await fetch('/karaoke/now', {
+      method: 'PUT',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ track: name, playing: true })
+    });
+  } catch {}
 
-trackSel.addEventListener('change', () => {
-  if (trackSel.value) loadTrack(trackSel.value);
-});
+  // Also play locally (phone solo mode or desktop mode)
+  await sing(name);
+}
 
-// ── Init: populate track list ─────────────────────────────────────────────
-async function init() {
-  requestAnimationFrame(tick);
+function filterCards(query) {
+  const q = query.toLowerCase().trim();
+  document.querySelectorAll('.track-card').forEach(card => {
+    card.style.display = (!q || card.dataset.search.includes(q)) ? '' : 'none';
+  });
+}
+
+async function initLibrary() {
+  const grid = document.getElementById('track-grid');
   try {
     const r = await fetch('/karaoke/library');
     if (!r.ok) return;
     const { tracks } = await r.json();
+    allTracks = tracks;
 
-    const withLRC = tracks.filter(t => t.lrc_exists);
-    const noLRC   = tracks.filter(t => !t.lrc_exists);
-
-    for (const t of withLRC) {
-      const o = document.createElement('option');
-      o.value = t.name;
-      o.textContent = t.name.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-      trackSel.appendChild(o);
-    }
-    if (noLRC.length && withLRC.length) {
-      const sep = document.createElement('option');
-      sep.disabled = true; sep.textContent = '── no LRC ──';
-      trackSel.appendChild(sep);
-    }
-    for (const t of noLRC) {
-      const o = document.createElement('option');
-      o.value = t.name; o.disabled = true;
-      o.textContent = t.name.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) + ' (no LRC)';
-      trackSel.appendChild(o);
-    }
-
-    // Auto-load first track that has LRC
-    if (withLRC.length) {
-      trackSel.value = withLRC[0].name;
-      await loadTrack(withLRC[0].name);
-    }
+    // LRC-enabled tracks first
+    const sorted = [
+      ...tracks.filter(t => t.lrc_exists),
+      ...tracks.filter(t => !t.lrc_exists),
+    ];
+    for (const t of sorted) grid.appendChild(buildCard(t));
   } catch (e) { console.error(e); }
 }
 
-init();
+searchEl.addEventListener('input', () => filterCards(searchEl.value));
+
+// ── Player controls ────────────────────────────────────────────────────────
+btnPlay.addEventListener('click', () => {
+  if (!audio.src || audio.src === location.href) return;
+  if (audio.paused) { audio.play(); btnPlay.textContent = '⏸'; }
+  else              { audio.pause(); btnPlay.textContent = '▶'; }
+});
+
+btnRst.addEventListener('click', () => {
+  audio.currentTime = 0;
+  curIdx = -1;
+  audio.play().catch(()=>{});
+  btnPlay.textContent = '⏸';
+});
+
+btnExit.addEventListener('click', () => {
+  audio.pause();
+  audio.src = '';
+  moon.style.opacity  = '0';
+  curIdx = -1;
+  lines  = [];
+  viewPlayer.style.display = 'none';
+  document.body.style.overflow = '';
+  // Clear TV session
+  fetch('/karaoke/now', {
+    method:'PUT',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({track: null, playing: false})
+  }).catch(()=>{});
+});
+
+audio.addEventListener('play',  () => { btnPlay.textContent = '⏸'; });
+audio.addEventListener('pause', () => { btnPlay.textContent = '▶'; });
+audio.addEventListener('ended', () => {
+  btnPlay.textContent = '▶';
+  moon.style.opacity  = '0';
+  lyrCurr.className   = 'lyr lyr-idle';
+  lyrCurr.textContent = '☽  fin';
+  lyrPrev.textContent = '';
+  lyrNext.textContent = '';
+});
+
+// Seek: click or drag on progress bar
+function seekTo(e) {
+  const r = progWrap.getBoundingClientRect();
+  const p = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  audio.currentTime = p * (audio.duration || 0);
+  curIdx = -1;
+}
+progWrap.addEventListener('mousedown', e => { seeking = true; seekTo(e); });
+progWrap.addEventListener('touchstart', e => {
+  seeking = true; seekTo(e.touches[0]);
+}, { passive: true });
+document.addEventListener('mousemove',  e => { if (seeking) seekTo(e); });
+document.addEventListener('touchmove',  e => { if (seeking) seekTo(e.touches[0]); }, { passive: true });
+document.addEventListener('mouseup',    () => { seeking = false; });
+document.addEventListener('touchend',   () => { seeking = false; });
+
+// Keyboard
+document.addEventListener('keydown', e => {
+  if (viewPlayer.style.display === 'none') return;
+  if (e.code === 'Space') { e.preventDefault(); btnPlay.click(); }
+  if (e.code === 'KeyR')  btnRst.click();
+  if (e.code === 'Escape') btnExit.click();
+});
+
+// ── TV MODE ───────────────────────────────────────────────────────────────
+let tvLastTs   = 0;
+let tvLastTrack = null;
+
+function startTvPolling() {
+  viewTv.style.display = 'flex';
+  viewLib.style.display = 'none';
+
+  // Show URL hint
+  document.getElementById('tv-url').textContent =
+    `${location.hostname}:${location.port || (location.protocol==='https:'?443:80)}/karaoke`;
+
+  // Activate button unlocks audio context (needed for autoplay)
+  document.getElementById('tv-activate').addEventListener('click', () => {
+    tvActivated = true;
+    document.getElementById('tv-activate').style.display = 'none';
+    // Play silence to unlock
+    audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAA...';
+    audio.play().catch(()=>{});
+  });
+
+  pollTv();
+}
+
+async function pollTv() {
+  try {
+    const r = await fetch('/karaoke/now');
+    if (r.ok) {
+      const s = await r.json();
+      if (s.track && s.ts > tvLastTs) {
+        tvLastTs   = s.ts;
+        tvLastTrack = s.track;
+        document.getElementById('tv-status').textContent = `Now playing: ${humanize(s.track)}`;
+        viewTv.style.display = 'none';
+        await sing(s.track);
+      } else if (!s.track && tvLastTrack) {
+        // Track cleared → go back to waiting
+        tvLastTrack = null;
+        audio.pause();
+        audio.src = '';
+        viewPlayer.style.display = 'none';
+        viewTv.style.display = 'flex';
+        document.getElementById('tv-status').textContent = 'Waiting for track…';
+      }
+    }
+  } catch {}
+  setTimeout(pollTv, 2000);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+requestAnimationFrame(tick);
+
+if (TV_MODE) {
+  startTvPolling();
+} else {
+  initLibrary();
+}
 </script>
 </body>
 </html>
