@@ -1,5 +1,12 @@
 # Ph3b3
 
+> ## In memory of Peach
+> The best dog in the world — who went to everyone.
+> Ph3b3 is built with the love she gave so freely.
+> Rest easy, good girl.
+
+---
+
 **A fully local AI assistant. No cloud. No data centers. Built in a basement in Pennsylvania.**
 
 Ph3b3 (*Phoebe*) runs entirely on hardware you own. No cloud, no API calls leaving your network, no telemetry. You talk to her — by text or by voice — and every word stays inside your walls. The intelligence is *present*, not rented.
