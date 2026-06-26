@@ -9,6 +9,7 @@
 // Defined once in stackchan_rung4.ino
 extern const char ISRG_ROOT_X1[];
 extern bool g_overlayOpen;
+extern bool g_crescentTapped;
 
 // ── TalkApp — full Ph3b3 voice round-trip ────────────────────────────────────
 //
@@ -26,6 +27,8 @@ public:
     void init() override {
         M5StackChan.Display().fillScreen(TFT_BLACK);
         face.begin();  // full-screen face — no panel
+        face.setStatusVisible(false);
+        face.setCrescentTabVisible(true);
         _phase      = PH_IDLE;
         _pttBuf     = nullptr;
         _pttSamples = 0;
@@ -61,8 +64,15 @@ public:
             return;
         }
 
+        // Drain crescentTap here even if gated below — flag must not linger
+        bool crescentTap = g_crescentTapped;
+        g_crescentTapped = false;
+        if (crescentTap) Serial.printf("[Talk] crescentTap seen — wifi=%d phase=%d\n",
+                                       (int)(WiFi.status() == WL_CONNECTED), (int)_phase);
+
         // ── WiFi gate ──────────────────────────────────────────────────────────
         if (WiFi.status() != WL_CONNECTED) {
+            Serial.println("[Talk] WiFi gate fired — crescentTap lost");
             face.setState(Ph3b3Face::CONNECTING);
             return;
         }
@@ -70,15 +80,24 @@ public:
         // ── Touch detection ────────────────────────────────────────────────────
         int16_t tx = 0, ty = 0;
         bool touching = M5StackChan.Display().getTouch(&tx, &ty);
-        // Reserve top-left 60×60 px — crescent tab zone handled by CrescentMenu
-        bool tapped = (touching && !_wasTouch) && !(tx < 60 && ty < 60);
+        bool tapped = crescentTap || ((touching && !_wasTouch) && !(tx < 60 && ty < 60));
         _wasTouch = touching;
+        if (tapped) Serial.printf("[Talk] tapped — crescentTap=%d bodyTap=%d phase=%d\n",
+                                  (int)crescentTap,
+                                  (int)((touching && !crescentTap) && !(tx < 60 && ty < 60)),
+                                  (int)_phase);
         // ── State machine ──────────────────────────────────────────────────────
         switch (_phase) {
 
         case PH_IDLE:
             face.setState(Ph3b3Face::IDLE);
-            if (tapped) _startAwaiting();
+            if (tapped) {
+                _lastTalkMs      = millis();
+                _inConversation  = true;
+                _convLastValidMs = millis();
+                _exitAfterTurn   = false;
+                _startRecording();   // tap → immediate LISTENING, not ambient wait
+            }
             break;
 
         case PH_AWAITING: {

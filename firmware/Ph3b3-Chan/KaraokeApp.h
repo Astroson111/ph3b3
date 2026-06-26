@@ -50,12 +50,22 @@ public:
         face.setState(Ph3b3Face::IDLE);
 
         // Mount SD once per mode entry — avoids 200-500ms SPI init blocking every tap.
-        _sdMounted = SD.begin(4);
-        if (_sdMounted) {
-            _scanTracks();
-        } else {
-            Serial.println("[karaoke] no SD card at init");
+        // CoreS3 SD SPI: SCK=36, MISO=35, MOSI=37, CS=4 (from variant pins_arduino.h).
+        // SPI.begin() is called explicitly because M5GFX owns the SPI peripheral
+        // internally; the Arduino SPI object may not have been initialised by M5.begin().
+        SPI.begin(36, 35, 37, -1);  // -1 = no default CS; SD.begin() drives CS=4
+        _sdMounted = SD.begin(4, SPI, 4000000);
+        Serial.printf("[karaoke] SD.begin(4) → %s (type=%d)\n",
+                      _sdMounted ? "OK" : "FAIL", (int)SD.cardType());
+        if (!_sdMounted) {
+            // Diagnose: did SPI even respond?
+            Serial.printf("[karaoke] SD fail — cardType=%d  (255=no card/SPI err, 0=unknown)\n",
+                          (int)SD.cardType());
+            Serial.println("[karaoke] Check: FAT32 formatted? Card seated? Power rail OK?");
             _tracks.clear();
+        } else {
+            Serial.printf("[karaoke] SD OK — size=%lluMB\n", SD.cardSize() / (1024ULL * 1024));
+            _scanTracks();
         }
         if (_trackSel >= (int)_tracks.size()) _trackSel = 0;
 
