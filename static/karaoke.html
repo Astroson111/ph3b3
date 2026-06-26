@@ -1156,6 +1156,13 @@ if (TV_MODE) {
 } else {
   initLibrary();
 }
+
+// Kill any service worker that might be caching this page stale
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(regs => {
+    regs.forEach(r => r.unregister());
+  });
+}
 </script>
 </body>
 </html>
