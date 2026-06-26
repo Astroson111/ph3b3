@@ -450,7 +450,7 @@ html, body {
   pointer-events: none;
   transition: opacity .3s ease;
   transform-origin: bottom center;
-  z-index: 5;
+  z-index: 15;
 }
 #peach-k.bark { animation: peachBark .6s ease; opacity: .9; }
 @keyframes peachBark {
@@ -469,7 +469,7 @@ html, body {
   cursor: pointer;
   opacity: 0.4;
   transition: opacity .2s;
-  z-index: 6;
+  z-index: 16;
   padding: 4px;
   line-height: 1;
 }
@@ -520,17 +520,8 @@ html, body {
   color: var(--text); font-size: 1rem; cursor: pointer;
 }
 
-/* ════════════════════════════════════════════════════════
-   KARAOKE ACTIVE — fullscreen play mode
-   ════════════════════════════════════════════════════════ */
-#view-main.karaoke-active #lib-header     { display: none; }
-#view-main.karaoke-active #discover-panel { display: none; }
-#view-main.karaoke-active #track-grid     { display: none; }
-#view-main.karaoke-active #now-playing    {
-  min-height: 100dvh;
-  justify-content: center;
-  border-bottom: none;
-}
+#np-active { padding: 40px 24px; }
+#btn-back  { align-self: flex-start; margin-bottom: 8px; }
 
 /* ════════════════════════════════════════════════════════
    MOBILE
@@ -577,32 +568,6 @@ html, body {
       <span>Tap <strong>▶ PLAY</strong> on any track below</span>
     </div>
 
-    <!-- Active: shown when a track is loaded -->
-    <div id="np-active" style="display:none">
-      <div id="np-info">
-        <div id="np-title">—</div>
-        <div id="np-artist"></div>
-      </div>
-
-      <!-- Lyrics (hidden if no LRC) -->
-      <div id="np-lyrics" style="display:none">
-        <div class="lyr" id="lyr-prev"></div>
-        <div class="lyr" id="lyr-curr"></div>
-        <div class="lyr" id="lyr-next"></div>
-      </div>
-
-      <!-- Transport -->
-      <div id="np-controls">
-        <button class="ctrl-btn" id="btn-rst"  title="Restart">↺</button>
-        <button class="ctrl-btn" id="btn-play" title="Play / Pause">▶</button>
-        <div id="prog-wrap">
-          <div id="prog-fill"></div>
-          <div id="prog-thumb"></div>
-        </div>
-        <span id="time-disp">0:00 / 0:00</span>
-        <button class="ctrl-btn" id="btn-exit" title="Stop / close player">✕</button>
-      </div>
-    </div>
   </section>
 
   <!-- ── LIBRARY ────────────────────────────────────────────────────────── -->
@@ -618,6 +583,30 @@ html, body {
     <p id="tv-status">Waiting for track…</p>
     <p id="tv-hint">Open <strong id="tv-url"></strong> on your phone</p>
     <button id="tv-activate">Tap to activate audio</button>
+  </div>
+
+  <!-- Active player — lives here so view-tv covers the screen during playback -->
+  <div id="np-active" style="display:none">
+    <button class="ctrl-btn" id="btn-back" title="Back to library">← Back</button>
+    <div id="np-info">
+      <div id="np-title">—</div>
+      <div id="np-artist"></div>
+    </div>
+    <div id="np-lyrics" style="display:none">
+      <div class="lyr" id="lyr-prev"></div>
+      <div class="lyr" id="lyr-curr"></div>
+      <div class="lyr" id="lyr-next"></div>
+    </div>
+    <div id="np-controls">
+      <button class="ctrl-btn" id="btn-rst"  title="Restart">↺</button>
+      <button class="ctrl-btn" id="btn-play" title="Play / Pause">▶</button>
+      <div id="prog-wrap">
+        <div id="prog-fill"></div>
+        <div id="prog-thumb"></div>
+      </div>
+      <span id="time-disp">0:00 / 0:00</span>
+      <button class="ctrl-btn" id="btn-exit" title="Stop">✕</button>
+    </div>
   </div>
 </div>
 
@@ -649,7 +638,9 @@ const btnExit   = document.getElementById('btn-exit');
 const progWrap  = document.getElementById('prog-wrap');
 const viewMain  = document.getElementById('view-main');
 const viewTv    = document.getElementById('view-tv');
+const tvInner   = document.getElementById('tv-inner');
 const searchEl  = document.getElementById('search');
+const btnBack   = document.getElementById('btn-back');
 const peachK    = document.getElementById('peach-k');
 const btnBark   = document.getElementById('btn-bark');
 let   barkEnabled = false;
@@ -700,6 +691,7 @@ let curIdx     = -1;
 let moonActive = false;
 let seeking    = false;
 let hasLRC     = false;
+let endRevertTimer;
 
 // ── LRC parser ────────────────────────────────────────────────────────────
 function parseLRC(raw) {
@@ -867,6 +859,7 @@ function buildCard(t) {
   // Click handler: synchronously start audio (preserves user-gesture chain),
   // then asynchronously load LRC if available.
   card.querySelector('.btn-play').addEventListener('click', () => {
+    clearTimeout(endRevertTimer);
     // Reset state
     lines      = [];
     curIdx     = -1;
@@ -876,7 +869,7 @@ function buildCard(t) {
     // Show panel immediately
     npIdle.style.display   = 'none';
     npActive.style.display = 'flex';
-    npLyrics.style.display = 'none';
+    npLyrics.style.display = 'flex';
     npTitle.textContent  = title;
     npArtist.textContent = artist;
     lyrPrev.textContent  = '';
@@ -887,8 +880,8 @@ function buildCard(t) {
     // Start audio NOW — within the user gesture, before any await
     startAudio(t.name);
 
-    // Load LRC asynchronously (panel shows lyrics once ready)
-    if (t.lrc_exists) loadLRC(t.name);
+    // Always attempt LRC (handles stale lrc_exists; 404 → silent, ♪ stays)
+    loadLRC(t.name);
 
     // Notify TV display (fire-and-forget)
     fetch('/karaoke/now', {
@@ -897,7 +890,10 @@ function buildCard(t) {
       body: JSON.stringify({ track: t.name, playing: true })
     }).catch(() => {});
 
-    viewMain.classList.add('karaoke-active');
+    viewMain.style.display = 'none';
+    tvInner.style.display  = 'none';
+    npActive.style.display = 'flex';
+    viewTv.style.display   = 'flex';
   });
 
   return card;
@@ -941,6 +937,7 @@ btnRst.addEventListener('click', () => {
 });
 
 btnExit.addEventListener('click', () => {
+  clearTimeout(endRevertTimer);
   audio.pause();
   audio.src = '';
   lines  = [];
@@ -949,14 +946,17 @@ btnExit.addEventListener('click', () => {
   moon.style.opacity     = '0';
   btnPlay.textContent    = '▶';
   npActive.style.display = 'none';
-  npIdle.style.display   = 'flex';
-  viewMain.classList.remove('karaoke-active');
+  tvInner.style.display  = 'flex';
+  viewTv.style.display   = 'none';
+  viewMain.style.display = '';
   fetch('/karaoke/now', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ track: null, playing: false }),
   }).catch(() => {});
 });
+
+btnBack.addEventListener('click', () => btnExit.click());
 
 audio.addEventListener('play',  () => { btnPlay.textContent = '⏸'; });
 audio.addEventListener('pause', () => { btnPlay.textContent = '▶'; });
@@ -970,7 +970,12 @@ audio.addEventListener('ended', () => {
   peachK.classList.add('bark');
   setTimeout(() => peachK.classList.remove('bark'), 600);
   if (barkEnabled) playBark();
-  setTimeout(() => viewMain.classList.remove('karaoke-active'), 700);
+  endRevertTimer = setTimeout(() => {
+    npActive.style.display = 'none';
+    tvInner.style.display  = 'flex';
+    viewTv.style.display   = 'none';
+    viewMain.style.display = '';
+  }, 700);
 });
 
 // ── Seek ───────────────────────────────────────────────────────────────────
@@ -1063,7 +1068,7 @@ function buildDiscCard(t) {
       moon.style.opacity   = '0';
       npIdle.style.display   = 'none';
       npActive.style.display = 'flex';
-      npLyrics.style.display = 'none';
+      npLyrics.style.display = 'flex';
       npTitle.textContent  = title;
       npArtist.textContent = artist;
       lyrPrev.textContent  = '';
@@ -1071,7 +1076,7 @@ function buildDiscCard(t) {
       lyrCurr.textContent  = '♪';
       lyrNext.textContent  = '';
       startAudio(info.name);
-      if (info.lrc_exists) loadLRC(info.name);
+      loadLRC(info.name);
       fetch('/karaoke/now', {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1082,7 +1087,10 @@ function buildDiscCard(t) {
       // Close discover panel
       discPanel.style.display = 'none';
       btnDisc.textContent     = '🔍 Discover';
-      viewMain.classList.add('karaoke-active');
+      viewMain.style.display = 'none';
+      tvInner.style.display  = 'none';
+      npActive.style.display = 'flex';
+      viewTv.style.display   = 'flex';
     } catch {
       this.disabled    = false;
       this.textContent = '▶ Pull & Play';
@@ -1120,25 +1128,23 @@ async function pollTv() {
         tvLastTs    = s.ts;
         tvLastTrack = s.track;
         document.getElementById('tv-status').textContent = `Now playing: ${humanize(s.track)}`;
-        viewTv.style.display = 'none';
-        // TV mode: start audio + load LRC directly
+        // np-active lives inside view-tv — keep view-tv visible, swap inner panels
+        tvInner.style.display  = 'none';
+        npActive.style.display = 'flex';
+        npLyrics.style.display = 'flex';
+        npTitle.textContent    = humanize(s.track);
+        npArtist.textContent   = '';
         lines  = [];
         curIdx = -1;
         hasLRC = false;
-        npIdle.style.display   = 'none';
-        npActive.style.display = 'flex';
-        npLyrics.style.display = 'none';
-        npTitle.textContent    = humanize(s.track);
-        npArtist.textContent   = '';
-        viewMain.style.display = '';
         startAudio(s.track);
         loadLRC(s.track);
       } else if (!s.track && tvLastTrack) {
         tvLastTrack = null;
         audio.pause();
         audio.src = '';
-        viewMain.style.display = 'none';
-        viewTv.style.display   = 'flex';
+        npActive.style.display = 'none';
+        tvInner.style.display  = 'flex';
         document.getElementById('tv-status').textContent = 'Waiting for track…';
       }
     }
