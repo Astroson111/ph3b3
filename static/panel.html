@@ -1512,7 +1512,7 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
 // ── service worker ────────────────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js', {scope: '/'})
+    navigator.serviceWorker.register('/sw.js', {scope: '/panel'})
       .then(r  => console.log('[Ph3b3] SW registered — scope:', r.scope))
       .catch(e => console.warn('[Ph3b3] SW registration failed:', e.message));
   });
