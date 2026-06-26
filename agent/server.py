@@ -1271,6 +1271,7 @@ async def karaoke_view():
     return Response(
         content=(ROOT / "static" / "karaoke.html").read_text(encoding="utf-8"),
         media_type="text/html",
+        headers={"Cache-Control": "no-store"},
     )
 
 
