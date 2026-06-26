@@ -592,7 +592,7 @@ html, body {
       <div id="np-title">—</div>
       <div id="np-artist"></div>
     </div>
-    <div id="np-lyrics" style="display:none">
+    <div id="np-lyrics">
       <div class="lyr" id="lyr-prev"></div>
       <div class="lyr" id="lyr-curr"></div>
       <div class="lyr" id="lyr-next"></div>
@@ -816,7 +816,6 @@ async function loadLRC(name) {
 
   if (!lines.length) return;
 
-  npLyrics.style.display = 'flex';
   hasLRC = true;
   curIdx = -1;
 
@@ -869,7 +868,6 @@ function buildCard(t) {
     // Show panel immediately
     npIdle.style.display   = 'none';
     npActive.style.display = 'flex';
-    npLyrics.style.display = 'flex';
     npTitle.textContent  = title;
     npArtist.textContent = artist;
     lyrPrev.textContent  = '';
@@ -1068,7 +1066,6 @@ function buildDiscCard(t) {
       moon.style.opacity   = '0';
       npIdle.style.display   = 'none';
       npActive.style.display = 'flex';
-      npLyrics.style.display = 'flex';
       npTitle.textContent  = title;
       npArtist.textContent = artist;
       lyrPrev.textContent  = '';
@@ -1131,7 +1128,6 @@ async function pollTv() {
         // np-active lives inside view-tv — keep view-tv visible, swap inner panels
         tvInner.style.display  = 'none';
         npActive.style.display = 'flex';
-        npLyrics.style.display = 'flex';
         npTitle.textContent    = humanize(s.track);
         npArtist.textContent   = '';
         lines  = [];
