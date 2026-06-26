@@ -172,7 +172,6 @@ html, body {
   text-shadow: 0 0 50px rgba(224,64,138,.3);
   letter-spacing: .02em;
   min-height: 1.3em;
-  transition: transform .2s cubic-bezier(.34,1.56,.64,1);
   display: inline-block;
 }
 /* Shrink active line to text width so moon tracks the text, not the container */
@@ -439,6 +438,45 @@ html, body {
 }
 
 /* ════════════════════════════════════════════════════════
+   PEACH — protected fixture, bottom-right corner
+   ════════════════════════════════════════════════════════ */
+#peach-k {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  width: 96px;
+  height: auto;
+  opacity: 0.45;
+  pointer-events: none;
+  transition: opacity .3s ease;
+  transform-origin: bottom center;
+  z-index: 5;
+}
+#peach-k.bark { animation: peachBark .6s ease; opacity: .9; }
+@keyframes peachBark {
+  0%   { transform: scale(1); }
+  30%  { transform: scale(1.18) translateY(-6px); }
+  55%  { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+#btn-bark {
+  position: fixed;
+  bottom: 122px;
+  right: 22px;
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity .2s;
+  z-index: 6;
+  padding: 4px;
+  line-height: 1;
+}
+#btn-bark:hover { opacity: 0.85; }
+#btn-bark.active { opacity: 0.9; }
+
+/* ════════════════════════════════════════════════════════
    TV WAITING SCREEN
    ════════════════════════════════════════════════════════ */
 #view-tv {
@@ -480,6 +518,18 @@ html, body {
   margin-top: 16px; padding: 12px 28px;
   background: var(--violet); border: none; border-radius: 10px;
   color: var(--text); font-size: 1rem; cursor: pointer;
+}
+
+/* ════════════════════════════════════════════════════════
+   KARAOKE ACTIVE — fullscreen play mode
+   ════════════════════════════════════════════════════════ */
+#view-main.karaoke-active #lib-header     { display: none; }
+#view-main.karaoke-active #discover-panel { display: none; }
+#view-main.karaoke-active #track-grid     { display: none; }
+#view-main.karaoke-active #now-playing    {
+  min-height: 100dvh;
+  justify-content: center;
+  border-bottom: none;
 }
 
 /* ════════════════════════════════════════════════════════
@@ -573,6 +623,8 @@ html, body {
 
 <!-- ═══ MOON (fixed, floats above everything) ════════════════════════════════ -->
 <div id="moon"></div>
+<img id="peach-k" src="peach_karaoke.png" alt="Peach">
+<button id="btn-bark" title="Toggle bark sound">🔕</button>
 
 <audio id="audio" preload="auto"></audio>
 
@@ -598,6 +650,42 @@ const progWrap  = document.getElementById('prog-wrap');
 const viewMain  = document.getElementById('view-main');
 const viewTv    = document.getElementById('view-tv');
 const searchEl  = document.getElementById('search');
+const peachK    = document.getElementById('peach-k');
+const btnBark   = document.getElementById('btn-bark');
+let   barkEnabled = false;
+
+btnBark.addEventListener('click', () => {
+  barkEnabled = !barkEnabled;
+  btnBark.textContent = barkEnabled ? '🔔' : '🔕';
+  btnBark.classList.toggle('active', barkEnabled);
+});
+
+function playBark() {
+  const ctx  = new (window.AudioContext || window.webkitAudioContext)();
+  const buf  = ctx.createBuffer(1, ctx.sampleRate * 0.18, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1);
+
+  const src    = ctx.createBufferSource();
+  src.buffer   = buf;
+
+  const filter = ctx.createBiquadFilter();
+  filter.type  = 'bandpass';
+  filter.frequency.setValueAtTime(1200, ctx.currentTime);
+  filter.frequency.exponentialRampToValueAtTime(320, ctx.currentTime + 0.15);
+  filter.Q.value = 1.8;
+
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.6, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+
+  src.connect(filter);
+  filter.connect(gain);
+  gain.connect(ctx.destination);
+  src.start();
+  src.stop(ctx.currentTime + 0.18);
+  src.onended = () => ctx.close();
+}
 const btnDisc   = document.getElementById('btn-disc');
 const discPanel = document.getElementById('discover-panel');
 const discRes   = document.getElementById('disc-results');
@@ -683,8 +771,6 @@ function tick() {
     if (moonActive) {
       lyrCurr.className   = 'lyr';
       lyrCurr.textContent = curr;
-      lyrCurr.style.transform = 'scale(1.06)';
-      setTimeout(() => { lyrCurr.style.transform = ''; }, 220);
     } else {
       lyrCurr.className   = 'lyr lyr-idle';
       lyrCurr.textContent = curr || '♪';
@@ -811,8 +897,7 @@ function buildCard(t) {
       body: JSON.stringify({ track: t.name, playing: true })
     }).catch(() => {});
 
-    // Scroll panel into view on mobile
-    document.getElementById('now-playing').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    viewMain.classList.add('karaoke-active');
   });
 
   return card;
@@ -865,6 +950,7 @@ btnExit.addEventListener('click', () => {
   btnPlay.textContent    = '▶';
   npActive.style.display = 'none';
   npIdle.style.display   = 'flex';
+  viewMain.classList.remove('karaoke-active');
   fetch('/karaoke/now', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -881,6 +967,10 @@ audio.addEventListener('ended', () => {
   lyrCurr.textContent   = '☽  fin';
   lyrPrev.textContent   = '';
   lyrNext.textContent   = '';
+  peachK.classList.add('bark');
+  setTimeout(() => peachK.classList.remove('bark'), 600);
+  if (barkEnabled) playBark();
+  setTimeout(() => viewMain.classList.remove('karaoke-active'), 700);
 });
 
 // ── Seek ───────────────────────────────────────────────────────────────────
@@ -992,7 +1082,7 @@ function buildDiscCard(t) {
       // Close discover panel
       discPanel.style.display = 'none';
       btnDisc.textContent     = '🔍 Discover';
-      document.getElementById('now-playing').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      viewMain.classList.add('karaoke-active');
     } catch {
       this.disabled    = false;
       this.textContent = '▶ Pull & Play';
