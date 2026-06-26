@@ -1,4 +1,4 @@
-const CACHE = 'ph3b3-panel-v1';
+const CACHE = 'ph3b3-v2';
 const STATIC = ['/static/icon-192.png', '/static/icon-512.png', '/static/panel.webmanifest'];
 
 self.addEventListener('install', e => {
