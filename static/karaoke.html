@@ -653,7 +653,7 @@ btnBark.addEventListener('click', () => {
 
 function playBark() {
   const ctx  = new (window.AudioContext || window.webkitAudioContext)();
-  const buf  = ctx.createBuffer(1, ctx.sampleRate * 0.18, ctx.sampleRate);
+  const buf  = ctx.createBuffer(1, ctx.sampleRate * 0.25, ctx.sampleRate);
   const data = buf.getChannelData(0);
   for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1);
 
@@ -663,18 +663,18 @@ function playBark() {
   const filter = ctx.createBiquadFilter();
   filter.type  = 'bandpass';
   filter.frequency.setValueAtTime(1200, ctx.currentTime);
-  filter.frequency.exponentialRampToValueAtTime(320, ctx.currentTime + 0.15);
+  filter.frequency.exponentialRampToValueAtTime(320, ctx.currentTime + 0.22);
   filter.Q.value = 1.8;
 
   const gain = ctx.createGain();
-  gain.gain.setValueAtTime(0.6, ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+  gain.gain.setValueAtTime(0.15, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
 
   src.connect(filter);
   filter.connect(gain);
   gain.connect(ctx.destination);
   src.start();
-  src.stop(ctx.currentTime + 0.18);
+  src.stop(ctx.currentTime + 0.25);
   src.onended = () => ctx.close();
 }
 const btnDisc   = document.getElementById('btn-disc');
