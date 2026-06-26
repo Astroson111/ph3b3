@@ -24,7 +24,6 @@ html, body {
   background: var(--bg);
   color: var(--text);
   font-family: 'Segoe UI', system-ui, sans-serif;
-  height: 100%;
   min-height: 100dvh;
   overflow-x: hidden;
   user-select: none;
@@ -33,38 +32,27 @@ html, body {
 }
 
 /* ════════════════════════════════════════════════════════
-   VIEW: LIBRARY
+   HEADER
    ════════════════════════════════════════════════════════ */
-#view-lib {
-  min-height: 100dvh;
-  display: flex;
-  flex-direction: column;
-}
-
 #lib-header {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 16px 20px;
+  padding: 14px 20px;
   background: var(--bg2);
   border-bottom: 1px solid var(--rim);
   flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 5;
 }
-
-#lib-header .logo {
-  font-size: 1.5rem;
-  color: var(--violet-l);
-  flex-shrink: 0;
-}
-
+#lib-header .logo { font-size: 1.5rem; color: var(--violet-l); flex-shrink: 0; }
 #lib-header h1 {
   font-size: clamp(1rem, 3vw, 1.3rem);
   font-weight: 600;
-  color: var(--text);
   flex: 1;
   white-space: nowrap;
 }
-
 #search {
   background: #1a0a38;
   border: 1px solid var(--rim);
@@ -79,7 +67,6 @@ html, body {
 }
 #search::placeholder { color: var(--dim2); }
 #search:focus { border-color: var(--violet-l); }
-
 .btn-tv {
   background: #1a0a38;
   border: 1px solid var(--rim);
@@ -94,229 +81,138 @@ html, body {
 }
 .btn-tv:hover { color: var(--violet-l); border-color: var(--violet-l); }
 
-#track-grid {
-  flex: 1;
-  padding: 24px 20px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 16px;
-  align-content: start;
-}
-
-.track-card {
-  background: #110630;
-  border: 1px solid var(--rim);
-  border-radius: 14px;
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  transition: border-color .15s, background .15s;
-}
-.track-card:not(.no-lrc):hover {
-  border-color: var(--violet);
-  background: #160840;
-}
-.track-card.no-lrc {
-  opacity: .5;
-}
-
-.card-top {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.card-moon {
-  font-size: 1.8rem;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.card-meta {
-  flex: 1;
-  min-width: 0;
-}
-.card-title {
-  font-size: clamp(.95rem, 2.5vw, 1.1rem);
-  font-weight: 700;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.card-artist {
-  font-size: .85rem;
-  color: var(--dim2);
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.card-dur {
-  font-size: .8rem;
-  color: var(--dim2);
-  margin-top: 4px;
-  font-variant-numeric: tabular-nums;
-}
-
-.card-badges {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.badge {
-  font-size: .7rem;
-  padding: 2px 7px;
-  border-radius: 99px;
-  border: 1px solid;
-}
-.badge-cc   { color: #6ee7b7; border-color: #064e3b; background: #022c22; }
-.badge-nolrc { color: #f87171; border-color: #7f1d1d; background: #1f0a0a; }
-
-.btn-sing {
-  width: 100%;
-  padding: 14px;
-  font-size: clamp(1rem, 2.5vw, 1.15rem);
-  font-weight: 700;
-  background: linear-gradient(135deg, #6B3FA0, #E0408A);
-  border: none;
-  border-radius: 10px;
-  color: #fff;
-  cursor: pointer;
-  letter-spacing: .04em;
-  transition: opacity .15s, transform .1s;
-}
-.btn-sing:active { transform: scale(.97); opacity: .85; }
-.btn-sing:disabled {
-  background: var(--dim);
-  color: var(--dim2);
-  cursor: default;
-}
-
 /* ════════════════════════════════════════════════════════
-   VIEW: PLAYER  (full-screen overlay)
+   NOW PLAYING PANEL — prominent, always on page
    ════════════════════════════════════════════════════════ */
-#view-player {
-  display: none;
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  background: var(--bg);
-  flex-direction: column;
-  overflow: hidden;
-}
-
-/* top HUD */
-#player-hud {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  padding: 12px 16px;
-  gap: 10px;
-  background: rgba(10,3,24,.7);
-  border-bottom: 1px solid var(--rim);
-}
-
-.hud-btn {
-  background: transparent;
-  border: 1px solid var(--rim);
-  border-radius: 8px;
-  color: var(--violet-l);
-  font-size: clamp(.9rem, 2vw, 1.2rem);
-  padding: 6px 12px;
-  cursor: pointer;
-  transition: background .12s;
-  white-space: nowrap;
-  min-width: 40px;
-  min-height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.hud-btn:hover  { background: var(--rim); }
-.hud-btn:active { background: var(--violet); }
-
-#player-title {
-  flex: 1;
-  text-align: center;
-  font-size: clamp(.8rem, 2vw, 1rem);
-  color: var(--dim2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-#hud-right { display: flex; gap: 8px; }
-
-/* stage: lyrics centred in remaining space */
-#player-stage {
-  flex: 1;
+#now-playing {
+  background: var(--bg2);
+  border-bottom: 2px solid var(--violet);
+  padding: 28px 24px 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 24px 8vw;
-  gap: 3vh;
+  gap: 18px;
+  min-height: 160px;
   position: relative;
   overflow: visible;
 }
 
-#player-stage::before {
+#now-playing::before {
   content: '';
   position: absolute;
   inset: 0;
-  background:
-    radial-gradient(ellipse 70% 50% at 50% 55%, rgba(107,63,160,.1) 0%, transparent 70%),
-    radial-gradient(ellipse 40% 30% at 30% 80%, rgba(224,64,138,.05) 0%, transparent 60%);
+  background: radial-gradient(ellipse 80% 60% at 50% 60%,
+    rgba(107,63,160,.12) 0%, transparent 70%);
   pointer-events: none;
 }
 
+/* ── idle placeholder ── */
+#np-idle {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--dim2);
+  font-size: clamp(1rem, 2.5vw, 1.2rem);
+}
+#np-idle .idle-moon {
+  font-size: 2.5rem;
+  line-height: 1;
+  opacity: .5;
+}
+
+/* ── active player ── */
+#np-active {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+#np-info { text-align: center; }
+#np-title {
+  font-size: clamp(1.1rem, 3vw, 1.8rem);
+  font-weight: 700;
+  color: var(--text);
+}
+#np-artist {
+  font-size: .9rem;
+  color: var(--dim2);
+  margin-top: 3px;
+}
+
+/* ── lyric lines inside panel ── */
+#np-lyrics {
+  width: 100%;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
 .lyr {
   width: 100%;
   text-align: center;
-  padding: 0 4px;
   line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 0 4px;
 }
-
 #lyr-prev, #lyr-next {
-  font-size: clamp(1rem, 2.8vw, 2.6rem);
+  font-size: clamp(.9rem, 2.2vw, 1.8rem);
   color: var(--dim2);
   min-height: 1.3em;
 }
-
 #lyr-curr {
-  font-size: clamp(1.8rem, 5.5vw, 5.2rem);
+  font-size: clamp(1.5rem, 4.5vw, 3.8rem);
   font-weight: 700;
   color: var(--magenta);
-  text-shadow: 0 0 60px rgba(224,64,138,.3);
+  text-shadow: 0 0 50px rgba(224,64,138,.3);
   letter-spacing: .02em;
   min-height: 1.3em;
-  /* Scale-pulse on line advance uses CSS var to avoid layout thrash */
   transition: transform .2s cubic-bezier(.34,1.56,.64,1);
   display: inline-block;
 }
+/* Shrink active line to text width so moon tracks the text, not the container */
+#lyr-curr:not(.lyr-idle) {
+  width: fit-content;
+  max-width: 100%;
+}
 .lyr-idle {
-  font-size: clamp(1.4rem, 3.5vw, 3rem) !important;
-  font-weight: 300;
+  font-size: clamp(1rem, 2.5vw, 2rem) !important;
+  font-weight: 300 !important;
   color: var(--dim2) !important;
   text-shadow: none !important;
-  letter-spacing: .08em;
 }
 
-/* footer: progress + time */
-#player-footer {
-  flex-shrink: 0;
+/* ── transport controls ── */
+#np-controls {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
-  background: rgba(10,3,24,.7);
-  border-top: 1px solid var(--rim);
+  gap: 10px;
+  width: 100%;
+  max-width: 560px;
 }
+.ctrl-btn {
+  background: transparent;
+  border: 1px solid var(--rim);
+  border-radius: 8px;
+  color: var(--violet-l);
+  font-size: clamp(.9rem, 2vw, 1.1rem);
+  padding: 7px 13px;
+  cursor: pointer;
+  min-width: 42px;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .12s;
+  flex-shrink: 0;
+}
+.ctrl-btn:hover  { background: var(--rim); }
+.ctrl-btn:active { background: var(--violet); }
 
 #prog-wrap {
   flex: 1;
@@ -345,21 +241,184 @@ html, body {
   box-shadow: 0 0 0 0 rgba(224,64,138,.4);
   transition: box-shadow .15s;
 }
-#prog-wrap:hover #prog-thumb {
-  box-shadow: 0 0 0 5px rgba(224,64,138,.3);
-}
+#prog-wrap:hover #prog-thumb { box-shadow: 0 0 0 5px rgba(224,64,138,.3); }
 
 #time-disp {
-  font-size: clamp(.7rem, 1.5vw, .9rem);
+  font-size: clamp(.7rem, 1.5vw, .85rem);
   color: var(--dim2);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   min-width: 9ch;
   text-align: right;
+  flex-shrink: 0;
 }
 
 /* ════════════════════════════════════════════════════════
-   MOON — fixed overlay, sits above everything
+   LIBRARY
+   ════════════════════════════════════════════════════════ */
+#track-grid {
+  padding: 24px 20px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  align-content: start;
+}
+
+.track-card {
+  background: #110630;
+  border: 1px solid var(--rim);
+  border-radius: 14px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: border-color .15s, background .15s;
+}
+.track-card:hover { border-color: var(--violet); background: #160840; }
+
+.card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.card-moon { font-size: 1.8rem; line-height: 1; flex-shrink: 0; }
+.card-meta { flex: 1; min-width: 0; }
+.card-title {
+  font-size: clamp(.95rem, 2.5vw, 1.1rem);
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-artist {
+  font-size: .85rem;
+  color: var(--dim2);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-dur {
+  font-size: .8rem;
+  color: var(--dim2);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.card-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.badge {
+  font-size: .7rem;
+  padding: 2px 7px;
+  border-radius: 99px;
+  border: 1px solid;
+}
+.badge-cc  { color: #6ee7b7; border-color: #064e3b; background: #022c22; }
+.badge-lrc { color: #c4b5fd; border-color: #4c1d95; background: #1e0a40; }
+
+/* THE PLAY BUTTON — always shown, always enabled, every track */
+.btn-play {
+  width: 100%;
+  padding: 15px;
+  font-size: clamp(1rem, 2.5vw, 1.15rem);
+  font-weight: 700;
+  background: linear-gradient(135deg, #6B3FA0, #E0408A);
+  border: none;
+  border-radius: 10px;
+  color: #fff;
+  cursor: pointer;
+  letter-spacing: .05em;
+  transition: opacity .15s, transform .1s;
+}
+.btn-play:active { transform: scale(.97); opacity: .85; }
+
+/* ════════════════════════════════════════════════════════
+   DISCOVER PANEL
+   ════════════════════════════════════════════════════════ */
+#discover-panel {
+  background: var(--bg2);
+  border-bottom: 1px solid var(--rim);
+  padding: 16px 20px;
+}
+#disc-search-bar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+#disc-query {
+  flex: 1;
+  min-width: 180px;
+  background: #1a0a38;
+  border: 1px solid var(--rim);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: .9rem;
+  outline: none;
+}
+#disc-query:focus { border-color: var(--violet-l); }
+#disc-go {
+  background: var(--violet);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: .9rem;
+  font-weight: 600;
+  padding: 8px 18px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#disc-go:hover { background: var(--violet-l); }
+#disc-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.disc-msg {
+  color: var(--dim2);
+  font-size: .9rem;
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 12px 0;
+}
+.disc-card {
+  background: #110630;
+  border: 1px solid var(--rim);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.disc-title {
+  font-size: .95rem;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.disc-meta {
+  font-size: .8rem;
+  color: var(--dim2);
+}
+.btn-pull {
+  width: 100%;
+  padding: 10px;
+  font-size: .9rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--violet), var(--magenta));
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  transition: opacity .15s;
+  margin-top: auto;
+}
+.btn-pull:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ════════════════════════════════════════════════════════
+   MOON — fixed overlay
    ════════════════════════════════════════════════════════ */
 #moon {
   position: fixed;
@@ -380,7 +439,7 @@ html, body {
 }
 
 /* ════════════════════════════════════════════════════════
-   VIEW: TV DISPLAY WAITING SCREEN
+   TV WAITING SCREEN
    ════════════════════════════════════════════════════════ */
 #view-tv {
   display: none;
@@ -392,7 +451,6 @@ html, body {
   justify-content: center;
   text-align: center;
 }
-
 #tv-inner {
   display: flex;
   flex-direction: column;
@@ -400,7 +458,6 @@ html, body {
   gap: 20px;
   padding: 40px;
 }
-
 #tv-moon {
   width: 120px; height: 120px;
   border-radius: 50%;
@@ -414,94 +471,96 @@ html, body {
 }
 @keyframes tv-pulse {
   0%,100% { filter: drop-shadow(0 0 20px #a855f7) drop-shadow(0 0 60px #7c3aed); }
-  50%     { filter: drop-shadow(0 0 35px #a855f7) drop-shadow(0 0 100px #7c3aed); }
+  50%      { filter: drop-shadow(0 0 35px #a855f7) drop-shadow(0 0 100px #7c3aed); }
 }
-
-#tv-inner h1 {
-  font-size: clamp(2rem, 5vw, 4rem);
-  font-weight: 700;
-  color: var(--violet-l);
-  letter-spacing: .05em;
-}
-#tv-status {
-  font-size: clamp(1rem, 2.5vw, 1.8rem);
-  color: var(--dim2);
-}
-#tv-hint {
-  font-size: clamp(.75rem, 1.5vw, 1rem);
-  color: var(--dim);
-  margin-top: 8px;
-}
+#tv-inner h1 { font-size: clamp(2rem, 5vw, 4rem); font-weight: 700; color: var(--violet-l); letter-spacing: .05em; }
+#tv-status  { font-size: clamp(1rem, 2.5vw, 1.8rem); color: var(--dim2); }
+#tv-hint    { font-size: clamp(.75rem, 1.5vw, 1rem); color: var(--dim); margin-top: 8px; }
 #tv-activate {
-  margin-top: 16px;
-  padding: 12px 28px;
-  background: var(--violet);
-  border: none;
-  border-radius: 10px;
-  color: var(--text);
-  font-size: 1rem;
-  cursor: pointer;
+  margin-top: 16px; padding: 12px 28px;
+  background: var(--violet); border: none; border-radius: 10px;
+  color: var(--text); font-size: 1rem; cursor: pointer;
 }
 
 /* ════════════════════════════════════════════════════════
-   MOBILE OVERRIDES  (<520px)
+   MOBILE
    ════════════════════════════════════════════════════════ */
 @media (max-width: 520px) {
-  #track-grid {
-    grid-template-columns: 1fr;
-    padding: 16px;
-    gap: 12px;
-  }
-  #lib-header { padding: 12px 16px; gap: 8px; }
+  #track-grid { grid-template-columns: 1fr; padding: 16px; gap: 12px; }
+  #lib-header { padding: 10px 14px; gap: 8px; }
   #lib-header h1 { font-size: 1rem; }
   #search { max-width: none; }
-
-  /* Player: more vertical padding for lyrics */
-  #player-stage { padding: 16px 5vw; gap: 2vh; }
+  #now-playing { padding: 20px 16px 16px; }
   #lyr-curr { white-space: normal; word-break: break-word; }
 }
 </style>
 </head>
 <body>
 
-<!-- ═══ VIEW: LIBRARY ═══════════════════════════════════════════════════════ -->
-<div id="view-lib">
+<!-- ═══ MAIN PAGE ════════════════════════════════════════════════════════════ -->
+<div id="view-main">
+
   <header id="lib-header">
     <span class="logo">☽</span>
     <h1>Ph3b3 Karaoke</h1>
-    <input type="search" id="search" placeholder="Search tracks…" autocomplete="off" autocorrect="off" spellcheck="false">
-    <a href="?tv" target="_blank" class="btn-tv" title="Open TV display on this screen">📺 TV</a>
+    <input type="search" id="search" placeholder="Search tracks…"
+           autocomplete="off" autocorrect="off" spellcheck="false">
+    <button class="btn-tv" id="btn-disc" title="Discover tracks on Jamendo">🔍 Discover</button>
+    <a href="?tv" target="_blank" class="btn-tv" title="Open TV display">📺 TV</a>
   </header>
+
+  <!-- ── DISCOVER PANEL ──────────────────────────────────────────────── -->
+  <div id="discover-panel" style="display:none">
+    <div id="disc-search-bar">
+      <input id="disc-query" type="search" placeholder="Search Jamendo (e.g. lofi, jazz, pop)…"
+             autocomplete="off" autocorrect="off" spellcheck="false">
+      <button id="disc-go">Search</button>
+    </div>
+    <div id="disc-results"><div class="disc-msg">Enter a search term above and hit Search</div></div>
+  </div>
+
+  <!-- ── NOW PLAYING PANEL ──────────────────────────────────────────────── -->
+  <section id="now-playing">
+    <!-- Idle: shown when nothing is loaded -->
+    <div id="np-idle">
+      <span class="idle-moon">☽</span>
+      <span>Tap <strong>▶ PLAY</strong> on any track below</span>
+    </div>
+
+    <!-- Active: shown when a track is loaded -->
+    <div id="np-active" style="display:none">
+      <div id="np-info">
+        <div id="np-title">—</div>
+        <div id="np-artist"></div>
+      </div>
+
+      <!-- Lyrics (hidden if no LRC) -->
+      <div id="np-lyrics" style="display:none">
+        <div class="lyr" id="lyr-prev"></div>
+        <div class="lyr" id="lyr-curr"></div>
+        <div class="lyr" id="lyr-next"></div>
+      </div>
+
+      <!-- Transport -->
+      <div id="np-controls">
+        <button class="ctrl-btn" id="btn-rst"  title="Restart">↺</button>
+        <button class="ctrl-btn" id="btn-play" title="Play / Pause">▶</button>
+        <div id="prog-wrap">
+          <div id="prog-fill"></div>
+          <div id="prog-thumb"></div>
+        </div>
+        <span id="time-disp">0:00 / 0:00</span>
+        <button class="ctrl-btn" id="btn-exit" title="Stop / close player">✕</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── LIBRARY ────────────────────────────────────────────────────────── -->
   <div id="track-grid"></div>
-</div>
 
-<!-- ═══ VIEW: PLAYER ═════════════════════════════════════════════════════════ -->
-<div id="view-player">
-  <div id="player-hud">
-    <button class="hud-btn" id="btn-exit" title="Back to library">✕</button>
-    <span id="player-title"></span>
-    <div id="hud-right">
-      <button class="hud-btn" id="btn-rst"  title="Restart">↺</button>
-      <button class="hud-btn" id="btn-play" title="Play / Pause">▶</button>
-    </div>
-  </div>
+</div><!-- #view-main -->
 
-  <div id="player-stage">
-    <div class="lyr" id="lyr-prev"></div>
-    <div class="lyr" id="lyr-curr"></div>
-    <div class="lyr" id="lyr-next"></div>
-  </div>
-
-  <div id="player-footer">
-    <div id="prog-wrap">
-      <div id="prog-fill"></div>
-      <div id="prog-thumb"></div>
-    </div>
-    <span id="time-disp">0:00 / 0:00</span>
-  </div>
-</div>
-
-<!-- ═══ VIEW: TV WAITING ══════════════════════════════════════════════════════ -->
+<!-- ═══ TV WAITING SCREEN ════════════════════════════════════════════════════ -->
 <div id="view-tv">
   <div id="tv-inner">
     <div id="tv-moon"></div>
@@ -512,7 +571,7 @@ html, body {
   </div>
 </div>
 
-<!-- ═══ MOON (fixed overlay) ══════════════════════════════════════════════════ -->
+<!-- ═══ MOON (fixed, floats above everything) ════════════════════════════════ -->
 <div id="moon"></div>
 
 <audio id="audio" preload="auto"></audio>
@@ -521,6 +580,11 @@ html, body {
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const audio     = document.getElementById('audio');
 const moon      = document.getElementById('moon');
+const npIdle    = document.getElementById('np-idle');
+const npActive  = document.getElementById('np-active');
+const npLyrics  = document.getElementById('np-lyrics');
+const npTitle   = document.getElementById('np-title');
+const npArtist  = document.getElementById('np-artist');
 const lyrPrev   = document.getElementById('lyr-prev');
 const lyrCurr   = document.getElementById('lyr-curr');
 const lyrNext   = document.getElementById('lyr-next');
@@ -530,24 +594,24 @@ const timeDisp  = document.getElementById('time-disp');
 const btnPlay   = document.getElementById('btn-play');
 const btnRst    = document.getElementById('btn-rst');
 const btnExit   = document.getElementById('btn-exit');
-const playerTitle = document.getElementById('player-title');
 const progWrap  = document.getElementById('prog-wrap');
-const viewLib   = document.getElementById('view-lib');
-const viewPlayer= document.getElementById('view-player');
+const viewMain  = document.getElementById('view-main');
 const viewTv    = document.getElementById('view-tv');
 const searchEl  = document.getElementById('search');
+const btnDisc   = document.getElementById('btn-disc');
+const discPanel = document.getElementById('discover-panel');
+const discRes   = document.getElementById('disc-results');
+const discQuery = document.getElementById('disc-query');
 
 // ── Mode detection ────────────────────────────────────────────────────────
-const TV_MODE   = new URLSearchParams(location.search).has('tv');
-const isMobile  = () => window.matchMedia('(max-width:768px)').matches;
+const TV_MODE = new URLSearchParams(location.search).has('tv');
 
 // ── State ─────────────────────────────────────────────────────────────────
-let lines       = [];      // [{time, text}]
-let curIdx      = -1;
-let moonActive  = false;
-let seeking     = false;
-let currentName = '';
-let tvActivated = false;   // audio unlocked on TV
+let lines      = [];
+let curIdx     = -1;
+let moonActive = false;
+let seeking    = false;
+let hasLRC     = false;
 
 // ── LRC parser ────────────────────────────────────────────────────────────
 function parseLRC(raw) {
@@ -557,8 +621,7 @@ function parseLRC(raw) {
   while ((m = re.exec(raw)) !== null) {
     const ms = m[3].length === 3 ? parseInt(m[3]) : parseInt(m[3]) * 10;
     const t  = parseInt(m[1]) * 60 + parseInt(m[2]) + ms / 1000;
-    const tx = m[4].trim();
-    out.push({ time: t, text: tx });
+    out.push({ time: t, text: m[4].trim() });
   }
   return out.sort((a, b) => a.time - b.time);
 }
@@ -570,9 +633,7 @@ const fmt = s =>
 const humanize = s =>
   s.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
-function isSpacer(t) {
-  return !t || /^[♪(]/.test(t);
-}
+function isSpacer(t) { return !t || /^[♪(]/.test(t); }
 
 function activeIdx(t) {
   let lo = 0, hi = lines.length - 1, idx = -1;
@@ -588,70 +649,69 @@ function activeIdx(t) {
 function tick() {
   requestAnimationFrame(tick);
 
-  if (viewPlayer.style.display === 'none') {
-    moon.style.opacity = '0';
-    return;
-  }
+  const playing = !audio.paused && !!audio.src;
+  const t       = audio.currentTime || 0;
+  const dur     = audio.duration    || 0;
 
-  const t   = audio.currentTime || 0;
-  const dur = audio.duration    || 0;
-
-  // Progress bar
+  // Progress bar (when a track is loaded)
   if (dur > 0 && !seeking) {
     const pct = (t / dur * 100).toFixed(2) + '%';
-    progFill.style.width  = pct;
-    progThumb.style.left  = pct;
+    progFill.style.width = pct;
+    progThumb.style.left = pct;
   }
   timeDisp.textContent = `${fmt(t)} / ${fmt(dur || 0)}`;
 
-  if (!lines.length) return;
+  // Nothing to do if no LRC or not playing
+  if (!hasLRC || !lines.length) {
+    moon.style.opacity = '0';
+    return;
+  }
 
   // Line change
   const idx = activeIdx(t);
   if (idx !== curIdx) {
     curIdx = idx;
-    const curr = idx >= 0 ? lines[idx].text    : '';
-    const prev = idx >  0 ? lines[idx-1].text  : '';
+    const curr = idx >= 0 ? lines[idx].text   : '';
+    const prev = idx >  0 ? lines[idx-1].text : '';
     const next = idx + 1 < lines.length ? lines[idx+1].text : '';
 
     lyrPrev.textContent = isSpacer(prev) ? '' : prev;
     lyrNext.textContent = isSpacer(next) ? '' : next;
 
-    moonActive = (idx >= 0) && !isSpacer(curr);
+    moonActive = idx >= 0 && !isSpacer(curr);
 
     if (moonActive) {
-      lyrCurr.className = 'lyr';
+      lyrCurr.className   = 'lyr';
       lyrCurr.textContent = curr;
       lyrCurr.style.transform = 'scale(1.06)';
       setTimeout(() => { lyrCurr.style.transform = ''; }, 220);
     } else {
-      lyrCurr.className = 'lyr lyr-idle';
+      lyrCurr.className   = 'lyr lyr-idle';
       lyrCurr.textContent = curr || '♪';
-      moon.style.opacity = '0';
+      moon.style.opacity  = '0';
     }
   }
 
-  if (!moonActive) return;
+  if (!moonActive || !playing) {
+    if (!playing) moon.style.opacity = '0';
+    return;
+  }
 
-  // ── Moon position ──────────────────────────────────────────────────────
-  // Use viewport-absolute coords (getBoundingClientRect) so the fixed-position
-  // moon aligns exactly with the rendered text regardless of layout.
+  // ── Moon bounce across current lyric line ─────────────────────────────
   const lineStart = lines[curIdx].time;
-  const lineEnd   = curIdx + 1 < lines.length ? lines[curIdx+1].time : lineStart + 6;
+  const lineEnd   = curIdx + 1 < lines.length ? lines[curIdx + 1].time : lineStart + 6;
   const progress  = Math.min(1, Math.max(0, (t - lineStart) / (lineEnd - lineStart)));
 
   const textRect = lyrCurr.getBoundingClientRect();
-  if (textRect.width === 0) return;   // not laid out yet
+  if (textRect.width === 0) return;
 
   const mW = 48, mH = 48;
-
-  // Sweep left-to-right across the rendered text
   const xL = textRect.left;
   const xR = textRect.right - mW;
   const moonX = xL + progress * (xR - xL);
 
-  // Bounce: 3 arcs per line, 72px amplitude, baseline 20px above text
-  const bounce  = Math.abs(Math.sin(progress * Math.PI * 3));
+  // ~1.5 arcs per line, 72px amplitude, baseline 20px above text
+  const bounce   = Math.abs(Math.sin(progress * Math.PI * 1.5));
   const baseline = textRect.top - mH - 20;
   const moonY    = baseline - bounce * 72;
 
@@ -659,60 +719,48 @@ function tick() {
   moon.style.opacity   = '1';
 }
 
-// ── Player: load and immediately play a track ─────────────────────────────
-async function sing(name) {
-  currentName = name;
-  lines  = [];
-  curIdx = -1;
-  moon.style.opacity = '0';
+// ── Play a track — called directly from click handler ────────────────────
+// audio.src + audio.play() are set synchronously BEFORE any await so the
+// browser still counts this as a user-gesture-initiated play.
+function startAudio(name) {
+  audio.src = `/karaoke/audio/${encodeURIComponent(name)}`;
+  audio.play().catch(() => {});
+  btnPlay.textContent = '⏸';
+}
 
-  playerTitle.textContent = humanize(name);
-  lyrPrev.textContent = '';
-  lyrNext.textContent = '';
-  lyrCurr.className   = 'lyr lyr-idle';
-  lyrCurr.textContent = '♪ loading…';
-
-  // Show player immediately so the user gets feedback
-  viewPlayer.style.display = 'flex';
-  document.body.style.overflow = 'hidden';
-
-  // Load LRC
+async function loadLRC(name) {
   try {
     const r = await fetch(`/karaoke/lrc/${encodeURIComponent(name)}`);
-    if (r.ok) lines = parseLRC((await r.json()).text);
+    if (!r.ok) return;
+    const { text } = await r.json();
+    lines = parseLRC(text);
   } catch {}
 
-  // Set audio source and play
-  audio.src = `/karaoke/audio/${encodeURIComponent(name)}`;
-  audio.load();
-  audio.play().catch(() => {});   // best effort; browser may block until gesture
+  if (!lines.length) return;
 
-  // Prime display
-  if (lines.length) {
-    lyrCurr.textContent = lines[0].text;
-    lyrNext.textContent = lines[1]?.text || '';
-  } else {
-    lyrCurr.className = 'lyr lyr-idle';
-    lyrCurr.textContent = '♪';
-  }
+  npLyrics.style.display = 'flex';
+  hasLRC = true;
+  curIdx = -1;
+
+  const i = Math.max(0, activeIdx(audio.currentTime));
+  lyrCurr.className   = 'lyr';
+  lyrCurr.textContent = lines[i]?.text || lines[0].text;
+  lyrNext.textContent = lines[i + 1]?.text || '';
+  curIdx = i;
 }
 
 // ── Library ───────────────────────────────────────────────────────────────
-let allTracks = [];
-
 function buildCard(t) {
-  const hasLRC = t.lrc_exists;
   const attr   = t.attribution;
   const title  = attr?.track_name  || humanize(t.name);
   const artist = attr?.artist_name || '';
   const dur    = t.duration_s > 0
-    ? `${Math.floor(t.duration_s/60)}:${String(Math.floor(t.duration_s%60)).padStart(2,'0')}`
+    ? `${Math.floor(t.duration_s / 60)}:${String(Math.floor(t.duration_s % 60)).padStart(2, '0')}`
     : '';
 
   const card = document.createElement('div');
-  card.className = 'track-card' + (hasLRC ? '' : ' no-lrc');
-  card.dataset.name   = t.name;
-  card.dataset.search = (title + ' ' + artist).toLowerCase();
+  card.className       = 'track-card';
+  card.dataset.search  = (title + ' ' + artist).toLowerCase();
 
   card.innerHTML = `
     <div class="card-top">
@@ -720,41 +768,54 @@ function buildCard(t) {
       <div class="card-meta">
         <div class="card-title">${title}</div>
         ${artist ? `<div class="card-artist">${artist}</div>` : ''}
-        ${dur    ? `<div class="card-dur">${dur}</div>` : ''}
+        ${dur    ? `<div class="card-dur">${dur}</div>`       : ''}
       </div>
     </div>
     <div class="card-badges">
-      ${attr?.license ? `<span class="badge badge-cc">${attr.license}</span>` : ''}
-      ${!hasLRC ? `<span class="badge badge-nolrc">No lyrics</span>` : ''}
+      ${attr?.license_cc_url ? `<span class="badge badge-cc">CC</span>` : ''}
+      ${t.lrc_exists         ? `<span class="badge badge-lrc">♪ lyrics</span>` : ''}
     </div>
-    <button class="btn-sing" ${hasLRC ? '' : 'disabled'}>▶ &nbsp;SING</button>
+    <button class="btn-play">▶ &nbsp;PLAY</button>
   `;
 
-  if (hasLRC) {
-    card.querySelector('.btn-sing').addEventListener('click', () => singFromLibrary(t.name));
-  }
-  return card;
-}
+  // Click handler: synchronously start audio (preserves user-gesture chain),
+  // then asynchronously load LRC if available.
+  card.querySelector('.btn-play').addEventListener('click', () => {
+    // Reset state
+    lines      = [];
+    curIdx     = -1;
+    hasLRC     = false;
+    moon.style.opacity = '0';
 
-async function singFromLibrary(name) {
-  // Push to TV session so any TV display auto-loads this track
-  try {
-    await fetch('/karaoke/now', {
+    // Show panel immediately
+    npIdle.style.display   = 'none';
+    npActive.style.display = 'flex';
+    npLyrics.style.display = 'none';
+    npTitle.textContent  = title;
+    npArtist.textContent = artist;
+    lyrPrev.textContent  = '';
+    lyrCurr.className    = 'lyr lyr-idle';
+    lyrCurr.textContent  = '♪';
+    lyrNext.textContent  = '';
+
+    // Start audio NOW — within the user gesture, before any await
+    startAudio(t.name);
+
+    // Load LRC asynchronously (panel shows lyrics once ready)
+    if (t.lrc_exists) loadLRC(t.name);
+
+    // Notify TV display (fire-and-forget)
+    fetch('/karaoke/now', {
       method: 'PUT',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ track: name, playing: true })
-    });
-  } catch {}
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ track: t.name, playing: true })
+    }).catch(() => {});
 
-  // Also play locally (phone solo mode or desktop mode)
-  await sing(name);
-}
-
-function filterCards(query) {
-  const q = query.toLowerCase().trim();
-  document.querySelectorAll('.track-card').forEach(card => {
-    card.style.display = (!q || card.dataset.search.includes(q)) ? '' : 'none';
+    // Scroll panel into view on mobile
+    document.getElementById('now-playing').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
+
+  return card;
 }
 
 async function initLibrary() {
@@ -763,71 +824,74 @@ async function initLibrary() {
     const r = await fetch('/karaoke/library');
     if (!r.ok) return;
     const { tracks } = await r.json();
-    allTracks = tracks;
 
-    // LRC-enabled tracks first
+    // LRC tracks first, then non-LRC
     const sorted = [
-      ...tracks.filter(t => t.lrc_exists),
+      ...tracks.filter(t =>  t.lrc_exists),
       ...tracks.filter(t => !t.lrc_exists),
     ];
     for (const t of sorted) grid.appendChild(buildCard(t));
-  } catch (e) { console.error(e); }
+  } catch (e) { console.error('[karaoke] initLibrary:', e); }
 }
 
-searchEl.addEventListener('input', () => filterCards(searchEl.value));
+searchEl.addEventListener('input', () => {
+  const q = searchEl.value.toLowerCase().trim();
+  document.querySelectorAll('.track-card').forEach(card => {
+    card.style.display = (!q || card.dataset.search.includes(q)) ? '' : 'none';
+  });
+});
 
 // ── Player controls ────────────────────────────────────────────────────────
 btnPlay.addEventListener('click', () => {
   if (!audio.src || audio.src === location.href) return;
-  if (audio.paused) { audio.play(); btnPlay.textContent = '⏸'; }
+  if (audio.paused) { audio.play().catch(() => {}); btnPlay.textContent = '⏸'; }
   else              { audio.pause(); btnPlay.textContent = '▶'; }
 });
 
 btnRst.addEventListener('click', () => {
   audio.currentTime = 0;
   curIdx = -1;
-  audio.play().catch(()=>{});
+  audio.play().catch(() => {});
   btnPlay.textContent = '⏸';
 });
 
 btnExit.addEventListener('click', () => {
   audio.pause();
   audio.src = '';
-  moon.style.opacity  = '0';
-  curIdx = -1;
   lines  = [];
-  viewPlayer.style.display = 'none';
-  document.body.style.overflow = '';
-  // Clear TV session
+  curIdx = -1;
+  hasLRC = false;
+  moon.style.opacity     = '0';
+  btnPlay.textContent    = '▶';
+  npActive.style.display = 'none';
+  npIdle.style.display   = 'flex';
   fetch('/karaoke/now', {
-    method:'PUT',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({track: null, playing: false})
-  }).catch(()=>{});
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ track: null, playing: false }),
+  }).catch(() => {});
 });
 
 audio.addEventListener('play',  () => { btnPlay.textContent = '⏸'; });
 audio.addEventListener('pause', () => { btnPlay.textContent = '▶'; });
 audio.addEventListener('ended', () => {
-  btnPlay.textContent = '▶';
-  moon.style.opacity  = '0';
-  lyrCurr.className   = 'lyr lyr-idle';
-  lyrCurr.textContent = '☽  fin';
-  lyrPrev.textContent = '';
-  lyrNext.textContent = '';
+  btnPlay.textContent   = '▶';
+  moon.style.opacity    = '0';
+  lyrCurr.className     = 'lyr lyr-idle';
+  lyrCurr.textContent   = '☽  fin';
+  lyrPrev.textContent   = '';
+  lyrNext.textContent   = '';
 });
 
-// Seek: click or drag on progress bar
+// ── Seek ───────────────────────────────────────────────────────────────────
 function seekTo(e) {
   const r = progWrap.getBoundingClientRect();
   const p = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
   audio.currentTime = p * (audio.duration || 0);
   curIdx = -1;
 }
-progWrap.addEventListener('mousedown', e => { seeking = true; seekTo(e); });
-progWrap.addEventListener('touchstart', e => {
-  seeking = true; seekTo(e.touches[0]);
-}, { passive: true });
+progWrap.addEventListener('mousedown',  e => { seeking = true; seekTo(e); });
+progWrap.addEventListener('touchstart', e => { seeking = true; seekTo(e.touches[0]); }, { passive: true });
 document.addEventListener('mousemove',  e => { if (seeking) seekTo(e); });
 document.addEventListener('touchmove',  e => { if (seeking) seekTo(e.touches[0]); }, { passive: true });
 document.addEventListener('mouseup',    () => { seeking = false; });
@@ -835,31 +899,123 @@ document.addEventListener('touchend',   () => { seeking = false; });
 
 // Keyboard
 document.addEventListener('keydown', e => {
-  if (viewPlayer.style.display === 'none') return;
   if (e.code === 'Space') { e.preventDefault(); btnPlay.click(); }
   if (e.code === 'KeyR')  btnRst.click();
-  if (e.code === 'Escape') btnExit.click();
 });
 
+// ── Discover ──────────────────────────────────────────────────────────────
+btnDisc.addEventListener('click', () => {
+  const open = discPanel.style.display !== 'none';
+  discPanel.style.display = open ? 'none' : '';
+  btnDisc.textContent     = open ? '🔍 Discover' : '✕ Discover';
+});
+
+document.getElementById('disc-go').addEventListener('click', discoverSearch);
+discQuery.addEventListener('keydown', e => { if (e.key === 'Enter') discoverSearch(); });
+
+async function discoverSearch() {
+  const q = discQuery.value.trim();
+  discRes.innerHTML = '<div class="disc-msg">Searching…</div>';
+  try {
+    const url = '/karaoke/discover' + (q ? `?query=${encodeURIComponent(q)}&limit=8` : '?limit=8');
+    const r = await fetch(url);
+    const d = await r.json();
+    if (!r.ok) {
+      discRes.innerHTML = `<div class="disc-msg">⚠ ${d.detail || r.statusText}</div>`;
+      return;
+    }
+    if (!d.tracks?.length) {
+      discRes.innerHTML = '<div class="disc-msg">No results found</div>';
+      return;
+    }
+    discRes.innerHTML = '';
+    for (const t of d.tracks) discRes.appendChild(buildDiscCard(t));
+  } catch {
+    discRes.innerHTML = '<div class="disc-msg">Network error — is the server running?</div>';
+  }
+}
+
+function buildDiscCard(t) {
+  const card = document.createElement('div');
+  card.className = 'disc-card';
+  const dur = t.duration
+    ? `${Math.floor(t.duration / 60)}:${String(Math.floor(t.duration % 60)).padStart(2, '0')}`
+    : '';
+  card.innerHTML = `
+    <div class="disc-title">${t.name || '—'}</div>
+    <div class="disc-meta">${t.artist_name || ''}${dur ? ' · ' + dur : ''}</div>
+    <button class="btn-pull" data-id="${t.id}">▶ Pull &amp; Play</button>
+  `;
+  const pullBtn = card.querySelector('.btn-pull');
+  pullBtn.addEventListener('click', async function () {
+    this.disabled    = true;
+    this.textContent = 'Pulling…';
+    try {
+      const r = await fetch('/karaoke/pull', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ track_id: String(t.id) }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        this.disabled    = false;
+        this.textContent = `✕ ${d.detail || 'Failed'}`;
+        return;
+      }
+      this.textContent = '✓ Playing';
+      const info   = d.track;
+      const title  = info.attribution?.track_name  || humanize(info.name);
+      const artist = info.attribution?.artist_name || '';
+      // Reset + show player
+      lines      = [];
+      curIdx     = -1;
+      hasLRC     = false;
+      moon.style.opacity   = '0';
+      npIdle.style.display   = 'none';
+      npActive.style.display = 'flex';
+      npLyrics.style.display = 'none';
+      npTitle.textContent  = title;
+      npArtist.textContent = artist;
+      lyrPrev.textContent  = '';
+      lyrCurr.className    = 'lyr lyr-idle';
+      lyrCurr.textContent  = '♪';
+      lyrNext.textContent  = '';
+      startAudio(info.name);
+      if (info.lrc_exists) loadLRC(info.name);
+      fetch('/karaoke/now', {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ track: info.name, playing: true }),
+      }).catch(() => {});
+      // Prepend to library grid
+      document.getElementById('track-grid').prepend(buildCard(info));
+      // Close discover panel
+      discPanel.style.display = 'none';
+      btnDisc.textContent     = '🔍 Discover';
+      document.getElementById('now-playing').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch {
+      this.disabled    = false;
+      this.textContent = '▶ Pull & Play';
+    }
+  });
+  return card;
+}
+
 // ── TV MODE ───────────────────────────────────────────────────────────────
-let tvLastTs   = 0;
+let tvLastTs    = 0;
 let tvLastTrack = null;
 
 function startTvPolling() {
-  viewTv.style.display = 'flex';
-  viewLib.style.display = 'none';
+  viewTv.style.display   = 'flex';
+  viewMain.style.display = 'none';
 
-  // Show URL hint
   document.getElementById('tv-url').textContent =
-    `${location.hostname}:${location.port || (location.protocol==='https:'?443:80)}/karaoke`;
+    `${location.hostname}:${location.port || (location.protocol === 'https:' ? 443 : 80)}/karaoke`;
 
-  // Activate button unlocks audio context (needed for autoplay)
   document.getElementById('tv-activate').addEventListener('click', () => {
-    tvActivated = true;
     document.getElementById('tv-activate').style.display = 'none';
-    // Play silence to unlock
-    audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAA...';
-    audio.play().catch(()=>{});
+    audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAA==';
+    audio.play().catch(() => {});
   });
 
   pollTv();
@@ -871,18 +1027,28 @@ async function pollTv() {
     if (r.ok) {
       const s = await r.json();
       if (s.track && s.ts > tvLastTs) {
-        tvLastTs   = s.ts;
+        tvLastTs    = s.ts;
         tvLastTrack = s.track;
         document.getElementById('tv-status').textContent = `Now playing: ${humanize(s.track)}`;
         viewTv.style.display = 'none';
-        await sing(s.track);
+        // TV mode: start audio + load LRC directly
+        lines  = [];
+        curIdx = -1;
+        hasLRC = false;
+        npIdle.style.display   = 'none';
+        npActive.style.display = 'flex';
+        npLyrics.style.display = 'none';
+        npTitle.textContent    = humanize(s.track);
+        npArtist.textContent   = '';
+        viewMain.style.display = '';
+        startAudio(s.track);
+        loadLRC(s.track);
       } else if (!s.track && tvLastTrack) {
-        // Track cleared → go back to waiting
         tvLastTrack = null;
         audio.pause();
         audio.src = '';
-        viewPlayer.style.display = 'none';
-        viewTv.style.display = 'flex';
+        viewMain.style.display = 'none';
+        viewTv.style.display   = 'flex';
         document.getElementById('tv-status').textContent = 'Waiting for track…';
       }
     }

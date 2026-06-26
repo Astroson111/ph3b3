@@ -7,6 +7,7 @@
 extern Ph3b3Face  face;
 extern AppManager appMgr;
 extern bool       g_overlayOpen;
+extern bool       g_crescentTapped;
 
 // Left-side drawer triggered by right-swipe originating on the crescent-moon tab.
 //
@@ -21,6 +22,8 @@ extern bool       g_overlayOpen;
 class CrescentMenu {
 public:
     void update() {
+        g_crescentTapped = false;  // clear previous frame; TalkApp consumed it or it expired
+
         int16_t tx = 0, ty = 0;
         bool touching = M5StackChan.Display().getTouch(&tx, &ty);
 
@@ -31,11 +34,15 @@ public:
             _onTab    = _hitsTab(tx, ty);
             _dragging = false;
             _wasTouch = true;
+            Serial.printf("[CM] DOWN tx=%d ty=%d onTab=%d open=%d\n", tx, ty, (int)_onTab, (int)_open);
         } else if (touching && _wasTouch) {
             // Touch MOVE — only track if originated on tab
             if (_onTab) {
                 int dx = tx - _downX;
-                if (!_dragging && abs(dx) > SWIPE_DEAD_PX) _dragging = true;
+                if (!_dragging && abs(dx) > SWIPE_DEAD_PX) {
+                    _dragging = true;
+                    Serial.printf("[CM] DRAG armed dx=%d\n", dx);
+                }
                 if (_dragging) {
                     // Closed: drag right opens; open: drag left closes
                     float base = _open ? 1.0f : 0.0f;
@@ -44,11 +51,19 @@ public:
             }
         } else if (!touching && _wasTouch) {
             // Touch UP
+            Serial.printf("[CM] UP   onTab=%d dragging=%d open=%d\n", (int)_onTab, (int)_dragging, (int)_open);
             if (_onTab) {
                 if (!_dragging) {
-                    _open = !_open;                       // tap: toggle
+                    if (_open) {
+                        _open = false;
+                        Serial.println("[CM] → closed menu");
+                    } else {
+                        g_crescentTapped = true;
+                        Serial.println("[CM] → g_crescentTapped=true");
+                    }
                 } else {
-                    _open = (_progress >= SWIPE_THRESH);  // swipe: commit if past threshold
+                    _open = (_progress >= SWIPE_THRESH);
+                    Serial.printf("[CM] → swipe commit open=%d\n", (int)_open);
                 }
             } else if (_open) {
                 _handlePanelTap(_downX, _downY);
@@ -85,6 +100,17 @@ private:
     bool  _dragging  = false;
     int   _downX     = 0;
     int   _downY     = 0;
+
+    // BGR-correct color565 — mirrors SC_FACE_BGR swap used by Ph3b3Face::C().
+    // Named _col, not _C: picolibc ctype.h defines _C as a macro (040), which
+    // would silently expand _C(...) to 040(...) causing "not a function" errors.
+    static uint16_t _col(uint8_t r, uint8_t g, uint8_t b) {
+#ifdef SC_FACE_BGR
+        return M5StackChan.Display().color565(b, g, r);
+#else
+        return M5StackChan.Display().color565(r, g, b);
+#endif
+    }
 
     // Panel: left-side drawer; x slides from -OVL_W to 0 as _progress goes 0→1
     static const int OVL_W      = 152;
@@ -131,22 +157,21 @@ private:
         int ovlH = OVL_PAD * 2 + n * TILE_H;
         int px   = _panX();
 
-        d.fillRoundRect(px, 0, OVL_W, ovlH, 8, d.color565(10, 7, 25));
-        d.drawRoundRect(px, 0, OVL_W, ovlH, 8, d.color565(70, 40, 150));
+        d.fillRoundRect(px, 0, OVL_W, ovlH, 8, _col(10, 7, 25));
+        d.drawRoundRect(px, 0, OVL_W, ovlH, 8, _col(70, 40, 150));
 
         for (int i = 0; i < n; i++) {
             int tileY = OVL_PAD + i * TILE_H;
             bool sel  = (i == appMgr.activeIndex());
             if (sel) {
                 d.fillRoundRect(px + OVL_PAD, tileY + 4, OVL_W - OVL_PAD * 2, TILE_H - 8,
-                                6, d.color565(22, 10, 55));
+                                6, _col(22, 10, 55));
                 d.drawRoundRect(px + OVL_PAD, tileY + 4, OVL_W - OVL_PAD * 2, TILE_H - 8,
-                                6, d.color565(130, 70, 250));
+                                6, _col(130, 70, 250));
             }
             d.setTextDatum(middle_center);
             d.setTextSize(sel ? 2 : 1);
-            d.setTextColor(sel ? d.color565(210, 170, 255) : d.color565(110, 95, 145),
-                           d.color565(10, 7, 25));
+            d.setTextColor(sel ? _col(210, 170, 255) : _col(110, 95, 145), _col(10, 7, 25));
             const char* nm = appMgr.app(i) ? appMgr.app(i)->name() : "";
             d.drawString(nm, px + OVL_W / 2, tileY + TILE_H / 2);
         }
@@ -158,7 +183,7 @@ private:
         auto& d  = M5StackChan.Display();
         int   tcx = 22, tcy = 22;
         float tr  = 14.0f;
-        d.fillSmoothCircle(tcx, tcy, (int)tr, d.color565(200, 100, 255));
+        d.fillSmoothCircle(tcx, tcy, (int)tr, _col(200, 100, 255));
         d.fillSmoothCircle(tcx + (int)(tr * 0.55f), tcy - (int)(tr * 0.18f),
                            (int)tr, TFT_BLACK);
     }

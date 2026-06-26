@@ -390,25 +390,34 @@ class Ph3b3Face {
     }
 
     // 9 — crescent corner tab (top-left UI indicator, state-coloured)
+    // Moon phase encodes status: shape varies cutXf offset (0=new, tr*2.8=full).
     if (_showCrescentTab) {
       int   tcx = 22, tcy = 22;
       float tr  = 14.0f;
       uint8_t br, bg, bb;
+      float   cutXf = tr * 0.55f;  // default crescent phase
       if (_crescentTabHighlight) {
-        br = 200; bg = 100; bb = 255;
+        br = 200; bg = 100; bb = 255;  // bright purple (panel open)
+      } else if (state == CONNECTING) {
+        br = 20; bg = 80; bb = 220;   // blue — WiFi searching
+        cutXf = fmodf(t * 3.5f, tr * 2.8f);  // cycle new→full as connecting
       } else if (state == LISTENING) {
-        float pulse = 0.5f + 0.5f * sinf(t * 7.0f);
-        br = (uint8_t)(120 + 100 * pulse); bg = 10; bb = 15;
+        br = 220; bg = 200; bb = 20;  // yellow — recording
+        // cutXf stays at crescent (default): stage 2 of 3
       } else if (state == THINKING) {
-        br = 220; bg = 130; bb = 20;
+        br = 220; bg = 200; bb = 20;  // yellow — processing
+        cutXf = tr * 1.3f;  // half-moon: stage 3 of 3
+      } else if (state == SPEAKING) {
+        br = 220; bg = 200; bb = 20;  // yellow — responding
+        cutXf = tr * 2.2f;  // near-full: stage 3 of 3
       } else {
         float pulse = 0.5f + 0.5f * sinf(t * 1.5f);
         br = (uint8_t)(50 + 40 * pulse);
         bg = (uint8_t)(28 + 20 * pulse);
-        bb = (uint8_t)(120 + 60 * pulse);
+        bb = (uint8_t)(120 + 60 * pulse);  // slow purple pulse (idle/rest)
       }
       canvas.fillSmoothCircle(tcx, tcy, tr, C(br, bg, bb));
-      canvas.fillSmoothCircle(tcx + (int)(tr * 0.55f), tcy - (int)(tr * 0.18f), tr, TFT_BLACK);
+      canvas.fillSmoothCircle(tcx + (int)cutXf, tcy - (int)(tr * 0.18f), tr, TFT_BLACK);
     }
 
     // 10 — speech bubble (below face, grows downward — mirrors Iris layout)
