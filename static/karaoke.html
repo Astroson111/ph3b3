@@ -808,16 +808,21 @@ function startAudio(name) {
 
 async function loadLRC(name) {
   try {
-    const r = await fetch(`/karaoke/lrc/${encodeURIComponent(name)}`);
+    const url = `/karaoke/lrc/${encodeURIComponent(name)}`;
+    const r = await fetch(url);
+    console.log('[DBG] loadLRC', url, '→', r.status, r.ok);
     if (!r.ok) return;
     const { text } = await r.json();
     lines = parseLRC(text);
-  } catch {}
+    console.log('[DBG] parseLRC lines:', lines.length);
+  } catch(e) { console.error('[DBG] loadLRC error', e); }
 
+  console.log('[DBG] lines.length after try:', lines.length, '| hasLRC before set:', hasLRC);
   if (!lines.length) return;
 
   npLyrics.style.display = 'flex';
   hasLRC = true;
+  console.log('[DBG] hasLRC set true, npLyrics.display:', npLyrics.style.display);
   curIdx = -1;
 
   const i = Math.max(0, activeIdx(audio.currentTime));
@@ -894,6 +899,7 @@ function buildCard(t) {
     tvInner.style.display  = 'none';
     npActive.style.display = 'flex';
     viewTv.style.display   = 'flex';
+    console.log('[DBG] #np-lyrics display:', npLyrics.style.display);
   });
 
   return card;
