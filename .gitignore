@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 .env
 firmware/.pio/
+**/secrets.h
 stack-chan/
 *.wav
 voices/*.png
