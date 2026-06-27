@@ -547,6 +547,32 @@
       font-family: 'SF Mono','Cascadia Code','Consolas',monospace;
       margin-top: .12rem;
     }
+    .morph-dl-row {
+      display: flex; align-items: center; gap: .5rem; margin-top: .65rem;
+    }
+    .morph-dl-sel {
+      background: rgba(43,15,95,.6);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: .3rem .55rem;
+      color: var(--text); font-size: .78rem; font-family: inherit;
+      outline: none; cursor: pointer;
+    }
+    .morph-dl-sel:focus { border-color: var(--purple); }
+    .morph-dl-btn {
+      background: rgba(124,58,237,.18); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--text);
+      padding: .3rem .75rem; font-size: .78rem;
+      cursor: pointer; font-family: inherit; transition: border-color .15s;
+    }
+    .morph-dl-btn:hover { border-color: var(--purple); }
+    .morph-dl-btn:disabled { opacity: .38; cursor: not-allowed; }
+    .morph-gal-dl {
+      background: none; border: none; color: var(--dim);
+      cursor: pointer; font-size: .8rem; padding: 0 .2rem;
+      line-height: 1; flex-shrink: 0;
+    }
+    .morph-gal-dl:hover { color: var(--text); }
 
     /* ── Karaoke: Discover card ── */
     .kar-disc-toggle { cursor:pointer; user-select:none; }
@@ -873,6 +899,14 @@
       <div class="card-title">Output</div>
       <div id="morphOutputEmpty" class="morph-output-empty">Nothing yet — hit Generate.</div>
       <img id="morphOutput" class="morph-output" style="display:none" alt="Generated image">
+      <div id="morphDlRow" class="morph-dl-row" style="display:none">
+        <select id="morphFmtSel" class="morph-dl-sel">
+          <option value="png">PNG</option>
+          <option value="jpeg">JPEG</option>
+          <option value="webp">WEBP</option>
+        </select>
+        <button id="morphDlBtn" class="morph-dl-btn">&#8595; Download</button>
+      </div>
     </div>
 
     <div class="card">
@@ -1726,6 +1760,21 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
   const outputImg    = document.getElementById('morphOutput');
   const outputEmpty  = document.getElementById('morphOutputEmpty');
   const galleryEl    = document.getElementById('morphGallery');
+  const dlRow        = document.getElementById('morphDlRow');
+  const dlBtn        = document.getElementById('morphDlBtn');
+  const fmtSel       = document.getElementById('morphFmtSel');
+
+  let currentJobId = null;
+
+  function showDownload(jobId) {
+    currentJobId = jobId;
+    dlRow.style.display = '';
+  }
+
+  dlBtn.addEventListener('click', () => {
+    if (!currentJobId) return;
+    window.location.href = `/image/file/${currentJobId}?download=1&format=${fmtSel.value}`;
+  });
 
   const STATE_LABELS = {
     queued:   'Queued',
@@ -1771,6 +1820,7 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
         outputEmpty.style.display = 'none';
         outputImg.src = '/image/file/' + jobId + '?t=' + Date.now();
         outputImg.style.display = 'block';
+        showDownload(jobId);
         genBtn.disabled = false;
         refreshGallery();
       } else if (data.state === 'error') {
@@ -1838,6 +1888,7 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
             <div class="morph-gal-prompt">${prompt}</div>
             <div class="morph-gal-ts">${ts} &middot; seed ${g.seed ?? '?'}</div>
           </div>
+          <button class="morph-gal-dl" data-job="${g.job_id}" title="Download">&#8595;</button>
         </div>`;
       }).join('');
       galleryEl.querySelectorAll('.morph-gal-item').forEach(item => {
@@ -1845,7 +1896,14 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
           outputEmpty.style.display = 'none';
           outputImg.src = '/image/file/' + item.dataset.job + '?t=' + Date.now();
           outputImg.style.display = 'block';
+          showDownload(item.dataset.job);
           outputImg.scrollIntoView({behavior:'smooth', block:'nearest'});
+        });
+      });
+      galleryEl.querySelectorAll('.morph-gal-dl').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          window.location.href = `/image/file/${btn.dataset.job}?download=1&format=${fmtSel.value}`;
         });
       });
     } catch {
