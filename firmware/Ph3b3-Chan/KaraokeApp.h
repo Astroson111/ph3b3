@@ -17,9 +17,6 @@ static const int K_PAN_RANGE = 150;  // ±15° sway during karaoke
 static const int  K_CHUNK    = 4096;   // PCM samples per buffer half; 46 ms at stereo 44100 Hz
 static const int  K_CHAN     = 0;      // M5 Speaker virtual channel
 
-// ── Mic VU ──────────────────────────────────────────────────────────────────
-static const int  K_MIC_SAMPLES = 256;
-
 // ── LRC lyrics ──────────────────────────────────────────────────────────────
 struct LyricLine { uint32_t ms; String text; };
 
@@ -69,16 +66,14 @@ public:
         }
         if (_trackSel >= (int)_tracks.size()) _trackSel = 0;
 
-        // 30ms settle: BCK/WS lines are shared with speaker I2S (GPIO 34/33).
-        // TalkApp.exit() calls Speaker.end() immediately before we run; without
-        // this delay Mic.begin() can initialise against an unsettled clock.
-        delay(30);
-        M5.Mic.begin();
+        // Mic is deliberately NOT started here. Speaker (I2S_NUM_1) and Mic
+        // (I2S_NUM_0) share BCK/WS on GPIO 34/33; running both simultaneously
+        // causes audio cut-out. Karaoke is playback-only — face mouth animation
+        // uses Ph3b3Face's built-in sine fallback (state == SPEAKING path).
     }
 
     void exit() override {
         _stopPlayback();
-        M5.Mic.end();
         _sdMounted = false;  // reset so next init() re-mounts (handles card swap)
         _tracks.clear();
         face.begin();                           // restore full-screen face
@@ -120,7 +115,6 @@ public:
             _streamAudio();
             _tickNod();
             _tickLeds();
-            _tickMic();
             face.setState(Ph3b3Face::SPEAKING);
         } else {
             face.setState(Ph3b3Face::IDLE);
@@ -162,11 +156,6 @@ private:
     uint32_t _nodTickMs  = 0;
     int      _panDir     = 1;
     uint32_t _swayTickMs = 0;
-
-    // ── Mic VU ──────────────────────────────────────────────────────────────
-    int16_t  _micBuf[K_MIC_SAMPLES];
-    uint8_t  _vuLevel    = 0;
-
 
     // ────────────────────────────────────────────────────────────────────────
 
@@ -400,21 +389,4 @@ private:
     }
 
     // ── Subsystem F: mic VU → face speaking level ────────────────────────────
-    // !! SIMULTANEITY FLAG: Speaker=I2S_NUM_1, Mic=I2S_NUM_0, shared BCK/WS(34/33).
-    // If speaker audio cuts out when mic is active, disable Mic.begin() in init()
-    // and comment out this function call in update(). Needs runtime verification.
-    void _tickMic() {
-        if (M5.Mic.isRecording()) return;
-        M5.Mic.record(_micBuf, K_MIC_SAMPLES, 16000, false);
-
-        int64_t sum = 0;
-        for (int i = 0; i < K_MIC_SAMPLES; i++) sum += (int64_t)_micBuf[i] * _micBuf[i];
-        float rms   = sqrtf((float)(sum / K_MIC_SAMPLES));
-        float level = constrain(rms / 8000.0f, 0.0f, 1.0f);
-        face.setSpeakingLevel(level);
-
-        uint8_t bright = (uint8_t)(level * 80);
-        M5StackChan.showRgbColor(bright, 0, bright / 2);
-    }
-
 };
