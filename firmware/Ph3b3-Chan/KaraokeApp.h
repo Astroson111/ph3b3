@@ -14,7 +14,7 @@ static const int K_TILT_HOME = 450;  // 45° — neutral center
 static const int K_PAN_RANGE = 150;  // ±15° sway during karaoke
 
 // ── Audio streaming ─────────────────────────────────────────────────────────
-static const int  K_CHUNK    = 1024;   // PCM samples per buffer half
+static const int  K_CHUNK    = 4096;   // PCM samples per buffer half; 46 ms at stereo 44100 Hz
 static const int  K_CHAN     = 0;      // M5 Speaker virtual channel
 
 // ── Mic VU ──────────────────────────────────────────────────────────────────
@@ -54,7 +54,7 @@ public:
         // SPI.begin() is called explicitly because M5GFX owns the SPI peripheral
         // internally; the Arduino SPI object may not have been initialised by M5.begin().
         SPI.begin(36, 35, 37, -1);  // -1 = no default CS; SD.begin() drives CS=4
-        _sdMounted = SD.begin(4, SPI, 4000000);
+        _sdMounted = SD.begin(4, SPI, 20000000);
         Serial.printf("[karaoke] SD.begin(4) → %s (type=%d)\n",
                       _sdMounted ? "OK" : "FAIL", (int)SD.cardType());
         if (!_sdMounted) {
@@ -273,7 +273,7 @@ private:
 
     void _startPlayback() {
         if (!_sdMounted) {
-            _sdMounted = SD.begin(4);
+            _sdMounted = SD.begin(4, SPI, 20000000);
             if (!_sdMounted) { Serial.println("[karaoke] no SD card"); return; }
         }
 
