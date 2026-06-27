@@ -114,6 +114,22 @@ It installs as a real standalone PWA (manifest + service worker), with Ph3b3's f
 
 ---
 
+## Morpheus
+
+Ph3b3 generates images locally through Morpheus, a txt2img module running on the same single GPU as everything else. Because one card can't hold two minds at once, Morpheus parks the chat model, takes the card, renders, frees it, and hands it back — no second machine, no cloud, no prompt ever leaving the box.
+
+Every generation passes through a safety floor that runs locally before anything renders and cannot be disabled by any setting. It refuses content involving minors, non-consensual material, and sexualized or compromising depictions of real, identifiable people — categorically, on every request. Local generation doesn't mean no guardrails. The line is enforced on your hardware, by default, with no off switch.
+
+---
+
+## Karaoke
+
+Ph3b3 has a karaoke corner. Pick a track, the lyrics roll in time with the music, and Phoebe follows along — a moon cue tracks the active line so you always know where you are in the song. It runs in the same local panel as the rest of the system: your music, your machine, no streaming account required.
+
+Built for the room it lives in — when it's not screening calls or generating images, Ph3b3 is good company.
+
+---
+
 ## Roadmap
 
 Where she's going next:

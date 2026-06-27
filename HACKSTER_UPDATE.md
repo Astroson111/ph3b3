@@ -111,3 +111,19 @@ int pickBestNetwork(const String ssids[], int netCount) {
 - Wake word (always-listening, no button required) — TFLite Micro on the S3's second core
 - External speaker element — the ES8311 codec is clean; the onboard speaker is the bottleneck
 - Word wrap on the reply overlay — long responses currently clip at the screen edge
+
+---
+
+## Morpheus — local image generation
+
+The cloud is just someone else's computer. Morpheus isn't that. Every image is made on one graphics card in one room and never touches a network — no watermark stamped in by a service you don't control, no prompt logged to someone's server, no terms that change next quarter.
+
+Running it locally was the point. So was drawing a hard line and welding it shut. Morpheus will not generate sexual content involving minors, non-consensual imagery, or compromising depictions of real people — and that floor isn't a preference you can toggle, it's built into the thing itself. Privacy and responsibility aren't opposites. You can own your compute and still refuse to make the worst of it.
+
+---
+
+## Karaoke
+
+Not everything she does has to be serious. The karaoke corner started as proof that a privacy-first local assistant doesn't have to feel like a server with a face — it can also just be fun. Lyrics sync to the track, a moon follows the line you're on, and the whole thing runs offline on the same hardware doing the real work.
+
+A robot you actually want in the room is a different kind of useful than a robot that just answers questions. This is the part that makes her hers.
