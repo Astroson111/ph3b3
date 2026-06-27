@@ -408,6 +408,146 @@
       border-radius:6px; border:1px solid var(--border); background:none; color:var(--dim); cursor:pointer; }
     @media (prefers-reduced-motion:reduce) { .kar-drop,.kar-track,.kar-disc-result { transition:none; } }
 
+    /* ── Morpheus ── */
+    .morph-eng-sel {
+      background: rgba(43,15,95,.6);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: .38rem .65rem;
+      color: var(--text);
+      font-size: .82rem;
+      font-family: inherit;
+      outline: none;
+      cursor: pointer;
+    }
+    .morph-eng-sel:focus { border-color: var(--purple); }
+    .morph-eng-sel option:disabled { color: var(--dim); font-style: italic; }
+    .morph-textarea {
+      display: block; width: 100%;
+      background: rgba(43,15,95,.6);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: .6rem .8rem;
+      color: var(--text);
+      font-size: .88rem;
+      font-family: inherit;
+      outline: none;
+      resize: none;
+      overflow-y: hidden;
+      max-height: 160px;
+      line-height: 1.4;
+      margin: .55rem 0 0;
+    }
+    .morph-textarea:focus { border-color: var(--purple); }
+    .morph-textarea::placeholder { color: var(--dim); }
+    .morph-adv {
+      margin: .5rem 0 0;
+      border-radius: 8px;
+      border: 1px solid rgba(124,58,237,.18);
+      overflow: hidden;
+    }
+    .morph-adv-sum {
+      padding: .42rem .7rem;
+      font-size: .72rem; font-weight: 700;
+      letter-spacing: .06em; text-transform: uppercase;
+      color: var(--dim); cursor: pointer;
+      list-style: none; user-select: none;
+      background: rgba(15,6,36,.5);
+      display: flex; align-items: center; gap: .35rem;
+    }
+    .morph-adv-sum::-webkit-details-marker { display: none; }
+    .morph-adv-chev {
+      font-size: .62rem; transition: transform .18s; display: inline-block;
+    }
+    details[open] .morph-adv-chev { transform: rotate(90deg); }
+    @media (prefers-reduced-motion:reduce) { .morph-adv-chev { transition: none; } }
+    .morph-adv-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: .5rem; padding: .65rem .7rem;
+      background: rgba(10,3,26,.45);
+    }
+    .morph-adv-lbl {
+      display: flex; flex-direction: column; gap: .22rem;
+      font-size: .7rem; color: var(--dim); letter-spacing: .03em;
+    }
+    .morph-adv-in {
+      background: rgba(43,15,95,.6);
+      border: 1px solid var(--border);
+      border-radius: 6px; padding: .38rem .55rem;
+      color: var(--text); font-size: .82rem;
+      font-family: 'SF Mono','Cascadia Code','Consolas',monospace;
+      outline: none; width: 100%;
+    }
+    .morph-adv-in:focus { border-color: var(--purple); }
+    .morph-gen-btn {
+      display: flex; align-items: center; justify-content: center; gap: .4rem;
+      width: 100%;
+      background: linear-gradient(135deg, var(--purple), #4c1d95);
+      border: none; border-radius: 8px;
+      color: #fff; padding: .65rem;
+      font-size: .9rem; font-weight: 700; letter-spacing: .07em;
+      font-family: inherit; cursor: pointer;
+      transition: opacity .15s; margin-top: .55rem;
+    }
+    .morph-gen-btn:hover:not(:disabled) { opacity: .88; }
+    .morph-gen-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .morph-state-row {
+      display: flex; align-items: center; gap: .65rem;
+      padding: .25rem .1rem; min-height: 2rem;
+    }
+    .morph-crescent { flex-shrink: 0; color: var(--dim); }
+    .morph-crescent.active { color: var(--magenta); }
+    @keyframes morphSpin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+    .morph-crescent.spinning {
+      color: var(--magenta);
+      animation: morphSpin 3s linear infinite;
+    }
+    @media (prefers-reduced-motion:reduce) { .morph-crescent.spinning { animation: none; } }
+    .morph-state-pill { font-size: .76rem; }
+    .state-queued   { background:rgba(157,126,202,.15); color:var(--dim);     border:1px solid rgba(157,126,202,.3); }
+    .state-evicting { background:rgba(251,191,36,.12);  color:var(--warn);    border:1px solid rgba(251,191,36,.3);  }
+    .state-loading  { background:rgba(0,229,255,.12);   color:var(--cyan);    border:1px solid rgba(0,229,255,.3);   }
+    .state-sampling { background:rgba(233,30,140,.15);  color:var(--magenta); border:1px solid rgba(233,30,140,.3);  }
+    .state-saving   { background:rgba(124,58,237,.15);  color:#c084fc;        border:1px solid rgba(124,58,237,.3);  }
+    .state-done     { background:rgba(74,222,128,.15);  color:var(--ok);      border:1px solid rgba(74,222,128,.3);  }
+    .state-error    { background:rgba(248,113,113,.15); color:var(--err);     border:1px solid rgba(248,113,113,.3); }
+    .morph-output {
+      width: 100%; border-radius: 8px;
+      border: 1px solid var(--border); display: block;
+    }
+    .morph-output-empty {
+      text-align: center; padding: 2rem 1rem;
+      color: var(--dim); font-size: .84rem; font-style: italic;
+    }
+    .morph-gallery { display: flex; flex-direction: column; gap: .42rem; }
+    .morph-gal-empty {
+      text-align: center; padding: 1.25rem;
+      color: var(--dim); font-size: .82rem; font-style: italic;
+    }
+    .morph-gal-item {
+      display: flex; align-items: center; gap: .6rem;
+      padding: .38rem .5rem; border-radius: 8px;
+      background: rgba(15,6,36,.55);
+      border: 1px solid rgba(124,58,237,.2);
+      cursor: pointer; transition: border-color .15s;
+    }
+    .morph-gal-item:hover { border-color: var(--purple); }
+    .morph-gal-thumb {
+      width: 48px; height: 48px;
+      object-fit: cover; border-radius: 5px;
+      flex-shrink: 0; background: rgba(43,15,95,.6);
+    }
+    .morph-gal-meta { flex: 1; min-width: 0; }
+    .morph-gal-prompt {
+      font-size: .79rem; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .morph-gal-ts {
+      font-size: .67rem; color: var(--dim);
+      font-family: 'SF Mono','Cascadia Code','Consolas',monospace;
+      margin-top: .12rem;
+    }
+
     /* ── Karaoke: Discover card ── */
     .kar-disc-toggle { cursor:pointer; user-select:none; }
     .kar-disc-chev { margin-left:auto; font-size:.78rem; color:var(--dim); font-style:normal;
@@ -672,6 +812,80 @@
 
   </section>
 
+  <!-- MORPHEUS -->
+  <section id="paneMorpheus" class="pane">
+
+    <div class="card">
+      <div class="card-title">Generate</div>
+      <div class="sr">
+        <span class="sr-l">Engine</span>
+        <select id="morphEngSel" class="morph-eng-sel">
+          <option value="sdxl">SDXL — sd_xl_base_1.0</option>
+          <option value="flux" disabled>FLUX — not installed</option>
+          <option value="qwen" disabled>Qwen — not installed</option>
+        </select>
+      </div>
+      <textarea id="morphPrompt" class="morph-textarea" rows="1"
+        placeholder="Describe the image…" autocomplete="off" autocorrect="off" autocapitalize="none"
+        spellcheck="false"></textarea>
+      <details class="morph-adv">
+        <summary class="morph-adv-sum">
+          <span class="morph-adv-chev">&#9658;</span> Advanced
+        </summary>
+        <div class="morph-adv-grid">
+          <label class="morph-adv-lbl">Steps
+            <input class="morph-adv-in" id="morphSteps" type="number" value="20" min="1" max="100">
+          </label>
+          <label class="morph-adv-lbl">Width
+            <input class="morph-adv-in" id="morphWidth" type="number" value="1024" min="512" max="2048" step="64">
+          </label>
+          <label class="morph-adv-lbl">Height
+            <input class="morph-adv-in" id="morphHeight" type="number" value="1024" min="512" max="2048" step="64">
+          </label>
+          <label class="morph-adv-lbl">Seed (−1 = random)
+            <input class="morph-adv-in" id="morphSeed" type="number" value="-1" min="-1">
+          </label>
+        </div>
+      </details>
+      <button class="morph-gen-btn" id="morphGenBtn">
+        ✦ Generate
+      </button>
+    </div>
+
+    <div class="card" id="morphStateCard" style="display:none">
+      <div class="card-title">Generation</div>
+      <div class="morph-state-row">
+        <svg id="morphCrescent" class="morph-crescent" width="22" height="22"
+             viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <mask id="morphmask">
+              <circle cx="12" cy="12" r="10" fill="white"/>
+              <circle cx="17.5" cy="9"  r="8"  fill="black"/>
+            </mask>
+          </defs>
+          <circle cx="12" cy="12" r="10" fill="currentColor" mask="url(#morphmask)"/>
+        </svg>
+        <span id="morphStatePill" class="badge morph-state-pill state-queued">Queued</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Output</div>
+      <div id="morphOutputEmpty" class="morph-output-empty">Nothing yet — hit Generate.</div>
+      <img id="morphOutput" class="morph-output" style="display:none" alt="Generated image">
+    </div>
+
+    <div class="card">
+      <div class="card-title">Gallery
+        <button class="btn-sm" id="morphGalRefresh">Refresh</button>
+      </div>
+      <div id="morphGallery" class="morph-gallery">
+        <div class="morph-gal-empty">Loading…</div>
+      </div>
+    </div>
+
+  </section>
+
   <!-- DEVICES -->
   <section id="paneDevices" class="pane">
     <div class="card">
@@ -710,6 +924,10 @@
   <button class="tab" data-pane="Devices">
     <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
     Devices
+  </button>
+  <button class="tab" data-pane="Morpheus">
+    <svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    Morpheus
   </button>
 </nav>
 
@@ -769,7 +987,8 @@ async function refreshStatus() {
       row('Soul', badge(rd.soul, rd.soul ? 'loaded' : 'missing')) +
       row('TTS',  badge(rd.tts && rd.tts.startsWith('Piper'), rd.tts || '—')) +
       row('STT',  badge(rd.whisper && rd.whisper.toLowerCase().includes('ready'), rd.whisper || '—')) +
-      row('Boot', '#' + (rd.boot || 0));
+      row('Boot', '#' + (rd.boot || 0)) +
+      row('Image engine', badge(true, 'SDXL'));
     document.getElementById('statusTs').textContent = 'Updated ' + now();
   } catch {
     hPulse.className = 'hdr-pulse dead';
@@ -814,11 +1033,15 @@ async function playAudio(b64) {
   }
 }
 
+let chatBusy = false;
+
 async function send() {
   const msg = cin.value.trim();
-  if (!msg) return;
+  if (!msg || chatBusy) return;
+  chatBusy = true;
   cin.value = '';
   sendBtn.disabled = true;
+  cin.disabled = true;
   addMsg('user', msg);
   const hint = document.createElement('div');
   hint.className = 'msg-hint';
@@ -839,7 +1062,9 @@ async function send() {
     hint.remove();
     addMsg('asst', 'Error: ' + e.message);
   } finally {
+    chatBusy = false;
     sendBtn.disabled = false;
+    cin.disabled = false;
     cin.focus();
   }
 }
@@ -1489,6 +1714,152 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
   ];
   const el = document.getElementById('hSplash');
   if (el) el.textContent = SPLASH[Math.floor(Math.random() * SPLASH.length)];
+})();
+
+// ── Morpheus image generation ─────────────────────────────────────────────────
+(function () {
+  const promptEl     = document.getElementById('morphPrompt');
+  const genBtn       = document.getElementById('morphGenBtn');
+  const statePillEl  = document.getElementById('morphStatePill');
+  const stateCardEl  = document.getElementById('morphStateCard');
+  const crescentEl   = document.getElementById('morphCrescent');
+  const outputImg    = document.getElementById('morphOutput');
+  const outputEmpty  = document.getElementById('morphOutputEmpty');
+  const galleryEl    = document.getElementById('morphGallery');
+
+  const STATE_LABELS = {
+    queued:   'Queued',
+    evicting: 'Evicting Hermes…',
+    loading:  'Loading SDXL…',
+    sampling: 'Sampling…',
+    saving:   'Saving…',
+    done:     'Done',
+    error:    'Error',
+  };
+  const BUSY_STATES = new Set(['queued','evicting','loading','sampling','saving']);
+
+  // Grow-up textarea (same verified behavior as index.html)
+  promptEl.addEventListener('input', function () {
+    this.style.height = 'auto';
+    this.style.height = this.scrollHeight + 'px';
+    this.style.overflowY = this.scrollHeight > 160 ? 'auto' : 'hidden';
+  });
+  promptEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); generate(); }
+  });
+
+  let pollId = null;
+
+  function setStatePill(state) {
+    stateCardEl.style.display = '';
+    statePillEl.textContent = STATE_LABELS[state] || state;
+    statePillEl.className = 'badge morph-state-pill state-' + state;
+    const busy = BUSY_STATES.has(state);
+    crescentEl.className = 'morph-crescent' + (busy ? ' spinning' : state === 'done' ? ' active' : '');
+  }
+
+  function stopPoll() {
+    if (pollId) { clearInterval(pollId); pollId = null; }
+  }
+
+  async function pollStatus(jobId) {
+    try {
+      const data = await fetch('/image/status/' + jobId).then(r => r.json());
+      setStatePill(data.state);
+      if (data.state === 'done') {
+        stopPoll();
+        outputEmpty.style.display = 'none';
+        outputImg.src = '/image/file/' + jobId + '?t=' + Date.now();
+        outputImg.style.display = 'block';
+        genBtn.disabled = false;
+        refreshGallery();
+      } else if (data.state === 'error') {
+        stopPoll();
+        genBtn.disabled = false;
+      }
+    } catch (e) {
+      console.warn('[Morpheus] poll error:', e);
+    }
+  }
+
+  async function generate() {
+    const positive = promptEl.value.trim();
+    if (!positive) { promptEl.focus(); return; }
+
+    const steps  = parseInt(document.getElementById('morphSteps').value)  || 20;
+    const width  = parseInt(document.getElementById('morphWidth').value)   || 1024;
+    const height = parseInt(document.getElementById('morphHeight').value)  || 1024;
+    const seedRaw = document.getElementById('morphSeed').value.trim();
+    const seed = seedRaw !== '' ? parseInt(seedRaw) : -1;
+
+    genBtn.disabled = true;
+    setStatePill('queued');
+
+    try {
+      const res  = await fetch('/image/generate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({positive, steps, width, height, seed}),
+      });
+      if (!res.ok) {
+        setStatePill('error');
+        genBtn.disabled = false;
+        return;
+      }
+      const data = await res.json();
+      const jobId = data.job_id;
+      // Scroll state card into view
+      stateCardEl.scrollIntoView({behavior:'smooth', block:'nearest'});
+      stopPoll();
+      pollId = setInterval(() => pollStatus(jobId), 800);
+    } catch (e) {
+      console.warn('[Morpheus] generate error:', e);
+      setStatePill('error');
+      genBtn.disabled = false;
+    }
+  }
+
+  genBtn.addEventListener('click', generate);
+
+  async function refreshGallery() {
+    try {
+      const data = await fetch('/image/gallery?n=12').then(r => r.json());
+      const imgs = data.images || [];
+      if (!imgs.length) {
+        galleryEl.innerHTML = '<div class="morph-gal-empty">No generations yet.</div>';
+        return;
+      }
+      galleryEl.innerHTML = imgs.map(g => {
+        const ts = new Date(g.created_at).toLocaleTimeString(undefined, {hour:'2-digit',minute:'2-digit'});
+        const prompt = g.prompt || '—';
+        return `<div class="morph-gal-item" data-job="${g.job_id}" title="${prompt}">
+          <img src="/image/file/${g.job_id}" class="morph-gal-thumb" alt="${prompt}" loading="lazy">
+          <div class="morph-gal-meta">
+            <div class="morph-gal-prompt">${prompt}</div>
+            <div class="morph-gal-ts">${ts} &middot; seed ${g.seed ?? '?'}</div>
+          </div>
+        </div>`;
+      }).join('');
+      galleryEl.querySelectorAll('.morph-gal-item').forEach(item => {
+        item.addEventListener('click', () => {
+          outputEmpty.style.display = 'none';
+          outputImg.src = '/image/file/' + item.dataset.job + '?t=' + Date.now();
+          outputImg.style.display = 'block';
+          outputImg.scrollIntoView({behavior:'smooth', block:'nearest'});
+        });
+      });
+    } catch {
+      galleryEl.innerHTML = '<div class="morph-gal-empty">Cannot reach server.</div>';
+    }
+  }
+
+  document.getElementById('morphGalRefresh').addEventListener('click', refreshGallery);
+
+  // Load gallery when tab becomes active, and on init
+  document.querySelector('.tab[data-pane="Morpheus"]')
+    ?.addEventListener('click', refreshGallery);
+
+  refreshGallery();
 })();
 
 // ── Android nav-bar safe-area fallback ────────────────────────────────────────

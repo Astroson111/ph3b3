@@ -17,7 +17,7 @@ from pathlib import Path
 import httpx
 import getpass
 import shutil
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -129,6 +129,7 @@ from camera_module import CameraModule
 from vision_stream_module import VisionStreamModule
 from screenshot_module import ScreenshotModule
 from recipes import RecipeStore
+import morpheus
 
 @asynccontextmanager
 async def lifespan(app):
@@ -1715,6 +1716,47 @@ async def index():
         content=(ROOT / "static" / "index.html").read_text(encoding="utf-8"),
         media_type="text/html",
     )
+
+# ── Morpheus image generation ─────────────────────────────────────────
+@app.post("/image/generate")
+async def image_generate(body: dict, background_tasks: BackgroundTasks):
+    positive = body.get("positive", "").strip()
+    if not positive:
+        raise HTTPException(400, "positive prompt is required")
+    params = {
+        "positive":  positive,
+        "negative":  body.get("negative", ""),
+        "width":     int(body.get("width",  1024)),
+        "height":    int(body.get("height", 1024)),
+        "steps":     int(body.get("steps",  morpheus.SDXL_STEPS)),
+        "seed":      int(body.get("seed",   -1)),
+        "ckpt_name": body.get("ckpt_name",  morpheus.SDXL_CKPT),
+    }
+    job_id = morpheus.create_job()
+    background_tasks.add_task(morpheus.run_generation, job_id, params)
+    return {"job_id": job_id}
+
+
+@app.get("/image/status/{job_id}")
+async def image_status(job_id: str):
+    if job_id not in morpheus.jobs:
+        raise HTTPException(404, "Unknown job")
+    return morpheus.jobs[job_id]
+
+
+@app.get("/image/file/{job_id}")
+async def image_file(job_id: str):
+    path = morpheus.IMAGE_DIR / f"{job_id}.png"
+    if not path.exists():
+        raise HTTPException(404, "Image not found")
+    return FileResponse(str(path), media_type="image/png")
+
+
+@app.get("/image/gallery")
+async def image_gallery(n: int = 20):
+    rows = await asyncio.to_thread(morpheus._db_gallery, n)
+    return {"images": rows}
+
 
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 
