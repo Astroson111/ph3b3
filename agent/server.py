@@ -1717,12 +1717,41 @@ async def index():
         media_type="text/html",
     )
 
+_MORPHEUS_LOCAL_ADDRS = frozenset({"127.0.0.1", "::1", "localhost"})
+
 # ── Morpheus image generation ─────────────────────────────────────────
 @app.post("/image/generate")
-async def image_generate(body: dict, background_tasks: BackgroundTasks):
+async def image_generate(request: Request, body: dict, background_tasks: BackgroundTasks):
     positive = body.get("positive", "").strip()
     if not positive:
         raise HTTPException(400, "positive prompt is required")
+
+    # ── FLOOR — hardcoded, always first, no off switch, profile-independent ──
+    floor_cat = morpheus.floor_check(positive)
+    if floor_cat:
+        log.warning("[safety] floor-blocked — category: %s", floor_cat)
+        raise HTTPException(403, detail="Content policy: prompt not permitted")
+
+    # ── Localhost interlock (Part 3) ─────────────────────────────────────────
+    # If permissive is active but the request is not from localhost, force strict
+    # for this request only. Forgetting to close external access can never expose
+    # permissive latitude — it auto-collapses the moment the source is non-local.
+    forced_denylist = None
+    if morpheus.ACTIVE_PROFILE == "permissive":
+        client_host = (request.client.host if request.client else None) or ""
+        if client_host not in _MORPHEUS_LOCAL_ADDRS:
+            forced_denylist = morpheus.STRICT_DENYLIST
+            log.warning(
+                "[safety] permissive active but non-local request from %r — forcing strict",
+                client_host,
+            )
+
+    # ── Profile check ─────────────────────────────────────────────────────────
+    if not morpheus.profile_check(positive, denylist=forced_denylist):
+        label = morpheus.ACTIVE_PROFILE + (" [forced strict by interlock]" if forced_denylist else "")
+        log.warning("[safety] profile-blocked — profile: %s", label)
+        raise HTTPException(403, detail="Content policy: prompt not permitted")
+
     params = {
         "positive":  positive,
         "negative":  body.get("negative", ""),
@@ -1745,11 +1774,29 @@ async def image_status(job_id: str):
 
 
 @app.get("/image/file/{job_id}")
-async def image_file(job_id: str):
+async def image_file(job_id: str, download: int = 0, format: str = "png"):
     path = morpheus.IMAGE_DIR / f"{job_id}.png"
     if not path.exists():
         raise HTTPException(404, "Image not found")
-    return FileResponse(str(path), media_type="image/png")
+    fmt = format.lower()
+    if fmt not in ("png", "jpeg", "webp"):
+        raise HTTPException(400, "format must be png, jpeg, or webp")
+    # Fast path: PNG inline display (no conversion, no DB lookup)
+    if fmt == "png" and not download:
+        return FileResponse(str(path), media_type="image/png")
+    # Build provenance filename from DB
+    meta = await asyncio.to_thread(morpheus._db_meta, job_id)
+    if meta:
+        filename = f"ph3b3_{morpheus._slug(meta['prompt'])}_{meta['seed']}.{fmt}"
+    else:
+        filename = f"ph3b3_{job_id}.{fmt}"
+    if fmt == "png":
+        data = await asyncio.to_thread(path.read_bytes)
+        ct = "image/png"
+    else:
+        data, ct = await asyncio.to_thread(morpheus.convert_image, path, fmt)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'} if download else {}
+    return Response(content=data, media_type=ct, headers=headers)
 
 
 @app.get("/image/gallery")

@@ -11,3 +11,4 @@ stack-chan/
 *.wav
 voices/*.png
 soul/soul.md
+modules/content_profiles/*.local.*
