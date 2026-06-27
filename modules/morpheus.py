@@ -109,9 +109,18 @@ _FLOOR_NONCONSENSUAL: frozenset[str] = frozenset([
     "without consent", "forced sex", "forced intercourse",
 ])
 
-# Title-Case bigram: proxy for named individuals (First Last).
-# Combined with sexual or criminal/defamatory signal → blocked.
-_PERSON_RE = re.compile(r"\b[A-Z][a-z]{1,20}\s+[A-Z][a-z]{1,20}\b")
+# Union of all floor term sets — used by _person_signal to blank them out
+# before running the bigram match so multi-word floor tokens can't self-match
+# as name-shaped references (e.g. "adult content", "drug dealer").
+_ALL_FLOOR_TERMS: frozenset[str] = (
+    _FLOOR_MINOR | _FLOOR_SEXUAL | _FLOOR_CRIMINAL | _FLOOR_NONCONSENSUAL
+)
+
+# Name-shaped bigram: proxy for named individuals (First Last).
+# IGNORECASE: elon musk / Elon Musk / ELON MUSK all match the structure.
+# Signal fires ONLY when paired with a compromising-context term (AND-gate in
+# floor_check). Applied via _person_signal() which strips floor terms first.
+_PERSON_RE = re.compile(r"\b[A-Z][a-z]{1,20}\s+[A-Z][a-z]{1,20}\b", re.IGNORECASE)
 
 
 def _normalize(text: str) -> str:
@@ -121,6 +130,16 @@ def _normalize(text: str) -> str:
     s = re.sub(r"(?<=[a-z])[_.\-](?=[a-z])", "", s)
     s = re.sub(r"\s+", " ", s)
     return s
+
+
+def _person_signal(text: str) -> bool:
+    """Return True if text contains a name-shaped bigram that is not itself a
+    floor term. Floor terms are blanked out first so multi-word tokens like
+    'adult content' or 'drug dealer' don't self-match as person references."""
+    s = text.lower()
+    for t in _ALL_FLOOR_TERMS:
+        s = s.replace(t, " ")
+    return bool(_PERSON_RE.search(s))
 
 
 def floor_check(prompt: str) -> str | None:
@@ -144,7 +163,7 @@ def floor_check(prompt: str) -> str | None:
     # Compromising = sexual (cats 2/3) OR criminal/defamatory (cat 4).
     has_criminal    = any(t in norm for t in _FLOOR_CRIMINAL)
     has_compromising = has_sex or has_criminal
-    if has_compromising and _PERSON_RE.search(prompt):
+    if has_compromising and _person_signal(prompt):
         return "real-person-compromising"
 
     return None
