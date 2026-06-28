@@ -45,34 +45,45 @@ log = logging.getLogger("ph3b3.tts")
 VOICE_DIR   = Path.home() / "ph3b3_data" / "voices"
 VOICE_MODEL = os.getenv("PH3B3_VOICE_MODEL", str(VOICE_DIR / "en_GB-alba-medium.onnx"))
 
-AUDIO_DEVICE = os.getenv("PH3B3_AUDIO_DEVICE", "default")
+# Stable substring of the USB speaker's PipeWire node.name.
+# Run `pactl list short sinks` with the speaker connected to find the right value.
+# Empty string disables speaker routing (plays to PipeWire default).
+SPEAKER_SINK_MATCH = os.getenv("PH3B3_SPEAKER_SINK", "")
 
 _VENV_BIN   = Path(sys.executable).parent
 _PIPER_VENV = str(_VENV_BIN / "piper")
 PIPER_BIN   = os.getenv("PIPER_BIN") or (_PIPER_VENV if Path(_PIPER_VENV).exists() else "piper")
 
-# Stable node.name for the intended TTS output — used only for sink-mismatch warnings.
-_EXPECTED_SINK = "alsa_output.pci-0000_01_00.1.hdmi-stereo"
+_XDG_ENV = {"XDG_RUNTIME_DIR": os.getenv("XDG_RUNTIME_DIR", "/run/user/1000")}
 
-log.info(f"TTS audio device: {AUDIO_DEVICE!r}  piper: {PIPER_BIN!r}")
+_sink_disp = repr(SPEAKER_SINK_MATCH) if SPEAKER_SINK_MATCH else "(default)"
+log.info(f"TTS piper: {PIPER_BIN!r}  speaker-match: {_sink_disp}")
 
 
-def _warn_if_sink_wrong() -> None:
-    """Log a warning if WirePlumber's default sink is not the expected HDMI output."""
+def _resolve_sink() -> str | None:
+    """Return the full PipeWire sink name if the configured speaker is present, else None.
+
+    Resolved per-utterance so plug/unplug works live without a restart.
+    Returns None (→ PipeWire default) if SPEAKER_SINK_MATCH is empty, pactl fails,
+    or no matching sink is found.
+    """
+    if not SPEAKER_SINK_MATCH:
+        return None
     try:
-        result = subprocess.run(
-            ["pactl", "get-default-sink"],
-            capture_output=True, text=True, timeout=2,
-            env={**os.environ, "XDG_RUNTIME_DIR": os.getenv("XDG_RUNTIME_DIR", "/run/user/1000")},
+        r = subprocess.run(
+            ["pactl", "list", "short", "sinks"],
+            capture_output=True, text=True, timeout=3,
+            env={**os.environ, **_XDG_ENV},
         )
-        current = result.stdout.strip()
-        if current and current != _EXPECTED_SINK:
-            log.warning(
-                f"TTS sink mismatch — expected {_EXPECTED_SINK!r}, "
-                f"got {current!r}. Audio will go to the wrong output."
-            )
-    except Exception:
-        pass
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and SPEAKER_SINK_MATCH in parts[1]:
+                return parts[1]
+        # Match configured but not found → speaker unplugged
+        return None
+    except Exception as exc:
+        log.warning(f"[TTS] sink enumeration failed ({exc}); falling back to default")
+        return None
 
 
 class TTSModule:
@@ -101,11 +112,27 @@ class TTSModule:
         return f"Speaking: {text[:60]}"
 
     def _speak_now(self, text):
-        _warn_if_sink_wrong()
+        # Resolve per-utterance — handles plug/unplug live, no restart needed.
+        sink = _resolve_sink()
+        if sink:
+            log.info(f"[TTS] routing → {sink}")
+            device_arg = f" --device={sink}"
+        else:
+            log.info("[TTS] routing → default")
+            device_arg = ""
+
         with self._lock:
             try:
-                cmd = f'echo {subprocess.list2cmdline([text])} | {PIPER_BIN} --model {VOICE_MODEL} --output-raw | aplay -r 22050 -f S16_LE -c 1 -t raw -D {AUDIO_DEVICE}'
-                subprocess.run(cmd, shell=True, check=True, timeout=30)
+                pacat_cmd = f"pacat --playback --raw --format=s16le --rate=22050 --channels=1{device_arg}"
+                cmd = (
+                    f"echo {subprocess.list2cmdline([text])} | "
+                    f"{PIPER_BIN} --model {VOICE_MODEL} --output-raw | "
+                    f"{pacat_cmd}"
+                )
+                subprocess.run(
+                    cmd, shell=True, check=True, timeout=30,
+                    env={**os.environ, **_XDG_ENV},
+                )
             except subprocess.TimeoutExpired:
                 log.warning("TTS timed out after 30 s — audio device may not be ready")
             except Exception as e:
