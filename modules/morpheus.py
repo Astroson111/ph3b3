@@ -404,6 +404,59 @@ async def comfy_free(http: httpx.AsyncClient) -> None:
         log.warning("comfy_free failed (non-fatal): %s", exc)
 
 
+# ── On-demand ComfyUI startup ─────────────────────────────────────────
+_COMFY_POLL_INTERVAL = 3.0   # seconds between readiness probes
+_COMFY_START_TIMEOUT = 120   # max seconds to wait for ComfyUI to serve
+
+
+async def ensure_comfy_up(http: httpx.AsyncClient) -> None:
+    """Start ComfyUI on demand and wait until it is actually serving.
+
+    Fast path: /system_stats answers 200 → already up, return immediately.
+    Slow path: `systemctl start comfyui` (polkit rule grants this without sudo),
+    then poll /system_stats until ComfyUI is HTTP-ready — not just process-alive.
+    Cold start (PyTorch + CUDA init + model index) can take 30-90 s.
+
+    Must be called inside gpu_lock so concurrent jobs cannot race on startup.
+    """
+    # Fast path — skip startup if ComfyUI is already serving.
+    try:
+        r = await http.get(f"{COMFY_HOST}/system_stats", timeout=4.0)
+        if r.status_code == 200:
+            return
+    except Exception:
+        pass  # connection refused / timeout — fall through to start
+
+    log.info("ComfyUI not responding — starting via systemctl")
+    proc = await asyncio.create_subprocess_exec(
+        "systemctl", "start", "comfyui",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"systemctl start comfyui failed (rc={proc.returncode}): "
+            f"{stderr.decode().strip()}"
+        )
+
+    # Poll until /system_stats answers — process-exists is not enough.
+    attempts = int(_COMFY_START_TIMEOUT / _COMFY_POLL_INTERVAL)
+    for _ in range(attempts):
+        await asyncio.sleep(_COMFY_POLL_INTERVAL)
+        try:
+            r = await http.get(f"{COMFY_HOST}/system_stats", timeout=4.0)
+            if r.status_code == 200:
+                log.info("ComfyUI ready")
+                return
+        except Exception:
+            pass  # still initialising — keep polling
+    raise RuntimeError(
+        f"ComfyUI did not become ready within {_COMFY_START_TIMEOUT}s "
+        "after systemctl start"
+    )
+
+
 # ── Job lifecycle helpers ─────────────────────────────────────────────
 def create_job() -> str:
     """Allocate a job_id and insert the initial queued state."""
@@ -420,6 +473,9 @@ async def run_generation(job_id: str, params: dict) -> None:
             try:
                 jobs[job_id]["state"] = "evicting"
                 await evict_hermes(http)
+
+                jobs[job_id]["state"] = "starting"
+                await ensure_comfy_up(http)
 
                 jobs[job_id]["state"] = "loading"
                 wf = build_workflow(params)   # resolves seed in-place
