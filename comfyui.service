@@ -1,0 +1,19 @@
+[Unit]
+Description=ComfyUI Image Generation Server
+After=network.target
+
+[Service]
+Type=simple
+User=astroson
+WorkingDirectory=/home/astroson/Desktop/comfyui
+ExecStart=/home/astroson/Desktop/comfyui/.venv/bin/python main.py --listen 127.0.0.1 --port 8188
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=comfyui
+
+[Install]
+WantedBy=multi-user.target
