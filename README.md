@@ -130,6 +130,25 @@ Built for the room it lives in — when it's not screening calls or generating i
 
 ---
 
+## Ph3b3-Chan
+
+Stack-chan runs **Ph3b3-Chan**, a custom firmware built on the M5Stack CoreS3.
+It is a fully autonomous client of Ph3b3 — connecting over WiFi, speaking
+responses through the CoreS3 speaker, and rendering Ph3b3's animated face on
+the 320×240 display. Like Iris, it never touches the cloud: every request
+flows to Ph3b3's local API over HTTPS.
+
+The onboard app framework supports hot-swappable apps (Talk, Karaoke,
+Ghost, Network) navigated from a crescent swipe menu. When in Talk mode
+the face expresses live state — LISTENING, THINKING, SPEAKING — driven by
+the same M5GFX face engine as Iris.
+
+Firmware lives in `firmware/Ph3b3-Chan/`. Flash with Arduino IDE targeting
+`m5stack:esp32:m5stack_cores3`; copy `secrets.example.h` to `secrets.h`
+and fill in your WiFi and server credentials.
+
+---
+
 ## Roadmap
 
 Where she's going next:
