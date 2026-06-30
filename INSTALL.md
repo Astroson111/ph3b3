@@ -1,16 +1,73 @@
-# Ph3b3 — Installation Guide
+# Ph3b3 — Installation Guide (DRAFT)
+
+---
+
+> ## ⚠️ UNRESOLVED — verify before publishing
+>
+> The following items were flagged during inspection and could not be fully
+> verified from the repo files alone. Resolve each before promoting this file
+> to `INSTALL.md`.
+>
+> **1. ComfyUI install path + undocumented install steps**
+> `comfyui.service` hardcodes `WorkingDirectory=/home/astroson/Desktop/comfyui`
+> and `ExecStart=/home/astroson/Desktop/comfyui/.venv/bin/python`. If ComfyUI
+> lives elsewhere, both the service file and the Morpheus section below need
+> updating. Full ComfyUI install steps (model download, SDXL checkpoint, custom
+> nodes) are not documented here — they need to be filled in or linked before
+> this section is usable by anyone else.
+>
+> **2. Piper PATH under systemd TTS bug**
+> `ph3b3.service` runs `.venv/bin/python` directly. If `tts_module.py` invokes
+> `piper` as a bare subprocess name (not an absolute path), it will fail under
+> systemd because the venv is never activated. A warning note is included in the
+> service section below. If this bug has since been fixed (absolute path in
+> tts_module.py, or `Environment=PATH=` in the service file), cut the warning.
+>
+> **3. Iris `secrets.example.h` contents unverified**
+> The Iris section says to copy `~/Arduino/Iris/secrets.example.h` to
+> `secrets.h` and fill in Ph3b3 credentials. The exact defines in that file were
+> not read and confirmed. Verify the field names match what the current Iris
+> firmware actually expects before a reader tries to build.
+>
+> **4. Ph3b3-Chan Arduino library list unverified**
+> The library list in the Dio flash section was derived from `platformio.ini`'s
+> `lib_deps`, not from a confirmed Arduino IDE build. Verify each library name
+> resolves correctly in Arduino IDE's Library Manager and that no additional
+> dependencies are needed.
+>
+> **5. GPU spec: 8 GB minimum vs RTX 4060 Ti 16 GB tested**
+> The hardware table sets the minimum at "8 GB VRAM (CUDA)" (matching the README's
+> "8 GB VRAM ceiling" claim) and the tested column at "RTX 4060 Ti 16 GB" (per
+> your stated actual hardware). If the 8 GB minimum is wrong (i.e. the stack
+> won't actually run on 8 GB), correct the minimum row before publishing.
+
+---
+
+> ## 🔧 Code smells — future cleanup commit (do not block on these)
+>
+> **(a) Dead WireGuard block in `start.sh` lines 23–32**
+> The `wg-quick up` block is still live code, gated on `${WG_INTERFACE:-}`.
+> `WG_INTERFACE` is commented out in `.env.example` so it never triggers, but
+> the block is dead weight and mildly confusing. Remove it in a cleanup commit.
+>
+> **(b) Hardcoded Tailscale hostname in firmware**
+> `firmware/Ph3b3-Chan/TalkApp.h` line ~876 and `Ph3b3-Chan.ino` line 138 both
+> hardcode `ph3b3.tailfb118a.ts.net`. Move to a `#define PH3B3_HOST` in
+> `secrets.h` so forks don't have to hunt through source files.
+
+---
 
 ## Hardware Requirements
 
-| Component | Minimum | Recommended |
-|-----------|---------|-------------|
-| GPU | RTX 3060 8 GB VRAM | RTX 4060+ |
+| Component | Minimum | Tested on |
+|-----------|---------|-----------|
+| GPU | 8 GB VRAM (CUDA) | RTX 4060 Ti 16 GB |
 | RAM | 16 GB | 32 GB |
 | Storage | 40 GB free | 80 GB free |
 | OS | Ubuntu 22.04 | Ubuntu 24.04 |
 | Camera | Any V4L2 webcam at `/dev/video0` | OBSBOT Tiny |
 
-A GPU is required. Hermes3 and LLaVA will not run usably on CPU.
+A CUDA GPU is required. Hermes3 and LLaVA will not run usably on CPU.
 
 ---
 
@@ -47,23 +104,17 @@ piper --version
 `setup.sh` handles these, but if you run into issues:
 
 ```bash
-sudo apt install ffmpeg portaudio19-dev python3-pyaudio libsndfile1 v4l-utils aplay
+sudo apt install ffmpeg portaudio19-dev python3-pyaudio libsndfile1 v4l-utils
 ```
 
-### 5. WireGuard (optional — for remote access)
+### 5. Tailscale (recommended for remote access)
+
+Tailscale creates an encrypted mesh between your devices so Ph3b3 stays on
+your LAN while your phone or laptop can reach her from anywhere — no port
+forwarding, no public IP required.
 
 ```bash
-sudo apt install wireguard
-# Place your wg0.conf in /etc/wireguard/
-sudo wg-quick up wg0
-```
-
-### 6. Tailscale (optional — remote access via mesh VPN)
-
-Tailscale is an alternative to WireGuard that requires no manual key exchange or config file. It creates an encrypted mesh between your devices so Ph3b3 stays on your LAN while your phone or laptop can reach her from anywhere — no port forwarding, no public IP required.
-
-```bash
-# Install on Nyx (the Ph3b3 host)
+# Install on the Ph3b3 host
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
 
@@ -74,9 +125,13 @@ tailscale ip -4
 sudo systemctl enable --now tailscaled
 ```
 
-Install the Tailscale app on each client device (phone, laptop) and sign in with the same account. All devices on the account can reach each other over the mesh automatically.
+Install the Tailscale app on each client device (phone, laptop) and sign in
+with the same account. All devices on the account can reach each other over
+the mesh automatically.
 
-**Privacy note:** Tailscale's coordination servers handle key exchange, but traffic between your devices is encrypted end-to-end and never passes through Tailscale's infrastructure. If you want zero third-party involvement, WireGuard (§5) is the fully self-hosted alternative.
+**Privacy note:** Tailscale's coordination servers handle key exchange, but
+traffic between your devices is encrypted end-to-end and never passes through
+Tailscale's infrastructure.
 
 ---
 
@@ -85,7 +140,7 @@ Install the Tailscale app on each client device (phone, laptop) and sign in with
 ### 1. Clone the repo
 
 ```bash
-git clone <repo-url> ph3b3_v2
+git clone https://github.com/Astroson111/ph3b3 ph3b3_v2
 cd ph3b3_v2
 ```
 
@@ -96,6 +151,15 @@ cp .env.example .env
 nano .env          # fill in your values — see .env.example for details
 ```
 
+Key values to set:
+
+| Variable | Required | Notes |
+|---|---|---|
+| `PH3B3_USER` | Yes | Username for web UI basic auth |
+| `PH3B3_PASSWORD` | Yes | Password for web UI basic auth |
+| `PH3B3_OWM_KEY` | For weather | OpenWeatherMap free tier |
+| `PH3B3_SSL_CERT` / `PH3B3_SSL_KEY` | For HTTPS | See `.env.example` for `openssl` command |
+
 ### 3. Run setup
 
 ```bash
@@ -103,9 +167,13 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-This creates a `.venv`, installs all Python dependencies, and installs system packages via `apt`.
+This creates a `.venv`, installs all Python dependencies, and installs system
+packages via `apt`.
 
-It also seeds `soul/soul.md` from `soul_public.md` if the file doesn't already exist. `soul/soul.md` is Ph3b3's identity document — her name, voice, purpose, and personality. It is gitignored and never committed; edit it freely to give her an identity specific to your installation. Re-running `setup.sh` will not overwrite a `soul.md` you have already customised.
+It also seeds `soul/soul.md` from `soul/soul_public.md` if the file doesn't
+already exist. `soul/soul.md` is Ph3b3's identity document — gitignored and
+never committed. Re-running `setup.sh` will not overwrite a `soul.md` you
+have already customised.
 
 ### 4. Download the voice model
 
@@ -118,7 +186,8 @@ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medi
 wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx.json
 ```
 
-To use a different voice, set `PH3B3_VOICE_MODEL` in `.env` to the full path of your `.onnx` file.
+To use a different voice, set `PH3B3_VOICE_MODEL` in `.env` to the full path
+of your `.onnx` file.
 
 ### 5. Start the server
 
@@ -127,31 +196,36 @@ chmod +x start.sh
 ./start.sh
 ```
 
-On first run, `start.sh` will:
-- Bring up WireGuard (`wg0`) if configured
-- Start Ollama if it isn't running
+`start.sh` will:
+- Check for a `.env` file and warn if missing
+- Start Ollama if it isn't already running
 - Activate the venv
 - Launch `agent/server.py` on the configured host and port
+
+On first run (before `~/ph3b3_data/setup_complete` exists), the server opens
+a first-time setup wizard at `http://<host>:7331/setup`.
 
 ---
 
 ## Accessing the Web UI
 
-Once the server is running, open a browser and go to:
+Once the server is running, the recommended path is via Tailscale Serve
+(see Remote Access below). For direct LAN access:
 
 ```
-http://<nyx-ip>:7331
+https://<host-ip>:7331/panel
 ```
 
-If `PH3B3_PASSWORD` is set in `.env`, the browser will prompt for HTTP basic auth. Username is `astroson`.
+If `PH3B3_PASSWORD` is set in `.env`, the browser will prompt for HTTP basic
+auth. The username is whatever you set as `PH3B3_USER`.
 
-To find Nyx's IP:
+To find your host IP:
 
 ```bash
 hostname -I
 ```
 
-The web UI (`launch_ui.sh`) can also be launched as a local desktop window:
+`launch_ui.sh` launches a local desktop terminal chat window (not the server):
 
 ```bash
 ./launch_ui.sh
@@ -159,29 +233,67 @@ The web UI (`launch_ui.sh`) can also be launched as a local desktop window:
 
 ---
 
-## Remote Access
+## Running as a systemd Service
 
-Ph3b3 runs on your LAN by default. Two options for reaching her away from home:
+For automatic startup on boot with restart-on-failure, install the included
+service file.
 
-### WireGuard
+> **Note:** `ph3b3.service` has hardcoded paths for this installation
+> (`User=astroson`, `WorkingDirectory=`, `EnvironmentFile=`, `ExecStart=`).
+> Edit all four fields to match your username and repo location before copying.
 
-Set `WG_INTERFACE=wg0` in `.env`. `start.sh` will bring up the interface on each boot. See §5 above for prerequisites.
+```bash
+# Edit the service file for your paths first
+nano ph3b3.service
 
-### Tailscale
+# Install and enable
+sudo cp ph3b3.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ph3b3
+```
 
-Once Tailscale is installed and running (§6 above), reach Ph3b3 from any device on your mesh using the `100.x.x.x` IP returned by `tailscale ip -4`:
+To allow managing the service without a password prompt (used internally by
+Ph3b3):
+
+```bash
+# Edit 51-ph3b3.rules — replace "astroson" with your username
+nano 51-ph3b3.rules
+sudo cp 51-ph3b3.rules /etc/polkit-1/rules.d/
+```
+
+Check logs:
+
+```bash
+journalctl -u ph3b3 -f
+```
+
+> **Known issue — Piper PATH under systemd:** If TTS is silent when running
+> under the service but works under `./start.sh`, the venv is not in PATH for
+> the systemd process. Workaround: add the venv bin directory to the service
+> file's `Environment=PATH=` line, or set an absolute path to the Piper binary
+> in `tts_module.py`.
+
+---
+
+## Remote Access via Tailscale
+
+Once Tailscale is installed (§5 above), reach Ph3b3 from any device on your
+mesh using the `100.x.x.x` address:
 
 ```
 https://100.x.x.x:7331/panel
 ```
 
-For a clean HTTPS experience without a self-signed cert warning, use **Tailscale Serve** to front Ph3b3 with a Tailscale-managed certificate:
+For a clean HTTPS experience without a cert warning, use **Tailscale Serve**
+to front Ph3b3 with a Tailscale-managed certificate:
 
 ```bash
 tailscale serve https / http://localhost:7331
 ```
 
-This exposes Ph3b3 on your mesh at `https://<machine-name>.<tailnet>.ts.net` with a valid cert, which also allows the panel's service worker to register properly for Add to Home Screen.
+This exposes Ph3b3 on your mesh at `https://<machine-name>.<tailnet>.ts.net`
+with a valid cert — required for the panel's service worker to register
+cleanly for Add to Home Screen.
 
 ---
 
@@ -191,41 +303,200 @@ This exposes Ph3b3 on your mesh at `https://<machine-name>.<tailnet>.ts.net` wit
 curl http://localhost:7331/health
 ```
 
-Expected response:
+Expected:
 
 ```json
-{"status": "alive", "model": "hermes3", "soul": true, "boot": 0}
+{"status": "alive"}
+```
+
+For a richer readiness check (model loaded, soul, TTS, STT):
+
+```bash
+curl -u <user>:<pass> https://localhost:7331/ready
 ```
 
 ---
 
-## Stack-chan (M5Stack CoreS3)
+## Firmware: Dio (Ph3b3-Chan, M5Stack CoreS3)
 
-The firmware lives in `firmware/`. Flash it with PlatformIO:
+Dio runs the **Ph3b3-Chan** firmware. The source lives in `firmware/Ph3b3-Chan/`.
+
+> **Flash with Arduino IDE only.** A `platformio.ini` is present in `firmware/`
+> but PlatformIO produces a truncated binary for this board. Do not use
+> `pio run`.
+
+### 1. Credentials
 
 ```bash
-cd firmware
-pio run -e m5stack-cores3 --target upload
+cp firmware/Ph3b3-Chan/secrets.example.h firmware/Ph3b3-Chan/secrets.h
 ```
 
-The robot connects to Ph3b3 over WebSocket at `ws://<nyx-ip>:7331/ws/stackchan`. Edit `firmware/src/main.cpp` to set `PH3B3_HOST`, `WIFI_SSID`, and `WIFI_PASSWORD` before flashing.
+Edit `secrets.h` and fill in:
+
+| Define | Value |
+|---|---|
+| `SC_PH3B3_USER` | Your `PH3B3_USER` from `.env` |
+| `SC_PH3B3_PASS` | Your `PH3B3_PASSWORD` from `.env` |
+
+### 2. Server hostname
+
+Ph3b3-Chan's server address is hardcoded in two places — edit both before
+flashing to match your Tailscale hostname:
+
+- `firmware/Ph3b3-Chan/TalkApp.h` — `TalkApp::HOST` (around line 876)
+- `firmware/Ph3b3-Chan/Ph3b3-Chan.ino` — the `http.begin(...)` call (line 138)
+
+Replace `ph3b3.tailfb118a.ts.net` with your own `<device>.<tailnet>.ts.net`.
+
+### 3. WiFi
+
+WiFi credentials can be provisioned two ways:
+- **Before flash:** set `SC_WIFI_SSID` and `SC_WIFI_PASS` in `Ph3b3-Chan.ino`
+  (lines 25–26)
+- **After flash:** add networks from Ph3b3's Control Panel Networks tab — Dio
+  pulls them from Ph3b3 automatically on next connect
+
+### 4. Flash
+
+Open `firmware/Ph3b3-Chan/Ph3b3-Chan.ino` in Arduino IDE.
+
+Board: **M5Stack → M5Stack-CoreS3**
+
+Add the M5Stack boards URL in Arduino IDE preferences if not already present:
+```
+https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json
+```
+
+Required libraries (Arduino IDE Library Manager):
+
+| Library | Manager name |
+|---|---|
+| M5Unified | `M5Unified` |
+| M5GFX | `M5GFX` |
+| ArduinoJson | `ArduinoJson` |
+| WebSockets | `WebSockets` (by Links2004) |
+| ESP8266Audio | `ESP8266Audio` |
+| M5Stack-Avatar | `M5Stack-Avatar` |
+| ServoEasing | `ServoEasing` |
+
+> ⚠️ Flag 4: this list was derived from `platformio.ini` lib_deps and has not
+> been verified against a clean Arduino IDE build. Confirm before publishing.
+
+Flash via Sketch → Upload.
+
+---
+
+## Firmware: Iris (M5StickS3)
+
+Iris is a **separate project** — her source lives at `~/Arduino/Iris/` and is
+**not included in this repository**.
+
+### Install arduino-cli (one-time)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=~/.local/bin sh
+~/.local/bin/arduino-cli config init
+~/.local/bin/arduino-cli config add board_manager.additional_urls \
+    https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json
+~/.local/bin/arduino-cli core update-index
+~/.local/bin/arduino-cli core install m5stack:esp32
+~/.local/bin/arduino-cli lib install M5Unified M5GFX "M5Stack_Avatar" "WiFiManager"
+```
+
+### Credentials
+
+Copy `~/Arduino/Iris/secrets.example.h` to `~/Arduino/Iris/secrets.h` and
+fill in your Ph3b3 credentials and server address before compiling.
+
+> ⚠️ Flag 3: the exact define names in `secrets.example.h` were not verified.
+> Check the file before publishing this step.
+
+### Compile and flash
+
+Put Iris into download mode: hold the side button ~2 seconds until the green
+LED blinks.
+
+```bash
+~/.local/bin/arduino-cli compile --fqbn m5stack:esp32:m5stack_sticks3 ~/Arduino/Iris
+~/.local/bin/arduino-cli upload --fqbn m5stack:esp32:m5stack_sticks3 -p /dev/ttyACM0 ~/Arduino/Iris
+```
+
+---
+
+## Morpheus / Image Generation
+
+Morpheus generates images locally via ComfyUI running on the same GPU as
+Ph3b3. Ph3b3 starts and stops ComfyUI on demand — it does **not** run at all
+times.
+
+### Prerequisites
+
+> ⚠️ Flag 1: Full ComfyUI installation steps (model download, SDXL checkpoint,
+> custom nodes) are not documented here. Follow the upstream ComfyUI install
+> guide and confirm `python main.py --listen 127.0.0.1 --port 8188` runs
+> cleanly at `~/Desktop/comfyui` before proceeding. If ComfyUI lives at a
+> different path, edit `comfyui.service` accordingly.
+
+### Install the service
+
+Edit `comfyui.service` to set your username and verify the `WorkingDirectory`
+path, then:
+
+```bash
+nano comfyui.service       # update User= and WorkingDirectory=
+sudo cp comfyui.service /etc/systemd/system/
+sudo systemctl daemon-reload
+# Do NOT enable for auto-start — Ph3b3 manages the lifecycle on demand
+```
+
+Install the polkit rule so Ph3b3 can start/stop the service without sudo:
+
+```bash
+# Edit to replace "astroson" with your username
+nano 50-comfyui.rules
+sudo cp 50-comfyui.rules /etc/polkit-1/rules.d/
+```
+
+### Verify
+
+```bash
+systemctl start comfyui
+curl http://localhost:8188/system_stats    # should return JSON
+systemctl stop comfyui
+```
 
 ---
 
 ## Troubleshooting
 
-**Ollama not responding** — run `ollama serve` in a separate terminal and check `ollama list` shows `hermes3`.
+**Ollama not responding** — run `ollama serve` in a separate terminal and
+check `ollama list` shows `hermes3`.
 
-**No audio output** — check `aplay -l` for your device. Set `ALSA_DEFAULT_DEVICE` if needed.
+**No audio output** — check `pactl list short sinks` for your speaker's name.
+Set `PH3B3_SPEAKER_SINK` in `.env` to a unique substring of the sink name.
 
-**Camera not found** — check `ls /dev/video*`. If the webcam isn't at `/dev/video0`, vision tools will fail silently.
+**Camera not found** — check `ls /dev/video*`. If the webcam isn't at
+`/dev/video0`, vision tools will fail silently.
 
-**Spotify tools not working** — Spotify credentials must be set in `.env`. On first use, a browser window will open to complete OAuth. Run the server in a terminal with a display available (`DISPLAY=:0`).
+**Spotify tools not working** — Spotify integration is currently
+**experimental and non-functional** (credentials need re-setup after a token
+rotation). Do not rely on it.
 
-**Permission denied on `wg-quick`** — WireGuard needs sudo. Either run `start.sh` with sudo or add a sudoers rule for `wg-quick`.
-
-**Soul: missing on the status panel** — `soul/soul.md` is gitignored and not included in the repo. Run `./setup.sh` to seed it automatically, or copy it manually:
+**Soul: missing on the status panel** — `soul/soul.md` is gitignored and not
+included in the repo. Run `./setup.sh` to seed it automatically, or copy
+manually:
 
 ```bash
 cp soul/soul_public.md soul/soul.md
 ```
+
+**Dio / Ph3b3-Chan not connecting** — check the serial monitor at 115200 baud
+for `[wifi]` and `[http]` log lines. Confirm `SC_PH3B3_USER` / `SC_PH3B3_PASS`
+in `secrets.h` match your `.env`, and that the hardcoded Tailscale hostname in
+`TalkApp.h` is correct for your tailnet.
+
+**Iris not connecting** — check serial at 115200. If she opens `Iris-Setup`
+(captive portal), connect to that AP and provision her Ph3b3 address and
+credentials. If she shows a sad expression after a previously working
+configuration, verify Ph3b3's `/health` endpoint is reachable from the same
+network.
