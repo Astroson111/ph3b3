@@ -47,10 +47,8 @@ public:
         face.setState(Ph3b3Face::IDLE);
 
         // Mount SD once per mode entry — avoids 200-500ms SPI init blocking every tap.
-        // CoreS3 SD SPI: SCK=36, MISO=35, MOSI=37, CS=4 (from variant pins_arduino.h).
-        // SPI.begin() is called explicitly because M5GFX owns the SPI peripheral
-        // internally; the Arduino SPI object may not have been initialised by M5.begin().
-        SPI.begin(36, 35, 37, -1);  // -1 = no default CS; SD.begin() drives CS=4
+        // Do NOT call SPI.begin() here: GPIO35 is M5GFX's DC pin for the display;
+        // reinitialising SPI reconfigures it as MISO input and kills the display bus.
         _sdMounted = SD.begin(4, SPI, 20000000);
         Serial.printf("[karaoke] SD.begin(4) → %s (type=%d)\n",
                       _sdMounted ? "OK" : "FAIL", (int)SD.cardType());
