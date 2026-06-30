@@ -293,6 +293,37 @@ def _db_meta(job_id: str) -> dict | None:
     return {"prompt": row[0], "seed": row[1]} if row else None
 
 
+def _db_delete(job_id: str) -> dict:
+    """Atomically delete one generation: DB row + PNG file together.
+    Unlink happens inside the transaction window; any error rolls the DELETE back."""
+    con = sqlite3.connect(str(DB_PATH))
+    try:
+        row = con.execute(
+            "SELECT filename FROM generations WHERE job_id=?", (job_id,)
+        ).fetchone()
+        if not row:
+            return {"ok": False, "reason": "not found"}
+        path = Path(row[0])
+        freed = path.stat().st_size if path.exists() else 0
+        con.execute("BEGIN")
+        con.execute("DELETE FROM generations WHERE job_id=?", (job_id,))
+        path.unlink(missing_ok=True)
+        con.commit()
+        return {"ok": True, "job_id": job_id, "freed_bytes": freed}
+    except Exception as e:
+        con.rollback()
+        return {"ok": False, "reason": str(e)}
+    finally:
+        con.close()
+
+
+def _db_all_job_ids() -> list[str]:
+    con = sqlite3.connect(str(DB_PATH))
+    rows = con.execute("SELECT job_id FROM generations ORDER BY id").fetchall()
+    con.close()
+    return [r[0] for r in rows]
+
+
 def _slug(text: str, maxlen: int = 40) -> str:
     s = text.lower().replace(" ", "-")
     s = re.sub(r"[^a-z0-9-]", "", s)
