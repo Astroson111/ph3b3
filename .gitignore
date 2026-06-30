@@ -5,6 +5,8 @@ ph3b3_data/
 __pycache__/
 *.pyc
 .env
+.cache
+.claude/
 firmware/.pio/
 **/secrets.h
 stack-chan/
