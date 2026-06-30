@@ -1,61 +1,4 @@
-# Ph3b3 — Installation Guide (DRAFT)
-
----
-
-> ## ⚠️ UNRESOLVED — verify before publishing
->
-> The following items were flagged during inspection and could not be fully
-> verified from the repo files alone. Resolve each before promoting this file
-> to `INSTALL.md`.
->
-> **1. ComfyUI install path + undocumented install steps**
-> `comfyui.service` hardcodes `WorkingDirectory=$HOME/Desktop/comfyui`
-> and `ExecStart=$HOME/Desktop/comfyui/.venv/bin/python`. If ComfyUI
-> lives elsewhere, both the service file and the Morpheus section below need
-> updating. Full ComfyUI install steps (model download, SDXL checkpoint, custom
-> nodes) are not documented here — they need to be filled in or linked before
-> this section is usable by anyone else.
->
-> **2. Piper PATH under systemd TTS bug**
-> `ph3b3.service` runs `.venv/bin/python` directly. If `tts_module.py` invokes
-> `piper` as a bare subprocess name (not an absolute path), it will fail under
-> systemd because the venv is never activated. A warning note is included in the
-> service section below. If this bug has since been fixed (absolute path in
-> tts_module.py, or `Environment=PATH=` in the service file), cut the warning.
->
-> **3. Iris `secrets.example.h` contents unverified**
-> The Iris section says to copy `~/Arduino/Iris/secrets.example.h` to
-> `secrets.h` and fill in Ph3b3 credentials. The exact defines in that file were
-> not read and confirmed. Verify the field names match what the current Iris
-> firmware actually expects before a reader tries to build.
->
-> **4. Ph3b3-Chan Arduino library list unverified**
-> The library list in the Dio flash section was derived from `platformio.ini`'s
-> `lib_deps`, not from a confirmed Arduino IDE build. Verify each library name
-> resolves correctly in Arduino IDE's Library Manager and that no additional
-> dependencies are needed.
->
-> **5. GPU spec: 8 GB minimum vs RTX 4060 Ti 16 GB tested**
-> The hardware table sets the minimum at "8 GB VRAM (CUDA)" (matching the README's
-> "8 GB VRAM ceiling" claim) and the tested column at "RTX 4060 Ti 16 GB" (per
-> your stated actual hardware). If the 8 GB minimum is wrong (i.e. the stack
-> won't actually run on 8 GB), correct the minimum row before publishing.
-
----
-
-> ## 🔧 Code smells — future cleanup commit (do not block on these)
->
-> **(a) Dead WireGuard block in `start.sh` lines 23–32**
-> The `wg-quick up` block is still live code, gated on `${WG_INTERFACE:-}`.
-> `WG_INTERFACE` is commented out in `.env.example` so it never triggers, but
-> the block is dead weight and mildly confusing. Remove it in a cleanup commit.
->
-> **(b) Hardcoded Tailscale hostname in firmware**
-> `firmware/Ph3b3-Chan/TalkApp.h` line ~876 and `Ph3b3-Chan.ino` line 138 both
-> hardcode `ph3b3.<tailnet>.ts.net`. Move to a `#define PH3B3_HOST` in
-> `secrets.h` so forks don't have to hunt through source files.
-
----
+# Ph3b3 — Installation Guide
 
 ## Hardware Requirements
 
@@ -267,12 +210,6 @@ Check logs:
 journalctl -u ph3b3 -f
 ```
 
-> **Known issue — Piper PATH under systemd:** If TTS is silent when running
-> under the service but works under `./start.sh`, the venv is not in PATH for
-> the systemd process. Workaround: add the venv bin directory to the service
-> file's `Environment=PATH=` line, or set an absolute path to the Piper binary
-> in `tts_module.py`.
-
 ---
 
 ## Remote Access via Tailscale
@@ -372,15 +309,12 @@ Required libraries (Arduino IDE Library Manager):
 | Library | Manager name |
 |---|---|
 | M5Unified | `M5Unified` |
-| M5GFX | `M5GFX` |
 | ArduinoJson | `ArduinoJson` |
-| WebSockets | `WebSockets` (by Links2004) |
-| ESP8266Audio | `ESP8266Audio` |
-| M5Stack-Avatar | `M5Stack-Avatar` |
-| ServoEasing | `ServoEasing` |
+| StackChan-BSP | `StackChan-BSP` (by M5Stack) |
 
-> ⚠️ Flag 4: this list was derived from `platformio.ini` lib_deps and has not
-> been verified against a clean Arduino IDE build. Confirm before publishing.
+All other dependencies (`WiFiClientSecure`, `HTTPClient`, `Preferences`, `SD`,
+`WebServer`, `DNSServer`) are bundled with the `m5stack:esp32` core and require
+no separate install.
 
 Flash via Sketch → Upload.
 
@@ -405,11 +339,16 @@ curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.
 
 ### Credentials
 
-Copy `~/Arduino/Iris/secrets.example.h` to `~/Arduino/Iris/secrets.h` and
-fill in your Ph3b3 credentials and server address before compiling.
+```bash
+cp ~/Arduino/Iris/secrets.example.h ~/Arduino/Iris/secrets.h
+```
 
-> ⚠️ Flag 3: the exact define names in `secrets.example.h` were not verified.
-> Check the file before publishing this step.
+Edit `secrets.h` and fill in:
+
+| Define | Value |
+|---|---|
+| `PH3B3_AUTH_USER` | Your `PH3B3_USER` from `.env` |
+| `PH3B3_AUTH_PASS` | Your `PH3B3_PASSWORD` from `.env` |
 
 ### Compile and flash
 
@@ -431,11 +370,11 @@ times.
 
 ### Prerequisites
 
-> ⚠️ Flag 1: Full ComfyUI installation steps (model download, SDXL checkpoint,
-> custom nodes) are not documented here. Follow the upstream ComfyUI install
-> guide and confirm `python main.py --listen 127.0.0.1 --port 8188` runs
-> cleanly at `~/Desktop/comfyui` before proceeding. If ComfyUI lives at a
-> different path, edit `comfyui.service` accordingly.
+ComfyUI must be installed at `~/Desktop/comfyui` with its own Python venv
+(this is where `comfyui.service` expects it). Full ComfyUI setup — model
+download, SDXL checkpoint, custom nodes — is covered by the upstream ComfyUI
+documentation. Confirm `python main.py --listen 127.0.0.1 --port 8188` runs
+cleanly there before installing the service.
 
 ### Install the service
 
