@@ -573,6 +573,12 @@
       line-height: 1; flex-shrink: 0;
     }
     .morph-gal-dl:hover { color: var(--text); }
+    .morph-gal-del {
+      background: none; border: none; color: var(--dim);
+      cursor: pointer; font-size: .8rem; padding: 0 .2rem;
+      line-height: 1; flex-shrink: 0;
+    }
+    .morph-gal-del:hover { color: var(--err); }
 
     /* ── Karaoke: Discover card ── */
     .kar-disc-toggle { cursor:pointer; user-select:none; }
@@ -911,7 +917,10 @@
 
     <div class="card">
       <div class="card-title">Gallery
-        <button class="btn-sm" id="morphGalRefresh">Refresh</button>
+        <div style="margin-left:auto;display:flex;gap:.35rem">
+          <button class="btn-sm" id="morphGalRefresh" style="margin-left:0">Refresh</button>
+          <button class="btn-sm" id="morphDelAllBtn" style="margin-left:0;color:var(--err);border-color:rgba(248,113,113,.35)">Delete All</button>
+        </div>
       </div>
       <div id="morphGallery" class="morph-gallery">
         <div class="morph-gal-empty">Loading…</div>
@@ -1763,6 +1772,7 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
   const dlRow        = document.getElementById('morphDlRow');
   const dlBtn        = document.getElementById('morphDlBtn');
   const fmtSel       = document.getElementById('morphFmtSel');
+  const delAllBtn    = document.getElementById('morphDelAllBtn');
 
   let currentJobId = null;
 
@@ -1889,6 +1899,7 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
             <div class="morph-gal-ts">${ts} &middot; seed ${g.seed ?? '?'}</div>
           </div>
           <button class="morph-gal-dl" data-job="${g.job_id}" title="Download">&#8595;</button>
+          <button class="morph-gal-del" data-job="${g.job_id}" title="Delete">&#10005;</button>
         </div>`;
       }).join('');
       galleryEl.querySelectorAll('.morph-gal-item').forEach(item => {
@@ -1906,12 +1917,39 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
           window.location.href = `/image/file/${btn.dataset.job}?download=1&format=${fmtSel.value}`;
         });
       });
+      galleryEl.querySelectorAll('.morph-gal-del').forEach(btn => {
+        btn.addEventListener('click', async e => {
+          e.stopPropagation();
+          await fetch(`/image/${btn.dataset.job}`, {method: 'DELETE'});
+          refreshGallery();
+        });
+      });
     } catch {
       galleryEl.innerHTML = '<div class="morph-gal-empty">Cannot reach server.</div>';
     }
   }
 
   document.getElementById('morphGalRefresh').addEventListener('click', refreshGallery);
+
+  delAllBtn.addEventListener('click', async () => {
+    const items = galleryEl.querySelectorAll('.morph-gal-item');
+    const n = items.length;
+    if (!n) return;
+    if (!confirm(`Delete all ${n} image${n === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    delAllBtn.disabled = true;
+    try {
+      const res  = await fetch('/morpheus/delete_all', {method: 'POST'});
+      const data = await res.json();
+      if (data.failed && data.failed.length) {
+        console.warn('[Morpheus] delete_all partial failures:', data.failed);
+      }
+    } catch (e) {
+      console.warn('[Morpheus] delete_all error:', e);
+    } finally {
+      delAllBtn.disabled = false;
+    }
+    refreshGallery();
+  });
 
   // Load gallery when tab becomes active, and on init
   document.querySelector('.tab[data-pane="Morpheus"]')

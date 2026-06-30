@@ -1805,6 +1805,39 @@ async def image_gallery(n: int = 20):
     return {"images": rows}
 
 
+@app.delete("/image/{job_id}")
+async def image_delete(job_id: str):
+    return await asyncio.to_thread(morpheus._db_delete, job_id)
+
+
+def _prune_image_subdirs() -> None:
+    """Remove empty subdirectories inside IMAGE_DIR. Never touches IMAGE_DIR itself."""
+    root = morpheus.IMAGE_DIR.resolve()
+    for child in sorted(root.iterdir(), reverse=True):
+        if child.is_dir():
+            try:
+                if not any(child.iterdir()):
+                    child.rmdir()
+            except Exception:
+                pass
+
+
+@app.post("/morpheus/delete_all")
+async def morpheus_delete_all():
+    job_ids = await asyncio.to_thread(morpheus._db_all_job_ids)
+    if not job_ids:
+        return {"deleted": 0, "failed": [], "freed_bytes": 0}
+    results = []
+    for job_id in job_ids:
+        r = await asyncio.to_thread(morpheus._db_delete, job_id)
+        results.append((job_id, r))
+    await asyncio.to_thread(_prune_image_subdirs)
+    deleted = sum(1 for _, r in results if r["ok"])
+    failed = [{"job_id": jid, "reason": r["reason"]} for jid, r in results if not r["ok"]]
+    freed = sum(r.get("freed_bytes", 0) for _, r in results if r["ok"])
+    return {"deleted": deleted, "failed": failed, "freed_bytes": freed}
+
+
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 
 if __name__ == "__main__":
