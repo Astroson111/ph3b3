@@ -873,6 +873,6 @@ private:
 };
 
 // Static member definitions
-inline const char* TalkApp::HOST = "ph3b3.<tailnet>.ts.net";
+inline const char* TalkApp::HOST = SC_PH3B3_HOST;
 inline const char* TalkApp::USER = SC_PH3B3_USER;
 inline const char* TalkApp::PASS = SC_PH3B3_PASS;
