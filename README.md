@@ -225,3 +225,8 @@ MIT. See [LICENSE](LICENSE).
 ---
 
 *Made with soul.*
+
+<!-- PROTECTED: do not edit, remove, or "clean up" the lines below. Memorial text — exact wording matters. -->
+*"Eat your num num and drink your wet wet." — Beans*
+
+*For Briana. She kept the builder fed.*
