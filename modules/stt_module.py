@@ -1,10 +1,41 @@
 import os
+import re
 import logging
 import threading
 
 log = logging.getLogger("ph3b3.stt")
 
 WHISPER_MODEL = os.getenv("PH3B3_WHISPER_MODEL", "medium")
+STT_LANGUAGE  = "en"
+NO_SPEECH_MAX = 0.6
+# under a forced-English lock, any CJK/Cyrillic/Greek/Hebrew/Arabic output is a hallucination
+_NON_LATIN = re.compile(r'[Ͱ-ϿЀ-ӿ֐-׿؀-ۿ぀-ヿ㐀-鿿가-힯]')
+
+
+def _stt_options(language=None):
+    return {
+        "language": language or STT_LANGUAGE,
+        "task": "transcribe",
+        "temperature": 0.0,
+        "condition_on_previous_text": False,
+        "no_speech_threshold": NO_SPEECH_MAX,
+        "logprob_threshold": -1.0,
+    }
+
+
+def _accept(result):
+    """Return cleaned text, or '' if result looks like a silence hallucination."""
+    text = (result.get("text") or "").strip()
+    if not text:
+        return ""
+    segs = result.get("segments") or []
+    if segs:
+        avg_ns = sum(s.get("no_speech_prob", 0.0) for s in segs) / len(segs)
+        if avg_ns > NO_SPEECH_MAX:
+            return ""
+    if _NON_LATIN.search(text):
+        return ""
+    return text
 
 try:
     import whisper
@@ -67,11 +98,11 @@ class STTModule:
             audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
             sd.wait()
             audio_flat = audio.flatten()
-            options = {}
-            if language:
-                options["language"] = language
-            result = self._model.transcribe(audio_flat, **options)
-            return {"text": result.get("text","").strip(), "language": result.get("language",""), "error": None}
+            rms = float(np.sqrt(np.mean(audio_flat**2))) if audio_flat.size else 0.0
+            if rms < 0.004:
+                return {"text": None, "language": STT_LANGUAGE, "error": None}
+            result = self._model.transcribe(audio_flat, **_stt_options(language))
+            return {"text": _accept(result) or None, "language": result.get("language", ""), "error": None}
         except Exception as e:
             return {"text": None, "error": str(e)}
 
@@ -92,19 +123,17 @@ class STTModule:
             return {"text": None, "error": "Whisper still loading — try again in a moment."}
         if not self._available:
             return {"text": None, "error": "Whisper not available"}
-        options = {}
-        if language:
-            options["language"] = language
+        options = _stt_options(language)
         try:
             result = self._model.transcribe(filepath, **options)
-            return {"text": result.get("text","").strip(), "language": result.get("language",""), "error": None}
+            return {"text": _accept(result) or None, "language": result.get("language", ""), "error": None}
         except Exception as e:
             if "CUDA" in str(e) and self._model is not None:
                 log.warning("CUDA error in transcription — falling back to CPU")
                 try:
                     self._model = self._model.to("cpu")
                     result = self._model.transcribe(filepath, **options)
-                    return {"text": result.get("text","").strip(), "language": result.get("language",""), "error": None}
+                    return {"text": _accept(result) or None, "language": result.get("language", ""), "error": None}
                 except Exception as cpu_e:
                     return {"text": None, "error": f"Transcription error (CPU fallback): {cpu_e}"}
             return {"text": None, "error": str(e)}
