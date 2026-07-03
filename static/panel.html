@@ -860,6 +860,9 @@
       <textarea id="morphPrompt" class="morph-textarea" rows="1"
         placeholder="Describe the image…" autocomplete="off" autocorrect="off" autocapitalize="none"
         spellcheck="true"></textarea>
+      <textarea id="morphNegative" class="morph-textarea" rows="1"
+        placeholder="Negative — things to avoid (optional)" autocomplete="off" autocorrect="off" autocapitalize="none"
+        spellcheck="true"></textarea>
       <details class="morph-adv">
         <summary class="morph-adv-sum">
           <span class="morph-adv-chev">&#9658;</span> Advanced
@@ -1762,6 +1765,7 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
 // ── Morpheus image generation ─────────────────────────────────────────────────
 (function () {
   const promptEl     = document.getElementById('morphPrompt');
+  const negativeEl   = document.getElementById('morphNegative');
   const genBtn       = document.getElementById('morphGenBtn');
   const statePillEl  = document.getElementById('morphStatePill');
   const stateCardEl  = document.getElementById('morphStateCard');
@@ -1845,6 +1849,7 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
   async function generate() {
     const positive = promptEl.value.trim();
     if (!positive) { promptEl.focus(); return; }
+    const negative_prompt = negativeEl.value.trim();
 
     const steps  = parseInt(document.getElementById('morphSteps').value)  || 20;
     const width  = parseInt(document.getElementById('morphWidth').value)   || 1024;
@@ -1859,7 +1864,7 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
       const res  = await fetch('/image/generate', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({positive, steps, width, height, seed}),
+        body: JSON.stringify({positive, negative_prompt, steps, width, height, seed}),
       });
       if (!res.ok) {
         setStatePill('error');
