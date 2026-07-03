@@ -32,6 +32,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 from content_profiles import ACTIVE_PROFILE_NAME, load_profile
+from paths import MORPHEUS_DATA
 
 log = logging.getLogger("ph3b3.morpheus")
 
@@ -44,9 +45,9 @@ _HERMES_STEM = HERMES_MODEL.split(":")[0]  # "hermes3" — safe startswith match
 
 COMFY_HOST   = os.getenv("COMFY_HOST",  "http://127.0.0.1:8188")
 IMAGE_DIR    = Path(os.getenv("MORPHEUS_IMAGE_DIR",
-                              "/home/astroson/Desktop/ph3b3_v2_data/images"))
+                              str(MORPHEUS_DATA / "images")))
 DB_PATH      = Path(os.getenv("MORPHEUS_DB_PATH",
-                              "/home/astroson/Desktop/ph3b3_v2_data/generations.db"))
+                              str(MORPHEUS_DATA / "generations.db")))
 SDXL_CKPT    = os.getenv("MORPHEUS_CKPT",  "sd_xl_base_1.0.safetensors")
 SDXL_STEPS   = int(os.getenv("MORPHEUS_STEPS", "20"))
 SDXL_NEG     = os.getenv(

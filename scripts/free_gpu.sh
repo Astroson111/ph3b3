@@ -34,5 +34,5 @@ VRAM=$(nvidia-smi --query-gpu=name,memory.used,memory.free --format=csv,noheader
     || echo "nvidia-smi unavailable")
 LOG+="GPU: ${VRAM}"
 
-notify-send -i /home/astroson/Downloads/ph3b3_face_wake_512.png \
+notify-send -i "$HOME/Downloads/ph3b3_face_wake_512.png" \
     "⚡ GPU Freed" "$(printf '%b' "$LOG")" --expire-time=6000
