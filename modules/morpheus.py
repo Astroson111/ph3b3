@@ -52,7 +52,7 @@ SDXL_CKPT    = os.getenv("MORPHEUS_CKPT",  "sd_xl_base_1.0.safetensors")
 SDXL_STEPS   = int(os.getenv("MORPHEUS_STEPS", "20"))
 SDXL_NEG     = os.getenv(
     "MORPHEUS_NEG",
-    "blurry, low quality, deformed, ugly, bad anatomy, watermark, text, signature",
+    "text, watermark, multiple objects, cluttered background, blurry",
 )
 
 # ── Content safety ───────────────────────────────────────────────────
@@ -375,9 +375,14 @@ def build_workflow(params: dict) -> dict:
     if seed < 0:
         seed = random.randint(0, 2**32 - 1)
         params["seed"] = seed  # write resolved seed back for indexing
+    # Empty or missing negative → default negative (SDXL_NEG). `or` (not dict
+    # default) so an explicit "" from the endpoint also falls back. Write the
+    # resolved value back into params so the DB records what actually conditioned.
+    neg = params.get("negative") or SDXL_NEG
+    params["negative"] = neg
     wf["4"]["inputs"]["ckpt_name"] = params.get("ckpt_name", SDXL_CKPT)
     wf["6"]["inputs"]["text"]      = params.get("positive", "")
-    wf["7"]["inputs"]["text"]      = params.get("negative", SDXL_NEG)
+    wf["7"]["inputs"]["text"]      = neg
     wf["5"]["inputs"]["width"]     = params.get("width",  1024)
     wf["5"]["inputs"]["height"]    = params.get("height", 1024)
     wf["3"]["inputs"]["seed"]      = seed
