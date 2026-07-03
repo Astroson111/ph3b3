@@ -1,8 +1,8 @@
 [Desktop Entry]
 Name=☽ Ph3b3 Karaoke Prep
 Comment=Convert audio files to Stack-Chan karaoke format (local files only)
-Exec=python3 $HOME/Desktop/ph3b3_v2/tools/ph3b3_karaoke_prep.py
-Icon=$HOME/Desktop/ph3b3_v2/static/icon-192.png
+Exec=python3 /home/youruser/ph3b3_v2/tools/ph3b3_karaoke_prep.py
+Icon=/home/youruser/ph3b3_v2/static/icon-192.png
 Type=Application
 Categories=AudioVideo;Audio;Utility;
 Terminal=false

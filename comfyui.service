@@ -4,9 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=astroson
-WorkingDirectory=$HOME/Desktop/comfyui
-ExecStart=$HOME/Desktop/comfyui/.venv/bin/python main.py --listen 127.0.0.1 --port 8188
+# Replace "youruser" and the ComfyUI install path below to match your system.
+User=youruser
+WorkingDirectory=/home/youruser/comfyui
+ExecStart=/home/youruser/comfyui/.venv/bin/python main.py --listen 127.0.0.1 --port 8188
 Restart=on-failure
 RestartSec=5
 KillMode=control-group

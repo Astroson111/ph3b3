@@ -181,9 +181,11 @@ hostname -I
 For automatic startup on boot with restart-on-failure, install the included
 service file.
 
-> **Note:** `ph3b3.service` has hardcoded paths for this installation
-> (`User=astroson`, `WorkingDirectory=`, `EnvironmentFile=`, `ExecStart=`).
-> Edit all four fields to match your username and repo location before copying.
+> **Note:** `ph3b3.service` ships with placeholder paths
+> (`User=youruser`, `WorkingDirectory=`, `EnvironmentFile=`). Edit these to match
+> your username and clone location before copying. `ExecStart` references
+> `${PH3B3_HOME}`, which systemd loads from the `EnvironmentFile`, so also set
+> `PH3B3_HOME=` (your clone path) in your `.env`.
 
 ```bash
 # Edit the service file for your paths first
@@ -199,7 +201,7 @@ To allow managing the service without a password prompt (used internally by
 Ph3b3):
 
 ```bash
-# Edit 51-ph3b3.rules — replace "astroson" with your username
+# Edit 51-ph3b3.rules — replace "youruser" with your username
 nano 51-ph3b3.rules
 sudo cp 51-ph3b3.rules /etc/polkit-1/rules.d/
 ```
@@ -391,7 +393,7 @@ sudo systemctl daemon-reload
 Install the polkit rule so Ph3b3 can start/stop the service without sudo:
 
 ```bash
-# Edit to replace "astroson" with your username
+# Edit to replace "youruser" with your username
 nano 50-comfyui.rules
 sudo cp 50-comfyui.rules /etc/polkit-1/rules.d/
 ```

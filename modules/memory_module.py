@@ -42,11 +42,6 @@ class MemoryModule:
                 for key, default in DEFAULT_MEMORY.items():
                     if key not in data:
                         data[key] = default
-                # Migrate old key name from earlier versions
-                if "about_astroson" in data and not data.get("about_user"):
-                    data["about_user"] = data.pop("about_astroson")
-                elif "about_astroson" in data:
-                    data.pop("about_astroson")
                 return data
             except Exception as e:
                 log.warning(f"Could not load memory: {e}")

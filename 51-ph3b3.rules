@@ -1,7 +1,7 @@
 polkit.addRule(function(action, subject) {
     if (action.id === "org.freedesktop.systemd1.manage-units" &&
         action.lookup("unit") === "ph3b3.service" &&
-        subject.user === "astroson") {
+        subject.user === "youruser") {
         return polkit.Result.YES;
     }
 });
