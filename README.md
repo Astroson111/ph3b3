@@ -39,7 +39,7 @@ That's the direction: capable, private help, shaped by the people the industry u
 
 ## What she is, today
 
-Ph3b3 is a FastAPI application running on **Nyx** — a desktop with a Ryzen 9 7950X and an RTX 4060. The full stack is local:
+Ph3b3 is a FastAPI application running on **Nyx** — a desktop with a Ryzen 9 7950X and an RTX 4060 Ti (16 GB). The full stack is local:
 
 - **Brain:** Hermes3 via Ollama
 - **Voice (TTS):** Piper, speaking in the **Alba** en_GB voice
@@ -154,6 +154,8 @@ and fill in your WiFi and server credentials.
 Where she's going next:
 
 - **Multilingual TTS** — per-language Piper voice models, swapped to match the detected target language, so translated output is spoken in a native accent instead of Alba reading romanization.
+- **Agent orchestration** — multi-step autonomous tool chaining: give her a goal, she plans and sequences her own tool calls (across the existing 88 functions) instead of single-shot invocation.
+- **RAG memory backend** — vector-store retrieval over her long-term memory so recall scales past what fits in context, with the same local-only guarantee (embeddings generated and stored on Nyx, nothing leaves).
 - **Flipper Zero integration** — voice-triggered Flipper actions ("Ph3b3, run the sub-GHz scan"), signal-capture data logged to her memory, the Flipper as a hardware key / physical trigger, and her responses shown on the Flipper screen. Lives in `integrations/flipper_zero/` when work starts.
 - **Integrations pattern** — a repeatable shape for new capabilities: a subfolder under `integrations/`, its own README and scripts, wired into `server.py`.
 
@@ -165,7 +167,7 @@ Accessibility is the through-line for all of it — every addition is measured a
 
 ### Requirements
 
-- Ubuntu 24.04 (tested on Nyx: Ryzen 9 7950X / RTX 4060)
+- Ubuntu 24.04 (tested on Nyx: Ryzen 9 7950X / RTX 4060 Ti)
 - Ollama with Hermes3 pulled
 - Piper TTS with the Alba `en_GB-alba-medium` voice
 - Whisper (CUDA build)

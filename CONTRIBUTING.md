@@ -1,6 +1,6 @@
 # Contributing to Ph3b3
 
-Ph3b3 is a personal project in active development. It is built around specific hardware (Nyx, an RTX 4060 machine) and a specific physical robot (Stack-chan on M5Stack CoreS3). Contributions are welcome, but please read this first.
+Ph3b3 is a personal project in active development. It is built around specific hardware (Nyx, an RTX 4060 Ti machine) and a specific physical robot (Stack-chan on M5Stack CoreS3). Contributions are welcome, but please read this first.
 
 ---
 
