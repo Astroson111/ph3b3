@@ -148,7 +148,7 @@ class TTSModule:
         with self._lock:
             try:
                 cmd = f'echo {subprocess.list2cmdline([tts_text])} | {PIPER_BIN} --model {VOICE_MODEL} --output-raw'
-                proc = subprocess.run(cmd, shell=True, capture_output=True)
+                proc = subprocess.run(cmd, shell=True, capture_output=True, timeout=30)
                 raw_pcm = proc.stdout
                 if not raw_pcm:
                     return None
