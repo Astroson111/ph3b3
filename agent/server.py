@@ -1725,12 +1725,21 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
     positive = body.get("positive", "").strip()
     if not positive:
         raise HTTPException(400, "positive prompt is required")
+    # Negative conditioning: accept `negative_prompt` (canonical) or legacy
+    # `negative`. Negative conditioning is still conditioning — it goes through
+    # the same safety gate below as the positive prompt.
+    negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
 
     # ── FLOOR — hardcoded, always first, no off switch, profile-independent ──
-    floor_cat = morpheus.floor_check(positive)
-    if floor_cat:
-        log.warning("[safety] floor-blocked — category: %s", floor_cat)
-        raise HTTPException(403, detail="Content policy: prompt not permitted")
+    # Evaluated over BOTH prompt fields: a banned term in the negative must hard
+    # block identically to one in the positive (new input = new attack surface).
+    for field, which in ((positive, "positive"), (negative, "negative")):
+        if not field:
+            continue
+        floor_cat = morpheus.floor_check(field)
+        if floor_cat:
+            log.warning("[safety] floor-blocked (%s) — category: %s", which, floor_cat)
+            raise HTTPException(403, detail="Content policy: prompt not permitted")
 
     # ── Localhost interlock (Part 3) ─────────────────────────────────────────
     # If permissive is active but the request is not from localhost, force strict
@@ -1747,14 +1756,18 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
             )
 
     # ── Profile check ─────────────────────────────────────────────────────────
-    if not morpheus.profile_check(positive, denylist=forced_denylist):
-        label = morpheus.ACTIVE_PROFILE + (" [forced strict by interlock]" if forced_denylist else "")
-        log.warning("[safety] profile-blocked — profile: %s", label)
-        raise HTTPException(403, detail="Content policy: prompt not permitted")
+    # Same broadening as the floor: the denylist applies to the negative too.
+    for field, which in ((positive, "positive"), (negative, "negative")):
+        if not field:
+            continue
+        if not morpheus.profile_check(field, denylist=forced_denylist):
+            label = morpheus.ACTIVE_PROFILE + (" [forced strict by interlock]" if forced_denylist else "")
+            log.warning("[safety] profile-blocked (%s) — profile: %s", which, label)
+            raise HTTPException(403, detail="Content policy: prompt not permitted")
 
     params = {
         "positive":  positive,
-        "negative":  body.get("negative", ""),
+        "negative":  negative,
         "width":     int(body.get("width",  1024)),
         "height":    int(body.get("height", 1024)),
         "steps":     int(body.get("steps",  morpheus.SDXL_STEPS)),
