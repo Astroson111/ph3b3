@@ -14,3 +14,7 @@ stack-chan/
 voices/*.png
 soul/soul.md
 modules/content_profiles/*.local.*
+
+# Local working notes — never publish
+SESSION_LOG.md
+TODO_tomorrow.md
