@@ -741,11 +741,8 @@
     </div>
     <div class="card">
       <div class="card-title">Add Network</div>
-      <div class="iris-form">
-        <input id="netSsid" type="text" placeholder="SSID" autocomplete="off" autocorrect="off" autocapitalize="none">
-        <input id="netPass" type="password" placeholder="Password" autocomplete="off">
-        <button class="btn-add" id="netAddBtn">Add / Update</button>
-        <div class="net-msg" id="netMsg"></div>
+      <div class="net-msg" style="opacity:.85">
+        WiFi is managed on-device via the Iris-Setup portal (config sync coming).
       </div>
     </div>
     <div class="ts" id="netTs"></div>
@@ -765,7 +762,7 @@
   <section id="paneStackchan" class="pane">
     <div class="card">
       <div class="card-title">
-        Stack-Chan Networks
+        Dio Networks
         <button class="btn-sm" id="scNetRefreshBtn">Refresh</button>
       </div>
       <div class="net-list" id="scNetList"><div class="net-empty">Loading…</div></div>
@@ -961,7 +958,7 @@
   </button>
   <button class="tab" data-pane="Stackchan">
     <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="10" r="2"/><circle cx="15" cy="10" r="2"/><path d="M8 16s1 2 4 2 4-2 4-2"/></svg>
-    SC
+    Dio
   </button>
   <button class="tab" data-pane="Karaoke">
     <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
@@ -1005,7 +1002,8 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
   document.getElementById('pane' + t.dataset.pane).classList.add('active');
-  if (t.dataset.pane === 'Iris') wgRefresh();
+  if (t.dataset.pane === 'Iris') { wgRefresh(); refreshNetworks(); }
+  if (t.dataset.pane === 'Stackchan') refreshScNetworks();   // fix: list stuck on "Loading…"
 }));
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -1287,27 +1285,9 @@ async function refreshNetworks() {
 }
 
 document.getElementById('netRefreshBtn').addEventListener('click', refreshNetworks);
-document.getElementById('netAddBtn').addEventListener('click', async () => {
-  const ssid = document.getElementById('netSsid').value.trim();
-  const pass = document.getElementById('netPass').value;
-  if (!ssid) { netMsg.textContent = 'SSID required'; netMsg.className = 'net-msg err'; return; }
-  try {
-    const res  = await fetch('/iris/networks', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ssid, pass}),
-    });
-    const data = await res.json();
-    netMsg.textContent = data.updated ? 'Updated.' : 'Added. Iris will sync on next boot.';
-    netMsg.className = 'net-msg ok';
-    document.getElementById('netSsid').value = '';
-    document.getElementById('netPass').value = '';
-    refreshNetworks();
-  } catch(e) {
-    netMsg.textContent = 'Error: ' + e.message;
-    netMsg.className = 'net-msg err';
-  }
-});
+// Add/Update removed — Iris WiFi is configured on-device via the Iris-Setup
+// portal. The /iris/networks endpoint + read-only list stay for the Phase B
+// config-sync design (see docs/iris_config_sync_design.md).
 
 // ── WireGuard tunnel toggle ───────────────────────────────────────────────────
 async function wgRefresh() {
@@ -1343,7 +1323,7 @@ async function wgToggle() {
 }
 document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
 
-// ── Stack-Chan network management ────────────────────────────────────────────
+// ── Dio network management ────────────────────────────────────────────
 const scNetList = document.getElementById('scNetList');
 const scNetMsg  = document.getElementById('scNetMsg');
 
@@ -1384,7 +1364,7 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
       body: JSON.stringify({ssid, pass}),
     });
     const data = await res.json();
-    scNetMsg.textContent = data.updated ? 'Updated.' : 'Added. Stack-Chan will sync on next boot.';
+    scNetMsg.textContent = data.updated ? 'Updated.' : 'Added. Dio will sync on next boot.';
     scNetMsg.className = 'net-msg ok';
     document.getElementById('scNetSsid').value = '';
     document.getElementById('scNetPass').value = '';
