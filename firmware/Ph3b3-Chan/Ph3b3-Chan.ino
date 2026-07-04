@@ -110,6 +110,54 @@ static uint32_t sLastReconnect = 0;
 static bool     sSyncDone      = false;
 static uint32_t sConnectedAt   = 0;
 
+// ── Server target — ATOMIC NVS record (host+port+user+pass as ONE unit) ───────
+// Compile-time SC_PH3B3_* are the first-boot SEED only; runtime always reads NVS.
+// Host and port are never stored or edited separately (Iris split-config lesson).
+String gSrvHost; int gSrvPort = 0; String gSrvUser; String gSrvPass;
+static const char SRV_HOST_KEY[] = "srv_host";
+static const char SRV_PORT_KEY[] = "srv_port";
+static const char SRV_USER_KEY[] = "srv_user";
+static const char SRV_PASS_KEY[] = "srv_pass";
+
+static void _saveServer(const String& h, int p, const String& u, const String& pw) {
+    // One transaction — all four fields together, never a partial record.
+    sPrefs.begin(NVS_NS, false);
+    sPrefs.putString(SRV_HOST_KEY, h);
+    sPrefs.putInt   (SRV_PORT_KEY, p);
+    sPrefs.putString(SRV_USER_KEY, u);
+    sPrefs.putString(SRV_PASS_KEY, pw);
+    sPrefs.end();
+    gSrvHost = h; gSrvPort = p; gSrvUser = u; gSrvPass = pw;
+}
+
+static void _loadServer() {
+    sPrefs.begin(NVS_NS, true);
+    bool seeded = sPrefs.isKey(SRV_HOST_KEY);
+    gSrvHost = sPrefs.getString(SRV_HOST_KEY, SC_PH3B3_HOST);
+    gSrvPort = sPrefs.getInt   (SRV_PORT_KEY, SC_PH3B3_PORT);
+    gSrvUser = sPrefs.getString(SRV_USER_KEY, SC_PH3B3_USER);
+    gSrvPass = sPrefs.getString(SRV_PASS_KEY, SC_PH3B3_PASS);
+    sPrefs.end();
+    if (!seeded) _saveServer(SC_PH3B3_HOST, SC_PH3B3_PORT, SC_PH3B3_USER, SC_PH3B3_PASS);
+    Serial.printf("[srv] target %s:%d\n", gSrvHost.c_str(), gSrvPort);
+}
+
+// GET /health against the runtime record. Returns the HTTP code, or a negative
+// value on a connection-level failure (no route / TLS / timeout). 2xx = online.
+static int _healthCheck() {
+    WiFiClientSecure tls;
+    tls.setInsecure();               // LAN mkcert self-signed cert
+    tls.setTimeout(8000);
+    HTTPClient http;
+    if (!http.begin(tls, gSrvHost.c_str(), gSrvPort, "/health", true)) return -1000;
+    http.setAuthorization(gSrvUser.c_str(), gSrvPass.c_str());
+    http.addHeader("X-Ph3b3-Device", "stackchan");
+    http.setTimeout(8000);
+    int code = http.GET();
+    http.end();
+    return code;                     // 2xx online; 401/403 denied; <0 no route
+}
+
 static int _loadCreds(String ssids[], String passes[]) {
     sPrefs.begin(NVS_NS, true);
     bool hasAny = false;
@@ -132,11 +180,11 @@ static int _loadCreds(String ssids[], String passes[]) {
 
 static void _syncNetworks() {
     WiFiClientSecure tls;
-    tls.setCACert(ISRG_ROOT_X1);
+    tls.setInsecure();               // LAN mkcert self-signed cert (Iris lesson)
     tls.setTimeout(8000);
     HTTPClient http;
-    http.begin(tls, SC_PH3B3_HOST, 443, "/stackchan/networks", true);
-    http.setAuthorization(SC_PH3B3_USER, SC_PH3B3_PASS);
+    http.begin(tls, gSrvHost.c_str(), gSrvPort, "/stackchan/networks", true);
+    http.setAuthorization(gSrvUser.c_str(), gSrvPass.c_str());
     http.addHeader("X-Ph3b3-Device", "stackchan");
     http.setTimeout(8000);
     if (http.GET() != HTTP_CODE_OK) { http.end(); return; }
@@ -229,6 +277,10 @@ static void _runPortal() {
             "<input name='ssid' autocomplete='off' autofocus>"
             "<label>Password</label>"
             "<input name='pass' type='password'>"
+            "<label>Ph3b3 host</label>"
+            "<input name='host' value='" + gSrvHost + "'>"
+            "<label>Ph3b3 port</label>"
+            "<input name='port' value='" + String(gSrvPort) + "'>"
             "<button type='submit'>Save &amp; Reboot</button>"
             "</form>"
             "<div style='position:fixed;bottom:12px;right:12px;width:110px;opacity:0.75'>"
@@ -284,11 +336,16 @@ static void _runPortal() {
     server.on("/save", HTTP_POST, [&]() {
         String ssid = server.arg("ssid"); ssid.trim();
         String pass = server.arg("pass"); pass.trim();
+        String host = server.arg("host"); host.trim();
+        int    port = server.arg("port").toInt();
         if (ssid.length() > 0) {
             sPrefs.begin(NVS_NS, false);
             sPrefs.putString(SSID_KEYS[0], ssid);
             sPrefs.putString(PASS_KEYS[0], pass);
             sPrefs.end();
+            // Server target stays ATOMIC: only overwrite when BOTH host and port
+            // are present. Auth is never entered on the open setup AP.
+            if (host.length() > 0 && port > 0) _saveServer(host, port, gSrvUser, gSrvPass);
             server.send(200, "text/html",
                 "<html><body style='font-family:sans-serif;background:#0a0318;"
                 "color:#e0d4ff;text-align:center;padding:2rem'>"
@@ -540,6 +597,10 @@ void setup() {
         sPrefs.end();
     }
 
+    _loadServer();   // atomic server record — seeds NVS on first boot, else reads it
+    face.setStatusVisible(true);
+    face.setStatusLine(gSrvHost + ":" + String(gSrvPort));   // TARGET LINE — no blind config
+
     int n = _loadCreds(ssids, passes);
     Serial.printf("[wifi] _loadCreds → n=%d\n", n);
     if (n > 0) {
@@ -550,6 +611,15 @@ void setup() {
             sWifiConnected = true;
             sConnectedAt   = millis();
             Serial.printf("[wifi] connected: %s\n", WiFi.localIP().toString().c_str());
+            // Boot health probe → cause-differentiated status + target (Iris lesson)
+            int hc = _healthCheck();
+            String tgt = gSrvHost + ":" + String(gSrvPort);
+            String st = (hc >= 200 && hc < 300) ? ("online "   + tgt)
+                      : (hc == 401 || hc == 403) ? ("denied "   + tgt)
+                      : (hc < 0)                  ? ("no route " + tgt)
+                      :                             ("away "     + tgt);
+            face.setStatusLine(st);
+            Serial.printf("[srv] health=%d -> %s\n", hc, st.c_str());
         } else {
             Serial.println("[wifi] not connected at boot — will retry in loop");
         }
@@ -564,6 +634,29 @@ void setup() {
 
     appMgr.begin(0);  // boot into Talk
     Serial.println("[rung4] setup done");
+}
+
+// LISTENING attention cue — the 12 base LEDs breathe PURPLE while she records,
+// so you can tell at 2 m when to talk. LED-only: reads face.getState() (never
+// touches servo/VAD/mic/PTT/state-machine). Reserved color contract: LISTENING =
+// purple; Si12T head-pat = PINK — the two must never read as the same colour.
+static void _listenLeds() {
+    static bool     wasListening = false;
+    static uint32_t lastMs       = 0;
+    bool listening = (face.getState() == Ph3b3Face::LISTENING);
+    if (listening) {
+        if (millis() - lastMs >= 40) {            // ~25 fps breathe
+            lastMs = millis();
+            float b = 0.6f + 0.4f * (0.5f + 0.5f * sinf(millis() / 300.0f));
+            uint8_t r = (uint8_t)(140 * b), g = (uint8_t)(20 * b), bl = (uint8_t)(255 * b);
+            for (int i = 0; i < 12; i++) M5StackChan.setRgbColor(i, r, g, bl);
+            M5StackChan.refreshRgb();
+        }
+    } else if (wasListening) {                     // edge: clear once on exit
+        for (int i = 0; i < 12; i++) M5StackChan.setRgbColor(i, 0, 0, 0);
+        M5StackChan.refreshRgb();
+    }
+    wasListening = listening;
 }
 
 // ── loop ──────────────────────────────────────────────────────────────────────
@@ -584,6 +677,7 @@ void loop() {
     crescentMenu.update();  // updates g_overlayOpen + handles mode-switch taps
     appMgr.update();        // app logic (checks g_overlayOpen before processing touches)
     face.update();          // renders face + crescent tab onto canvas, pushes to display
+    _listenLeds();          // purple attention LEDs while LISTENING (LED-only, no servo)
     appMgr.draw();          // app overlays (e.g. karaoke lyrics)
     crescentMenu.draw();    // mode panel slides over everything when open
 
