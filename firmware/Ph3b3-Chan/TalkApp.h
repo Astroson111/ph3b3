@@ -11,6 +11,12 @@ extern const char ISRG_ROOT_X1[];
 extern bool g_overlayOpen;
 extern bool g_crescentTapped;
 
+// Atomic server-target record (defined in Ph3b3-Chan.ino, seeded from secrets.h).
+extern String gSrvHost;
+extern int    gSrvPort;
+extern String gSrvUser;
+extern String gSrvPass;
+
 // ── TalkApp — full Ph3b3 voice round-trip ────────────────────────────────────
 //
 // Flow:  tap screen → LISTENING (record) → release or 5s max → THINKING
@@ -51,7 +57,7 @@ public:
         // setTimeout() takes SECONDS on WiFiClientSecure — 90s covers LLM+TTS latency.
         // setReuse(true) tells HTTPClient to preserve the socket after http.end()
         // when the server responds with Connection: keep-alive.
-        _tls.setCACert(ISRG_ROOT_X1);
+        _tls.setInsecure();          // LAN mkcert self-signed cert (Iris lesson)
         _tls.setTimeout(90);
         _http.setReuse(true);
     }
@@ -261,10 +267,8 @@ public:
 
 private:
     // ── Constants ─────────────────────────────────────────────────────────────
-    static const char* HOST;
-    static const char* USER;
-    static const char* PASS;
-    static constexpr int PORT       = 443;
+    // Server target (host/port/user/pass) now lives in the runtime NVS record
+    // gSrv* (Ph3b3-Chan.ino) — no longer compile-time statics here.
     static constexpr uint32_t SESSION_IDLE_RESET_MS = 60000;  // 60s idle resets conversation
     static constexpr uint32_t CONV_IDLE_MS          = 9000;   // 9s no valid speech → end loop
     static constexpr int      JUNK_MIN_LEN          = 2;      // transcript chars below this → noise
@@ -499,8 +503,8 @@ private:
         // Use the persistent _tls/_http pair.  _tls may already be connected
         // (between-turn reuse); if not, HTTPClient reconnects automatically.
 
-        _http.begin(_tls, HOST, PORT, "/transcribe", true);
-        _http.setAuthorization(USER, PASS);
+        _http.begin(_tls, gSrvHost.c_str(), gSrvPort, "/transcribe", true);
+        _http.setAuthorization(gSrvUser.c_str(), gSrvPass.c_str());
         _http.addHeader("Content-Type", "application/json");
         _http.addHeader("X-Ph3b3-Device", "stackchan");
         _http.setConnectTimeout(20000);
@@ -641,12 +645,12 @@ private:
     // ── /chat + streaming audio ───────────────────────────────────────────────
     String _doChatAndPlay(const String& message) {
         // Reuse the same _tls/_http that carried /transcribe — no second handshake.
-        if (!_http.begin(_tls, HOST, PORT, "/chat", true))
+        if (!_http.begin(_tls, gSrvHost.c_str(), gSrvPort, "/chat", true))
             return String("ERR: begin failed");
 
         _http.setConnectTimeout(90000);
         _http.setTimeout(120000);
-        _http.setAuthorization(USER, PASS);
+        _http.setAuthorization(gSrvUser.c_str(), gSrvPass.c_str());
         _http.addHeader("Content-Type", "application/json");
         _http.addHeader("X-Ph3b3-Device", "stackchan");
 
@@ -871,8 +875,3 @@ private:
     }
 
 };
-
-// Static member definitions
-inline const char* TalkApp::HOST = SC_PH3B3_HOST;
-inline const char* TalkApp::USER = SC_PH3B3_USER;
-inline const char* TalkApp::PASS = SC_PH3B3_PASS;
