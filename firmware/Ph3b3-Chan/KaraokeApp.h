@@ -1,7 +1,9 @@
 #pragma once
 #include "AppBase.h"
+#include "AppManager.h"
 #include <M5StackChan.h>
 extern bool g_overlayOpen;
+extern AppManager appMgr;
 #include <M5Unified.h>
 #include <SD.h>
 #include <vector>
@@ -63,6 +65,7 @@ public:
             _scanTracks();
         }
         if (_trackSel >= (int)_tracks.size()) _trackSel = 0;
+        _emptyAt = _tracks.empty() ? millis() : 0;   // arm graceful-degrade timer
 
         // Mic is deliberately NOT started here. Speaker (I2S_NUM_1) and Mic
         // (I2S_NUM_0) share BCK/WS on GPIO 34/33; running both simultaneously
@@ -78,6 +81,10 @@ public:
     }
 
     void update() override {
+        // Graceful degradation: entered with no tracks (no SD or empty /karaoke) →
+        // show the notice briefly, then hand back to the home app (idle face).
+        if (_emptyAt && millis() - _emptyAt >= 2500) { appMgr.switchTo(0); return; }
+
         if (!g_overlayOpen) {
             int16_t tx = 0, ty = 0;
             bool touching = M5StackChan.Display().getTouch(&tx, &ty);
@@ -134,6 +141,7 @@ private:
     // ── Track browser ────────────────────────────────────────────────────────
     std::vector<String> _tracks;
     int      _trackSel    = 0;
+    uint32_t _emptyAt     = 0;   // millis() when entered with no tracks (0 = have tracks)
 
     // ── Playback ────────────────────────────────────────────────────────────
     bool     _sdMounted    = false;
@@ -194,7 +202,7 @@ private:
             d.setTextDatum(middle_center);
             d.setTextSize(1);
             d.setTextColor(_sdMounted ? d.color565(160, 80, 80) : d.color565(120, 60, 60), TFT_BLACK);
-            d.drawString(_sdMounted ? "no tracks on SD" : "no SD card", W / 2, 200);
+            d.drawString("no tracks loaded", W / 2, 200);
             return;
         }
 
