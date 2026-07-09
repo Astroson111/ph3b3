@@ -580,6 +580,34 @@
     }
     .morph-gal-del:hover { color: var(--err); }
 
+    /* ── Morpheus Edit (img2img) mode ── */
+    .morph-mode-tabs { display: flex; gap: .4rem; margin-bottom: .6rem; }
+    .morph-mode-tab {
+      flex: 1; padding: .5rem .4rem; border-radius: 8px; cursor: pointer;
+      background: rgba(255,255,255,.03); color: var(--dim);
+      border: 1px solid rgba(255,255,255,.10); font-size: .85rem;
+      transition: border-color .15s, color .15s, background .15s;
+    }
+    .morph-mode-tab.active { color: var(--text); border-color: var(--purple); background: rgba(168,85,247,.12); }
+    .edit-drop {
+      border: 1px dashed rgba(255,255,255,.18); border-radius: 10px;
+      padding: 1rem; text-align: center; cursor: pointer; margin-bottom: .55rem;
+      transition: border-color .15s;
+    }
+    .edit-drop:hover, .edit-drop.dragover { border-color: var(--purple); }
+    .edit-drop-lbl { color: var(--dim); font-size: .85rem; }
+    .edit-preview { max-width: 100%; max-height: 220px; border-radius: 8px; display: block; margin: 0 auto; }
+    .edit-strength { margin: .45rem 0 .55rem; }
+    .edit-strength-head { display: flex; justify-content: space-between; font-size: .8rem; color: var(--dim); margin-bottom: .25rem; }
+    .edit-strength-val { color: var(--text); font-variant-numeric: tabular-nums; }
+    .edit-strength-range { width: 100%; accent-color: var(--purple); }
+    .edit-strength-ends { display: flex; justify-content: space-between; font-size: .7rem; color: var(--dim); margin-top: .15rem; }
+    .edit-ba { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+    .edit-ba-fig { margin: 0; text-align: center; }
+    .edit-ba-img { width: 100%; border-radius: 8px; background: rgba(255,255,255,.03); }
+    .edit-ba-fig figcaption { font-size: .72rem; color: var(--dim); margin-top: .25rem; }
+    @media (max-width: 420px) { .edit-ba { grid-template-columns: 1fr; } }
+
     /* ── Karaoke: Discover card ── */
     .kar-disc-toggle { cursor:pointer; user-select:none; }
     .kar-disc-chev { margin-left:auto; font-size:.78rem; color:var(--dim); font-style:normal;
@@ -844,6 +872,12 @@
   <!-- MORPHEUS -->
   <section id="paneMorpheus" class="pane">
 
+    <div class="morph-mode-tabs">
+      <button class="morph-mode-tab active" data-mode="gen">✦ Generate</button>
+      <button class="morph-mode-tab" data-mode="edit">✎ Edit</button>
+    </div>
+
+    <div id="morphGenMode">
     <div class="card">
       <div class="card-title">Generate</div>
       <div class="sr">
@@ -924,6 +958,77 @@
       </div>
       <div id="morphGallery" class="morph-gallery">
         <div class="morph-gal-empty">Loading…</div>
+      </div>
+    </div>
+    </div><!-- /morphGenMode -->
+
+    <div id="morphEditMode" style="display:none">
+      <div class="card">
+        <div class="card-title">Edit — img2img</div>
+        <div class="edit-drop" id="editDrop" tabindex="0" role="button" aria-label="Upload an image">
+          <input type="file" id="editFile" accept="image/png,image/jpeg,image/webp" hidden>
+          <div class="edit-drop-lbl" id="editDropLbl">🖼️&ensp;Drop an image · or Browse</div>
+          <img id="editPreview" class="edit-preview" style="display:none" alt="Upload preview">
+        </div>
+        <textarea id="editPrompt" class="morph-textarea" rows="1"
+          placeholder="Describe the edit…" autocomplete="off" autocorrect="off" autocapitalize="none"
+          spellcheck="true"></textarea>
+        <textarea id="editNegative" class="morph-textarea" rows="1"
+          placeholder="Negative — things to avoid (optional)" autocomplete="off" autocorrect="off" autocapitalize="none"
+          spellcheck="true"></textarea>
+        <div class="edit-strength">
+          <div class="edit-strength-head">
+            <span>Strength</span><span class="edit-strength-val" id="editStrengthVal">0.45</span>
+          </div>
+          <input type="range" id="editStrength" class="edit-strength-range"
+                 min="0.15" max="0.9" step="0.05" value="0.45">
+          <div class="edit-strength-ends"><span>touch-up</span><span>transform</span></div>
+        </div>
+        <details class="morph-adv">
+          <summary class="morph-adv-sum">
+            <span class="morph-adv-chev">&#9658;</span> Advanced
+          </summary>
+          <div class="morph-adv-grid">
+            <label class="morph-adv-lbl">Seed (−1 = random)
+              <input class="morph-adv-in" id="editSeed" type="number" value="-1" min="-1">
+            </label>
+          </div>
+        </details>
+        <button class="morph-gen-btn" id="editRunBtn" disabled>✎ Edit image</button>
+      </div>
+
+      <div class="card" id="editStateCard" style="display:none">
+        <div class="card-title">Edit job</div>
+        <div class="morph-state-row">
+          <svg id="editCrescent" class="morph-crescent" width="22" height="22"
+               viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <mask id="editmask">
+                <circle cx="12" cy="12" r="10" fill="white"/>
+                <circle cx="17.5" cy="9" r="8" fill="black"/>
+              </mask>
+            </defs>
+            <circle cx="12" cy="12" r="10" fill="currentColor" mask="url(#editmask)"/>
+          </svg>
+          <span id="editStatePill" class="badge morph-state-pill state-queued">Queued</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Before / After</div>
+        <div id="editOutputEmpty" class="morph-output-empty">Upload an image and hit Edit.</div>
+        <div id="editBA" class="edit-ba" style="display:none">
+          <figure class="edit-ba-fig"><img id="editBefore" class="edit-ba-img" alt="Before"><figcaption>Before</figcaption></figure>
+          <figure class="edit-ba-fig"><img id="editAfter" class="edit-ba-img" alt="After"><figcaption>After</figcaption></figure>
+        </div>
+        <div id="editDlRow" class="morph-dl-row" style="display:none">
+          <select id="editFmtSel" class="morph-dl-sel">
+            <option value="png">PNG</option>
+            <option value="jpeg">JPEG</option>
+            <option value="webp">WEBP</option>
+          </select>
+          <button id="editDlBtn" class="morph-dl-btn">&#8595; Download</button>
+        </div>
       </div>
     </div>
 
@@ -1941,6 +2046,141 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
     ?.addEventListener('click', refreshGallery);
 
   refreshGallery();
+})();
+
+// ── Morpheus mode switch (Generate | Edit) ────────────────────────────────────
+document.querySelectorAll('.morph-mode-tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.morph-mode-tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  const mode = t.dataset.mode;
+  document.getElementById('morphGenMode').style.display  = mode === 'gen'  ? '' : 'none';
+  document.getElementById('morphEditMode').style.display = mode === 'edit' ? '' : 'none';
+}));
+
+// ── Morpheus Edit (img2img) ───────────────────────────────────────────────────
+(function () {
+  const drop        = document.getElementById('editDrop');
+  const fileIn      = document.getElementById('editFile');
+  const dropLbl     = document.getElementById('editDropLbl');
+  const preview     = document.getElementById('editPreview');
+  const promptEl    = document.getElementById('editPrompt');
+  const negEl       = document.getElementById('editNegative');
+  const strengthEl  = document.getElementById('editStrength');
+  const strengthVal = document.getElementById('editStrengthVal');
+  const seedEl      = document.getElementById('editSeed');
+  const runBtn      = document.getElementById('editRunBtn');
+  const stateCard   = document.getElementById('editStateCard');
+  const statePill   = document.getElementById('editStatePill');
+  const crescent    = document.getElementById('editCrescent');
+  const outEmpty    = document.getElementById('editOutputEmpty');
+  const baEl        = document.getElementById('editBA');
+  const beforeImg   = document.getElementById('editBefore');
+  const afterImg    = document.getElementById('editAfter');
+  const dlRow       = document.getElementById('editDlRow');
+  const dlBtn       = document.getElementById('editDlBtn');
+  const fmtSel      = document.getElementById('editFmtSel');
+
+  const STATE_LABELS = {
+    queued:'Queued', evicting:'Evicting Hermes…', starting:'Starting ComfyUI…',
+    loading:'Loading SDXL…', sampling:'Sampling…', saving:'Saving…', done:'Done', error:'Error',
+  };
+  const BUSY = new Set(['queued','evicting','starting','loading','sampling','saving']);
+
+  let uploadId = null, previewURL = null, currentJobId = null, pollId = null;
+
+  strengthEl.addEventListener('input', () => {
+    strengthVal.textContent = parseFloat(strengthEl.value).toFixed(2);
+  });
+
+  function setPill(state) {
+    stateCard.style.display = '';
+    statePill.textContent = STATE_LABELS[state] || state;
+    statePill.className = 'badge morph-state-pill state-' + state;
+    crescent.className = 'morph-crescent' + (BUSY.has(state) ? ' spinning' : state === 'done' ? ' active' : '');
+  }
+
+  async function handleFile(file) {
+    if (!file) return;
+    if (previewURL) URL.revokeObjectURL(previewURL);
+    previewURL = URL.createObjectURL(file);
+    preview.src = previewURL; preview.style.display = 'block';
+    dropLbl.textContent = 'Uploading…'; dropLbl.style.display = 'block';
+    runBtn.disabled = true; uploadId = null;
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const res = await fetch('/image/edit/upload', {method: 'POST', body: fd});
+      if (!res.ok) {
+        dropLbl.textContent = `Upload rejected (${res.status}) — PNG/JPEG/WebP, ≤15 MB`;
+        return;
+      }
+      uploadId = (await res.json()).upload_id;
+      dropLbl.style.display = 'none';
+      runBtn.disabled = false;
+    } catch (e) {
+      dropLbl.textContent = 'Upload error — check connection';
+    }
+  }
+
+  drop.addEventListener('click', () => fileIn.click());
+  drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileIn.click(); } });
+  fileIn.addEventListener('change', () => handleFile(fileIn.files[0]));
+  drop.addEventListener('dragover',  e => { e.preventDefault(); drop.classList.add('dragover'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
+  drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('dragover'); handleFile(e.dataTransfer.files[0]); });
+
+  promptEl.addEventListener('input', function () {
+    this.style.height = 'auto'; this.style.height = this.scrollHeight + 'px';
+  });
+
+  function stopPoll() { if (pollId) { clearInterval(pollId); pollId = null; } }
+
+  async function poll(jobId) {
+    try {
+      const data = await fetch('/image/status/' + jobId).then(r => r.json());
+      setPill(data.state);
+      if (data.state === 'done') {
+        stopPoll();
+        outEmpty.style.display = 'none';
+        baEl.style.display = 'grid';
+        beforeImg.src = previewURL;
+        afterImg.src = '/image/file/' + jobId + '?t=' + Date.now();
+        currentJobId = jobId;
+        dlRow.style.display = '';
+        runBtn.disabled = false;
+      } else if (data.state === 'error') {
+        stopPoll(); runBtn.disabled = false;
+      }
+    } catch (e) { console.warn('[edit] poll error:', e); }
+  }
+
+  async function run() {
+    if (!uploadId) { drop.focus(); return; }
+    const prompt = promptEl.value.trim();
+    if (!prompt) { promptEl.focus(); return; }
+    const payload = {
+      upload_id: uploadId,
+      prompt,
+      negative_prompt: negEl.value.trim(),
+      strength: parseFloat(strengthEl.value),
+      seed: seedEl.value.trim() !== '' ? parseInt(seedEl.value) : -1,
+    };
+    runBtn.disabled = true; setPill('queued');
+    try {
+      const res = await fetch('/image/edit/run', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) { setPill('error'); runBtn.disabled = false; return; }
+      const jobId = (await res.json()).job_id;
+      stateCard.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      stopPoll(); pollId = setInterval(() => poll(jobId), 800);
+    } catch (e) { console.warn('[edit] run error:', e); setPill('error'); runBtn.disabled = false; }
+  }
+
+  runBtn.addEventListener('click', run);
+  dlBtn.addEventListener('click', () => {
+    if (currentJobId) window.location.href = `/image/file/${currentJobId}?download=1&format=${fmtSel.value}`;
+  });
 })();
 
 // ── Android nav-bar safe-area fallback ────────────────────────────────────────
