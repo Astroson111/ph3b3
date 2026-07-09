@@ -71,7 +71,7 @@ warning). If the device later can't reach the server, `wsl --shutdown` and reope
 ### 3. Clone + Python environment (inside WSL)
 ```bash
 git clone <repo-url> ph3b3 && cd ph3b3
-git checkout athena-solo            # the solo-on-Windows branch
+git checkout ph3b3-light            # the solo-on-Windows branch
 sudo apt update && sudo apt install -y ffmpeg     # whisper.cpp decodes audio via ffmpeg
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt         # includes pywhispercpp (prebuilt wheel, no compiler)
