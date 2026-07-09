@@ -1745,6 +1745,29 @@ _EDIT_MAX_BYTES   = 15 * 1024 * 1024        # 15 MB
 _EDIT_MAX_DIM     = 4096                     # long-edge cap; larger inputs are downscaled
 _EDIT_ALLOWED_FMT = {"PNG", "JPEG", "WEBP"}
 _EDIT_SCRATCH_TTL = 3600                     # 1 hour
+_EDIT_MAX_PENDING = 3                         # concurrent pending edit jobs per session
+_EDIT_PENDING_STATES = frozenset(
+    {"queued", "evicting", "starting", "loading", "sampling"})
+
+
+def _edit_session_key(request: Request) -> str:
+    """Stable per-caller key for edit rate-limiting: panel session cookie if the
+    caller logged in via /login, else the Basic-auth user, else the client host."""
+    tok = request.cookies.get(_SESSION_COOKIE, "")
+    if tok and tok in _sessions:
+        return "sess:" + tok
+    if request.headers.get("Authorization", "").startswith("Basic "):
+        return "basic:" + AUTH_USER
+    return "host:" + ((request.client.host if request.client else "") or "?")
+
+
+def _edit_pending_count(session_key: str) -> int:
+    """Count this session's edit jobs still in flight (not done/error)."""
+    return sum(
+        1 for j in morpheus.jobs.values()
+        if j.get("kind") == "edit" and j.get("session") == session_key
+        and j.get("state") in _EDIT_PENDING_STATES
+    )
 
 
 def _edit_scratch_sweep() -> int:
@@ -1930,7 +1953,16 @@ async def image_edit_run(request: Request, body: dict, background_tasks: Backgro
         "image_path": str(src),
         "upload_id": upload_id,
     }
+    # ── Rate limit — cap concurrent pending edit jobs per session ──────────────
+    sess_key = _edit_session_key(request)
+    if _edit_pending_count(sess_key) >= _EDIT_MAX_PENDING:
+        raise HTTPException(
+            429,
+            f"too many pending edit jobs (max {_EDIT_MAX_PENDING}); wait for one to finish",
+        )
+
     job_id = morpheus.create_job()
+    morpheus.jobs[job_id].update(kind="edit", session=sess_key)
     background_tasks.add_task(morpheus.run_edit, job_id, params)
     return {"job_id": job_id}
 
