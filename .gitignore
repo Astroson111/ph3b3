@@ -4,10 +4,12 @@ ph3b3_data/
 .venv/
 __pycache__/
 *.pyc
-.env
+.env*
+!.env.example
 .cache
 .claude/
 firmware/.pio/
+**/build/
 **/secrets.h
 stack-chan/
 *.wav
