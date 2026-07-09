@@ -1872,6 +1872,69 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
     return {"job_id": job_id}
 
 
+@app.post("/image/edit/run")
+async def image_edit_run(request: Request, body: dict, background_tasks: BackgroundTasks):
+    # upload_id is used to build a path — accept ONLY the 32-hex UUID we minted,
+    # so it can never traverse out of the scratch dir.
+    upload_id = (body.get("upload_id") or "").strip()
+    if not (len(upload_id) == 32 and all(c in "0123456789abcdef" for c in upload_id)):
+        raise HTTPException(400, "valid upload_id is required")
+    src = EDIT_SCRATCH / f"{upload_id}.png"
+    if not src.exists():
+        raise HTTPException(404, "upload not found or expired — re-upload the image")
+
+    positive = (body.get("prompt") or body.get("positive") or "").strip()
+    if not positive:
+        raise HTTPException(400, "prompt is required")
+    negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
+
+    # ── FLOOR — hardcoded, first, pre-lock, BOTH fields (identical to txt2img) ──
+    for field, which in ((positive, "positive"), (negative, "negative")):
+        if not field:
+            continue
+        floor_cat = morpheus.floor_check(field)
+        if floor_cat:
+            log.warning("[safety] edit floor-blocked (%s) — category: %s", which, floor_cat)
+            raise HTTPException(403, detail="Content policy: prompt not permitted")
+
+    # ── Localhost interlock — permissive collapses to strict for non-local ─────
+    forced_denylist = None
+    if morpheus.ACTIVE_PROFILE == "permissive":
+        client_host = (request.client.host if request.client else None) or ""
+        if client_host not in _MORPHEUS_LOCAL_ADDRS:
+            forced_denylist = morpheus.STRICT_DENYLIST
+            log.warning("[safety] edit permissive+non-local from %r — forcing strict", client_host)
+
+    # ── Profile check — denylist applies to the negative too ───────────────────
+    for field, which in ((positive, "positive"), (negative, "negative")):
+        if not field:
+            continue
+        if not morpheus.profile_check(field, denylist=forced_denylist):
+            label = morpheus.ACTIVE_PROFILE + (" [forced strict by interlock]" if forced_denylist else "")
+            log.warning("[safety] edit profile-blocked (%s) — profile: %s", which, label)
+            raise HTTPException(403, detail="Content policy: prompt not permitted")
+
+    try:
+        strength = float(body.get("strength", 0.45))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "strength must be a number")
+    strength = max(morpheus.EDIT_STRENGTH_MIN, min(morpheus.EDIT_STRENGTH_MAX, strength))  # clamp
+
+    params = {
+        "positive":  positive,
+        "negative":  negative,
+        "strength":  strength,
+        "seed":      int(body.get("seed",  -1)),
+        "steps":     int(body.get("steps", morpheus.SDXL_STEPS)),
+        "ckpt_name": body.get("ckpt_name", morpheus.SDXL_CKPT),
+        "image_path": str(src),
+        "upload_id": upload_id,
+    }
+    job_id = morpheus.create_job()
+    background_tasks.add_task(morpheus.run_edit, job_id, params)
+    return {"job_id": job_id}
+
+
 @app.get("/image/status/{job_id}")
 async def image_status(job_id: str):
     if job_id not in morpheus.jobs:
