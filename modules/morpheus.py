@@ -539,6 +539,143 @@ async def run_generation(job_id: str, params: dict) -> None:
                 await comfy_free(http)   # TRAP #2 — always, even on error
 
 
+# ── img2img (Edit Mode) — same checkpoint + sampler family as txt2img ─────────
+# Differs from _SDXL_TEMPLATE only in the latent source: LoadImage → VAEEncode
+# feeds an encoded real image into KSampler, and denoise = strength (how far the
+# edit travels from the source). Everything else (cfg/sampler/scheduler) matches.
+_SDXL_IMG2IMG_TEMPLATE: dict = {
+    "4":  {"class_type": "CheckpointLoaderSimple",
+           "inputs": {"ckpt_name": None}},
+    "6":  {"class_type": "CLIPTextEncode",
+           "inputs": {"text": None, "clip": ["4", 1]}},
+    "7":  {"class_type": "CLIPTextEncode",
+           "inputs": {"text": None, "clip": ["4", 1]}},
+    "10": {"class_type": "LoadImage",
+           "inputs": {"image": None}},
+    "11": {"class_type": "VAEEncode",
+           "inputs": {"pixels": ["10", 0], "vae": ["4", 2]}},
+    "3":  {"class_type": "KSampler",
+           "inputs": {"seed": None, "steps": None, "cfg": 7.0,
+                      "sampler_name": "dpmpp_2m", "scheduler": "karras",
+                      "denoise": None,
+                      "model":        ["4", 0],
+                      "positive":     ["6", 0],
+                      "negative":     ["7", 0],
+                      "latent_image": ["11", 0]}},
+    "8":  {"class_type": "VAEDecode",
+           "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+    "9":  {"class_type": "SaveImage",
+           "inputs": {"filename_prefix": "ph3b3_edit", "images": ["8", 0]}},
+}
+
+EDIT_STRENGTH_MIN = 0.15
+EDIT_STRENGTH_MAX = 0.9
+
+
+def _prep_edit_image(src: Path, job_id: str) -> tuple[Path, int, int]:
+    """Scale the source to SDXL-native long-edge 1024, dims rounded to /8,
+    preserving aspect. Returns (run_copy_path, width, height)."""
+    img = Image.open(src).convert("RGB")
+    w, h = img.size
+    scale = 1024 / max(w, h)
+    nw = max(8, round(w * scale / 8) * 8)
+    nh = max(8, round(h * scale / 8) * 8)
+    if (nw, nh) != (w, h):
+        img = img.resize((nw, nh), Image.LANCZOS)
+    out = src.parent / f"{job_id}_run.png"
+    img.save(out, format="PNG")
+    return out, nw, nh
+
+
+async def comfy_upload_image(http: httpx.AsyncClient, path: Path) -> str:
+    """Upload a prepared image into ComfyUI's input dir; return its LoadImage ref."""
+    data = Path(path).read_bytes()
+    r = (await http.post(
+        f"{COMFY_HOST}/upload/image",
+        files={"image": (Path(path).name, data, "image/png")},
+        data={"overwrite": "true"},
+        timeout=60.0,
+    )).json()
+    name = r["name"]
+    sub = r.get("subfolder", "") or ""
+    return f"{sub}/{name}" if sub else name
+
+
+def build_edit_workflow(params: dict) -> dict:
+    """Fill the img2img template. Resolves seed=-1, clamps strength→denoise, and
+    writes both back into params for indexing. `comfy_image` must already be set."""
+    wf = copy.deepcopy(_SDXL_IMG2IMG_TEMPLATE)
+    seed = params.get("seed", -1)
+    if seed < 0:
+        seed = random.randint(0, 2**32 - 1)
+        params["seed"] = seed
+    neg = params.get("negative") or SDXL_NEG
+    params["negative"] = neg
+    strength = float(params.get("strength", 0.45))
+    strength = max(EDIT_STRENGTH_MIN, min(EDIT_STRENGTH_MAX, strength))  # defense-in-depth
+    params["strength"] = strength
+    wf["4"]["inputs"]["ckpt_name"] = params.get("ckpt_name", SDXL_CKPT)
+    wf["6"]["inputs"]["text"]      = params.get("positive", "")
+    wf["7"]["inputs"]["text"]      = neg
+    wf["10"]["inputs"]["image"]    = params["comfy_image"]
+    wf["3"]["inputs"]["seed"]      = seed
+    wf["3"]["inputs"]["steps"]     = params.get("steps", SDXL_STEPS)
+    wf["3"]["inputs"]["denoise"]   = strength
+    return wf
+
+
+async def run_edit(job_id: str, params: dict) -> None:
+    """img2img GPU-swap lifecycle — mirrors run_generation exactly, reusing the
+    same lock/evict/ensure/queue/wait/save/free helpers. Adds: resize→upload the
+    source before queuing, and delete scratch on completion."""
+    async with gpu_lock:
+        async with httpx.AsyncClient() as http:
+            run_img: Path | None = None
+            try:
+                jobs[job_id]["state"] = "evicting"
+                await evict_hermes(http)
+
+                jobs[job_id]["state"] = "starting"
+                await ensure_comfy_up(http)
+
+                jobs[job_id]["state"] = "loading"
+                run_img, nw, nh = await asyncio.to_thread(
+                    _prep_edit_image, Path(params["image_path"]), job_id)
+                params["width"], params["height"] = nw, nh
+                params["comfy_image"] = await comfy_upload_image(http, run_img)
+                wf = build_edit_workflow(params)   # resolves seed/strength in-place
+                prompt_id = await comfy_queue(http, wf)
+
+                jobs[job_id]["state"] = "sampling"
+                outputs = await comfy_wait(http, prompt_id)
+
+                jobs[job_id]["state"] = "saving"
+                path = await fetch_and_save(http, outputs, job_id)
+                await asyncio.to_thread(_db_insert, job_id, params, path)
+                jobs[job_id].update(
+                    state="done",
+                    image_url=f"/image/file/{job_id}",
+                    seed=params.get("seed"),
+                )
+                log.info("Morpheus edit: job %s done — %s (denoise=%.2f)",
+                         job_id, path, params.get("strength", 0.0))
+
+            except Exception as exc:
+                log.error("Morpheus edit: job %s failed: %s", job_id, exc)
+                jobs[job_id].update(state="error", error=str(exc))
+
+            finally:
+                await comfy_free(http)   # TRAP #2 — always
+                # Delete only the transient per-job resized copy. Keep the source
+                # upload so the SAME image can be re-edited at other strengths
+                # (the slider workflow); the source expires via the TTL janitor.
+                try:
+                    if run_img:
+                        run_img.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+
 # ── Module-level init: create dirs + DB schema on import ─────────────
 _db_init()
 log.info("Morpheus initialised — IMAGE_DIR=%s  DB=%s", IMAGE_DIR, DB_PATH)
