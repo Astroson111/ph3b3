@@ -18,6 +18,9 @@ import httpx
 import getpass
 import shutil
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+import uuid
+from io import BytesIO
+from PIL import Image  # Morpheus edit-mode upload validation / re-encode
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -152,7 +155,18 @@ async def lifespan(app):
             tts.speak(reminder_msg, blocking=False)
     threading.Thread(target=_greet, daemon=True).start()
     mnemosyne.init(os.getenv("JAMENDO_CLIENT_ID", ""))
+
+    async def _edit_scratch_janitor():
+        # Bound edit-mode scratch to the TTL even when no new uploads arrive.
+        while True:
+            await asyncio.sleep(_EDIT_SCRATCH_TTL)
+            n = await asyncio.to_thread(_edit_scratch_sweep)
+            if n:
+                log.info(f"[edit] scratch janitor removed {n} stale upload(s)")
+    _janitor = asyncio.create_task(_edit_scratch_janitor())
+
     yield
+    _janitor.cancel()
     if _ec_mod._session and _ec_mod._session.is_running():
         _ec_mod.tool_stop_evening_capture()
 
@@ -1720,6 +1734,108 @@ async def index():
 _MORPHEUS_LOCAL_ADDRS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 # ── Morpheus image generation ─────────────────────────────────────────
+# ── Morpheus Edit Mode (img2img) — Phase 1: upload + validation ──────────────
+# Uploads are validated by DECODE (magic-byte equivalent — never by extension or
+# client MIME), re-encoded through Pillow to a clean RGB PNG (strips EXIF and
+# neutralizes malformed-file tricks), and staged in an out-of-repo scratch dir
+# (~/ph3b3_data/edit_scratch/ — ph3b3_data/ is gitignored and outside the repo).
+# The original upload bytes never reach ComfyUI.
+EDIT_SCRATCH      = Path.home() / "ph3b3_data" / "edit_scratch"
+_EDIT_MAX_BYTES   = 15 * 1024 * 1024        # 15 MB
+_EDIT_MAX_DIM     = 4096                     # long-edge cap; larger inputs are downscaled
+_EDIT_ALLOWED_FMT = {"PNG", "JPEG", "WEBP"}
+_EDIT_SCRATCH_TTL = 3600                     # 1 hour
+_EDIT_MAX_PENDING = 3                         # concurrent pending edit jobs per session
+_EDIT_PENDING_STATES = frozenset(
+    {"queued", "evicting", "starting", "loading", "sampling"})
+
+
+def _edit_session_key(request: Request) -> str:
+    """Stable per-caller key for edit rate-limiting: panel session cookie if the
+    caller logged in via /login, else the Basic-auth user, else the client host."""
+    tok = request.cookies.get(_SESSION_COOKIE, "")
+    if tok and tok in _sessions:
+        return "sess:" + tok
+    if request.headers.get("Authorization", "").startswith("Basic "):
+        return "basic:" + AUTH_USER
+    return "host:" + ((request.client.host if request.client else "") or "?")
+
+
+def _edit_pending_count(session_key: str) -> int:
+    """Count this session's edit jobs still in flight (not done/error)."""
+    return sum(
+        1 for j in morpheus.jobs.values()
+        if j.get("kind") == "edit" and j.get("session") == session_key
+        and j.get("state") in _EDIT_PENDING_STATES
+    )
+
+
+def _edit_scratch_sweep() -> int:
+    """Delete scratch uploads older than the TTL. Returns count removed."""
+    if not EDIT_SCRATCH.exists():
+        return 0
+    cutoff = time.time() - _EDIT_SCRATCH_TTL
+    removed = 0
+    for p in EDIT_SCRATCH.glob("*.png"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink(missing_ok=True)
+                removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+@app.post("/image/edit/upload")
+async def edit_upload(file: UploadFile = File(...)):
+    """Validate an image for img2img editing and stage a clean copy.
+
+    Returns {upload_id, width, height}. Auth is enforced by the global
+    session/basic-auth middleware — no anonymous upload surface.
+    """
+    _edit_scratch_sweep()  # opportunistic TTL cleanup
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty upload")
+    if len(raw) > _EDIT_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file too large: {len(raw)} bytes (max {_EDIT_MAX_BYTES})",
+        )
+
+    # Validate by structural decode — extension and client MIME are never trusted.
+    try:
+        Image.open(BytesIO(raw)).verify()
+    except Exception:
+        raise HTTPException(status_code=400, detail="not a decodable image")
+
+    # verify() consumes the object; re-open to read format and pixels.
+    try:
+        img = Image.open(BytesIO(raw))
+        fmt = (img.format or "").upper()
+        if fmt not in _EDIT_ALLOWED_FMT:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unsupported format {fmt or 'unknown'}; allowed: PNG, JPEG, WebP",
+            )
+        img = img.convert("RGB")   # drops alpha/palette + EXIF; forces full decode
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="image could not be decoded")
+
+    # Downscale oversized inputs, preserving aspect (long edge <= _EDIT_MAX_DIM).
+    if img.width > _EDIT_MAX_DIM or img.height > _EDIT_MAX_DIM:
+        img.thumbnail((_EDIT_MAX_DIM, _EDIT_MAX_DIM), Image.LANCZOS)
+
+    EDIT_SCRATCH.mkdir(parents=True, exist_ok=True)
+    upload_id = uuid.uuid4().hex
+    out_path = EDIT_SCRATCH / f"{upload_id}.png"
+    img.save(out_path, format="PNG")   # clean RGB PNG; no EXIF carried over
+    log.info(f"[edit] upload {upload_id} accepted: {img.width}x{img.height} (src fmt {fmt})")
+    return {"upload_id": upload_id, "width": img.width, "height": img.height}
+
+
 @app.post("/image/generate")
 async def image_generate(request: Request, body: dict, background_tasks: BackgroundTasks):
     positive = body.get("positive", "").strip()
@@ -1776,6 +1892,78 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
     }
     job_id = morpheus.create_job()
     background_tasks.add_task(morpheus.run_generation, job_id, params)
+    return {"job_id": job_id}
+
+
+@app.post("/image/edit/run")
+async def image_edit_run(request: Request, body: dict, background_tasks: BackgroundTasks):
+    # upload_id is used to build a path — accept ONLY the 32-hex UUID we minted,
+    # so it can never traverse out of the scratch dir.
+    upload_id = (body.get("upload_id") or "").strip()
+    if not (len(upload_id) == 32 and all(c in "0123456789abcdef" for c in upload_id)):
+        raise HTTPException(400, "valid upload_id is required")
+    src = EDIT_SCRATCH / f"{upload_id}.png"
+    if not src.exists():
+        raise HTTPException(404, "upload not found or expired — re-upload the image")
+
+    positive = (body.get("prompt") or body.get("positive") or "").strip()
+    if not positive:
+        raise HTTPException(400, "prompt is required")
+    negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
+
+    # ── FLOOR — hardcoded, first, pre-lock, BOTH fields (identical to txt2img) ──
+    for field, which in ((positive, "positive"), (negative, "negative")):
+        if not field:
+            continue
+        floor_cat = morpheus.floor_check(field)
+        if floor_cat:
+            log.warning("[safety] edit floor-blocked (%s) — category: %s", which, floor_cat)
+            raise HTTPException(403, detail="Content policy: prompt not permitted")
+
+    # ── Localhost interlock — permissive collapses to strict for non-local ─────
+    forced_denylist = None
+    if morpheus.ACTIVE_PROFILE == "permissive":
+        client_host = (request.client.host if request.client else None) or ""
+        if client_host not in _MORPHEUS_LOCAL_ADDRS:
+            forced_denylist = morpheus.STRICT_DENYLIST
+            log.warning("[safety] edit permissive+non-local from %r — forcing strict", client_host)
+
+    # ── Profile check — denylist applies to the negative too ───────────────────
+    for field, which in ((positive, "positive"), (negative, "negative")):
+        if not field:
+            continue
+        if not morpheus.profile_check(field, denylist=forced_denylist):
+            label = morpheus.ACTIVE_PROFILE + (" [forced strict by interlock]" if forced_denylist else "")
+            log.warning("[safety] edit profile-blocked (%s) — profile: %s", which, label)
+            raise HTTPException(403, detail="Content policy: prompt not permitted")
+
+    try:
+        strength = float(body.get("strength", 0.45))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "strength must be a number")
+    strength = max(morpheus.EDIT_STRENGTH_MIN, min(morpheus.EDIT_STRENGTH_MAX, strength))  # clamp
+
+    params = {
+        "positive":  positive,
+        "negative":  negative,
+        "strength":  strength,
+        "seed":      int(body.get("seed",  -1)),
+        "steps":     int(body.get("steps", morpheus.SDXL_STEPS)),
+        "ckpt_name": body.get("ckpt_name", morpheus.SDXL_CKPT),
+        "image_path": str(src),
+        "upload_id": upload_id,
+    }
+    # ── Rate limit — cap concurrent pending edit jobs per session ──────────────
+    sess_key = _edit_session_key(request)
+    if _edit_pending_count(sess_key) >= _EDIT_MAX_PENDING:
+        raise HTTPException(
+            429,
+            f"too many pending edit jobs (max {_EDIT_MAX_PENDING}); wait for one to finish",
+        )
+
+    job_id = morpheus.create_job()
+    morpheus.jobs[job_id].update(kind="edit", session=sess_key)
+    background_tasks.add_task(morpheus.run_edit, job_id, params)
     return {"job_id": job_id}
 
 
