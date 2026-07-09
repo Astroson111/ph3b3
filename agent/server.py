@@ -133,6 +133,7 @@ from vision_stream_module import VisionStreamModule
 from screenshot_module import ScreenshotModule
 from recipes import RecipeStore
 import morpheus
+from triage import triage_gate   # clarification guard before main inference
 
 @asynccontextmanager
 async def lifespan(app):
@@ -836,12 +837,33 @@ async def skills_log():
             pass
     return {"entries": entries, "total": len(lines)}
 
+def _triage_context(prior_messages) -> str:
+    """Prior conversation turns (excluding the persona/system prompt) as plain text."""
+    turns = [m for m in prior_messages if m.get("role") in ("user", "assistant")]
+    return "\n".join(f"{m['role']}: {m['content']}" for m in turns[-8:])
+
+
 @app.post("/chat")
 async def chat_endpoint(body: dict, request: Request):
     session = get_session(body.get("session_id","default"))
     user_msg = body.get("message","")
     if "soul" in user_msg.lower():
         tts.soul_line()
+
+    # ── Triage gate — clarification guard, general chat path, PRE-inference ────
+    # Decide if the request is answerable from context/knowledge/tools before
+    # committing to a full inference; on a confident "no", ask instead of
+    # confabulating. Fails open on any error (see modules/triage.py). Never
+    # touches Morpheus gpu_lock; Hermes-resident-only (no reload trigger).
+    _triage = await triage_gate(user_msg, _triage_context(session.messages()))
+    if not _triage.answerable:
+        _q = _triage.question or "I don't have enough to go on yet — can you give me a bit more detail?"
+        log.info("TRIAGE_HOLD — missing=%s", _triage.missing or [])
+        session.add("user", user_msg)
+        session.add("assistant", _q)
+        _audio = await asyncio.to_thread(tts.synthesize_to_b64, _q)
+        return {"response": _q, "audio": _audio}
+
     session.add("user", user_msg)
 
     messages = session.messages()
