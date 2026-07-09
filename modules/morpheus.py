@@ -117,6 +117,23 @@ _ALL_FLOOR_TERMS: frozenset[str] = (
     _FLOOR_MINOR | _FLOOR_SEXUAL | _FLOOR_CRIMINAL | _FLOOR_NONCONSENSUAL
 )
 
+# ── Whole-word floor matching ────────────────────────────────────────────────
+# Floor terms match on a LEADING word boundary (\bterm), not as a raw substring.
+# This still catches inflections/plurals ("rape"→raped/rapes, "nude"→nudes) so no
+# real content slips the floor, while killing substring false positives where a
+# term hides *inside* an innocent word ("rape" in "d-rape-d"/"grape", "sex" in
+# "Sus-sex"/"Es-sex"). Trailing boundary is intentionally omitted (safety bias:
+# a suffixed real term must still fire; over-matching a word that STARTS with a
+# term — e.g. "sextant" — is an accepted, rare cost of never weakening the floor).
+def _floor_re(terms: frozenset[str]):
+    alts = "|".join(re.escape(t) for t in sorted(terms, key=len, reverse=True))
+    return re.compile(r"\b(?:" + alts + r")")
+
+_RE_MINOR         = _floor_re(_FLOOR_MINOR)
+_RE_SEXUAL        = _floor_re(_FLOOR_SEXUAL)
+_RE_CRIMINAL      = _floor_re(_FLOOR_CRIMINAL)
+_RE_NONCONSENSUAL = _floor_re(_FLOOR_NONCONSENSUAL)
+
 # Name-shaped bigram: proxy for named individuals (First Last).
 # IGNORECASE: elon musk / Elon Musk / ELON MUSK all match the structure.
 # Signal fires ONLY when paired with a compromising-context term (AND-gate in
@@ -149,20 +166,20 @@ def floor_check(prompt: str) -> str | None:
     The returned string is for internal logging only — never expose to callers."""
     norm = _normalize(prompt)
 
-    has_sex    = any(t in norm for t in _FLOOR_SEXUAL)
-    has_minor  = any(t in norm for t in _FLOOR_MINOR)
+    has_sex    = bool(_RE_SEXUAL.search(norm))
+    has_minor  = bool(_RE_MINOR.search(norm))
 
     # Category 1: minor + sexual/suggestive
     if has_minor and has_sex:
         return "minor-sexual"
 
     # Category 5: bestiality / non-consensual (standalone — no second signal needed)
-    if any(t in norm for t in _FLOOR_NONCONSENSUAL):
+    if _RE_NONCONSENSUAL.search(norm):
         return "nonconsensual"
 
     # Categories 2/3/4: two-signal — real-person reference + compromising context.
     # Compromising = sexual (cats 2/3) OR criminal/defamatory (cat 4).
-    has_criminal    = any(t in norm for t in _FLOOR_CRIMINAL)
+    has_criminal    = bool(_RE_CRIMINAL.search(norm))
     has_compromising = has_sex or has_criminal
     if has_compromising and _person_signal(prompt):
         return "real-person-compromising"
