@@ -7,6 +7,8 @@
 
 ---
 
+If you ever see this darlin', I got her.
+
 **A fully local AI assistant. No cloud. No data centers. Built in a basement in Pennsylvania.**
 
 Ph3b3 (*Phoebe*) runs entirely on hardware you own. No cloud, no API calls leaving your network, no telemetry. You talk to her — by text or by voice — and every word stays inside your walls. The intelligence is *present*, not rented.
