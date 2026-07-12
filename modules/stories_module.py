@@ -1,4 +1,5 @@
 import json
+import re
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -77,8 +78,39 @@ class StoriesModule:
                 who = s.get("from", s.get("title", "unknown"))
                 results.append(f"[{s['date'][:10]}] {who}: {s.get('story','')}")
         if results:
-            return "\n\n".join(results[-5:])
+            hint = ("[Delivery hint: If the user asked you to TELL or READ a story, recite it "
+                    "IN FULL below — word for word, all the way to the end — and you may open "
+                    "with one or two sentences of your own as a lead-in or transition. Do NOT "
+                    "summarize, paraphrase, or shorten the body. If they only asked which "
+                    "stories you know, a brief summary is fine.]")
+            return hint + "\n\n" + "\n\n".join(results[-5:])
         return "No stories found."
+
+    _TELL_VERBS = ("tell", "read", "recite", "narrate", "story of", "tale of", "hear the")
+
+    def tellable(self, message):
+        """If the message asks to TELL/READ a saved story by title, return (title, full_text).
+
+        Used to recite a saved story verbatim instead of letting inference summarise it.
+        Requires a telling verb AND a title match (majority of the title's distinctive
+        words, len>=4, present in the message), so ordinary chat never triggers it.
+        """
+        if not message:
+            return None
+        m = message.lower()
+        if not any(v in m for v in self._TELL_VERBS):
+            return None
+        all_stories = (self.stories["ph3b3_stories"] +
+                       self.stories["told_to_ph3b3"] +
+                       self.stories["stream_stories"])
+        for s in all_stories:
+            title = s.get("title") or ""
+            words = re.findall(r"[a-z]{4,}", title.lower())
+            if words and sum(1 for w in words if w in m) >= max(1, (len(words) + 1) // 2):
+                story = s.get("story", "")
+                if story:
+                    return (title, story)
+        return None
 
     def summary(self):
         return (
