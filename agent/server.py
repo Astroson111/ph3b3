@@ -136,6 +136,16 @@ from recipes import RecipeStore
 import morpheus
 from triage import triage_gate   # clarification guard before main inference
 
+# ── Dio state telemetry (UDP) ────────────────────────────────────────────────
+# Dio's serial is dead, so its state machine is invisible on-device. It fires
+# fire-and-forget UDP pings on each transition; log them here so the flow
+# (idle→armed→capturing→endpointed→sent→resp len=N→playing→idle) is greppable
+# in the journal (grep DIO_STATE). Temporary diagnostic instrumentation.
+class _DioStateProtocol(asyncio.DatagramProtocol):
+    def datagram_received(self, data, addr):
+        log.info("DIO_STATE %s (from %s)", data.decode("utf-8", "replace").strip(), addr[0])
+
+
 @asynccontextmanager
 async def lifespan(app):
     memory.confirm_boot()
@@ -167,7 +177,18 @@ async def lifespan(app):
                 log.info(f"[edit] scratch janitor removed {n} stale upload(s)")
     _janitor = asyncio.create_task(_edit_scratch_janitor())
 
+    _dio_state_transport = None
+    try:
+        _loop = asyncio.get_running_loop()
+        _dio_state_transport, _ = await _loop.create_datagram_endpoint(
+            _DioStateProtocol, local_addr=("0.0.0.0", 7332))
+        log.info("Dio state telemetry listening on udp/7332")
+    except Exception as e:
+        log.warning("Dio state listener failed to bind udp/7332: %s", e)
+
     yield
+    if _dio_state_transport is not None:
+        _dio_state_transport.close()
     _janitor.cancel()
     if _ec_mod._session and _ec_mod._session.is_running():
         _ec_mod.tool_stop_evening_capture()
@@ -992,11 +1013,24 @@ async def transcribe_audio(body: dict):
     if not audio_b64:
         return {"text": "", "error": "no audio provided"}
     audio_bytes = base64.b64decode(audio_b64)
+    # [DBG-MIC] characterise captured audio: mic-dead (near-zero level) vs STT-mishear (real level, wrong text)
+    try:
+        import struct as _st
+        _pcm = audio_bytes[44:]
+        _n = len(_pcm) // 2
+        if _n:
+            _s = _st.unpack("<%dh" % _n, _pcm[:_n * 2])
+            _peak = max(abs(x) for x in _s)
+            _rms = (sum(x * x for x in _s) / _n) ** 0.5
+            log.warning("[DBG-MIC] in %d B ~%.1fs peak=%d/32767 rms=%.0f", len(audio_bytes), _n / 16000.0, _peak, _rms)
+    except Exception as _e:
+        log.warning("[DBG-MIC] level calc failed: %s", _e)
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         f.write(audio_bytes)
         tmp_path = f.name
     try:
         result = stt.transcribe_file(tmp_path)
+        log.warning("[DBG-MIC] transcript=%r err=%s", (result.get("text") or "")[:80], result.get("error"))
         return {"text": result.get("text") or "", "error": result.get("error")}
     finally:
         try:
