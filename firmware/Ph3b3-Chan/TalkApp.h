@@ -135,6 +135,17 @@ public:
                 Serial.printf("[await] floor=%.4f\n", _awaitFloor);
             }
 
+            // Any speech resets the dead-air session timer.
+            if (_awaitFloor > 0.0f && rms > _awaitFloor * ONSET_THRESH) _deadAirStartMs = now;
+
+            // Dead air: DEAD_AIR_MS of true silence in chat mode (no TTS runs in
+            // AWAITING; speech resets above) → end chat mode and go dormant.
+            if (_awaitFloor > 0.0f && millis() - _deadAirStartMs >= DEAD_AIR_MS) {
+                Serial.println("[chat] dead air — ending chat mode (dormant)");
+                _exitChatMode();
+                break;
+            }
+
             // Speech onset: loud enough for long enough → start recording
             if (_awaitFloor > 0.0f && rms > _awaitFloor * ONSET_THRESH) {
                 if (_awaitOnsetMs == 0) _awaitOnsetMs = now;
@@ -271,6 +282,8 @@ private:
     // gSrv* (Ph3b3-Chan.ino) — no longer compile-time statics here.
     static constexpr uint32_t SESSION_IDLE_RESET_MS = 60000;  // 60s idle resets conversation
     static constexpr uint32_t CONV_IDLE_MS          = 9000;   // 9s no valid speech → end loop
+    static constexpr uint32_t DEAD_AIR_MS           = 10000;  // 10s true silence in chat mode → exit to dormant (NVS candidate, like spk_vol)
+    static constexpr uint32_t PLAYBACK_WATCHDOG_MS  = 5000;   // no audio progress this long during playback → stream hung, tear down
     static constexpr int      JUNK_MIN_LEN          = 2;      // transcript chars below this → noise
     static constexpr int      PTT_RATE      = 16000;
     static constexpr int      PTT_MAX       = PTT_RATE * 12;  // 12s hard cap = 384 KB PSRAM
@@ -315,6 +328,7 @@ private:
     int      _awaitSamples  = 0;
     uint32_t _awaitOnsetMs  = 0;      // millis() when onset window opened; 0 = no onset
     uint32_t _awaitCalibEnd = 0;      // millis() when noise-floor calibration ends
+    uint32_t _deadAirStartMs = 0;     // millis() dead-air (silence) window began in AWAITING; reset on speech
 
     // Persistent TLS connection — cert set once; reused for /transcribe then /chat
     // within the same turn so only one TLS handshake is needed per turn.
@@ -365,6 +379,7 @@ private:
         _awaitSamples  = 0;
         _awaitOnsetMs  = 0;
         _awaitCalibEnd = millis() + VAD_CALIBRATE_MS;
+        _deadAirStartMs = millis();   // dead-air clock starts when we begin listening
         // Snapshot live touch state so a still-held tap (e.g. exit tap from PH_RECORDING)
         // is not re-detected as a new entry tap on the very next frame.
         { int16_t _tx, _ty; _wasTouch = M5StackChan.Display().getTouch(&_tx, &_ty); }
@@ -634,6 +649,19 @@ private:
         return hasGoodbye && _isPhoebeName(t);
     }
 
+    // Dead-air exit: leave always-listening and go dormant (tap to resume).
+    // Distinct from _endConversation(), which re-arms AWAITING.
+    void _exitChatMode() {
+        if (_phase == PH_AWAITING || _phase == PH_RECORDING) M5.Mic.end();
+        face.releaseGaze();
+        face.clearBubble();
+        face.setState(Ph3b3Face::IDLE);
+        _inConversation  = false;
+        _exitAfterTurn   = false;
+        _convLastValidMs = 0;
+        _phase           = PH_IDLE;
+    }
+
     void _endConversation() {
         face.releaseGaze();
         _inConversation  = false;
@@ -782,20 +810,35 @@ private:
             if (keepGoing) {
                 face.update();
 
-                uint32_t deadline = millis() + 90000;
-                while (keepGoing && millis() < deadline) {
-                    // Drain all available TCP bytes before doing any UI work —
+                uint32_t lastFaceMs     = 0;          // throttle face SPI blit to <=10 fps during decode
+                uint32_t lastProgressMs = millis();   // watchdog: last stream byte consumed OR audio rendered
+                // No duration cap — active playback is NEVER truncated. A no-progress
+                // watchdog replaces the old 90s deadline as the hung-stream safety.
+                while (keepGoing) {
+                    // Drain all available TCP bytes before any UI work —
                     // single-byte reads with M5.update() between each byte was
                     // too slow (≈200 chars/s) to sustain 22050 Hz audio decode.
+                    bool gotData = false;
                     while (keepGoing && raw->available() > 0) {
                         feedCh((char)raw->read());
+                        gotData = true;
                     }
-                    // Touch/face update only when TCP buffer is momentarily empty
+                    // Progress = bytes still arriving OR speaker still rendering queued audio.
+                    if (gotData || M5.Speaker.isPlaying(0) > 0) {
+                        lastProgressMs = millis();
+                    } else if (millis() - lastProgressMs >= PLAYBACK_WATCHDOG_MS) {
+                        // Nominally streaming but no bytes and speaker drained → stream hung.
+                        Serial.printf("[i2s] playback watchdog: no progress %ums (speaker drained, avail=%d) — stream hung, tearing down\n",
+                                      (unsigned)PLAYBACK_WATCHDOG_MS, raw->available());
+                        M5.Speaker.stop(0);
+                        M5.Speaker.end();
+                        keepGoing = false;
+                        break;
+                    }
+                    // Barge-in stays every iteration — getTouch()/M5.update() are cheap.
                     M5.update();
-                    face.update();
                     int16_t tx2, ty2;
-                    bool _touched = M5StackChan.Display().getTouch(&tx2, &ty2);
-                    if (_touched) {
+                    if (M5StackChan.Display().getTouch(&tx2, &ty2)) {
                         M5.Speaker.stop(0);
                         M5.Speaker.end();  // fully release I2S before mic can start
                         face.setSpeakingLevel(0.0f);
@@ -803,11 +846,17 @@ private:
                         keepGoing  = false;
                         break;
                     }
-                    // Speaking emphasis: gentle pan/tilt on phrase boundaries during playback.
-                    if (speakSweepMs > 0 && millis() >= speakSweepMs) {
-                        M5StackChan.Motion.moveX(random(-200, 201), 210);
-                        M5StackChan.Motion.moveY(450 + random(-25, 26), 190);
-                        speakSweepMs = millis() + 900 + random(800);
+                    // Expensive UI (face SPI blit + servo I2C) only when the audio queue
+                    // is full (>=2 chunks ≈186ms buffered) — one blit can't underrun I2S.
+                    if (M5.Speaker.isPlaying(0) >= 2 && millis() - lastFaceMs >= 100) {
+                        lastFaceMs = millis();
+                        face.update();
+                        // Speaking emphasis: gentle pan/tilt on phrase boundaries during playback.
+                        if (speakSweepMs > 0 && millis() >= speakSweepMs) {
+                            M5StackChan.Motion.moveX(random(-200, 201), 210);
+                            M5StackChan.Motion.moveY(450 + random(-25, 26), 190);
+                            speakSweepMs = millis() + 900 + random(800);
+                        }
                     }
                     delay(1);
                 }
