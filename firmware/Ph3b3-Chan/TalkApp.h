@@ -3,6 +3,7 @@
 #include <M5StackChan.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <WiFiUdp.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
@@ -284,6 +285,8 @@ private:
     static constexpr uint32_t CONV_IDLE_MS          = 9000;   // 9s no valid speech → end loop
     static constexpr uint32_t DEAD_AIR_MS           = 10000;  // 10s true silence in chat mode → exit to dormant (NVS candidate, like spk_vol)
     static constexpr uint32_t PLAYBACK_WATCHDOG_MS  = 5000;   // no audio progress this long during playback → stream hung, tear down
+    static constexpr uint32_t FACE_TICK_MS          = 100;   // playback face redraw cadence (~10fps) so the bubble grows/scrolls live; raise (125/166/200) if audio sputters
+    static constexpr uint16_t DBG_STATE_PORT        = 7332;  // [DBG-STATE] UDP state telemetry port on Nyx (serial dead → journal-readable)
     static constexpr int      JUNK_MIN_LEN          = 2;      // transcript chars below this → noise
     static constexpr int      PTT_RATE      = 16000;
     static constexpr int      PTT_MAX       = PTT_RATE * 12;  // 12s hard cap = 384 KB PSRAM
@@ -336,6 +339,7 @@ private:
     // as long as the server responds with Connection: keep-alive.
     WiFiClientSecure _tls;
     HTTPClient       _http;
+    WiFiUDP          _dbgUdp;   // [DBG-STATE] fire-and-forget state telemetry to Nyx
 
     // ── Base64 helpers ────────────────────────────────────────────────────────
     static int _b64val(char c) {
@@ -386,6 +390,7 @@ private:
         face.setState(Ph3b3Face::IDLE);
         face.clearBubble();
         _phase = PH_AWAITING;
+        _dbgState("armed");
         Serial.println("[await] armed — waiting for speech");
     }
 
@@ -424,9 +429,11 @@ private:
         face.setState(Ph3b3Face::LISTENING);
         face.clearBubble();
         _phase = PH_RECORDING;
+        _dbgState("capturing");
     }
 
     void _stopRecordingAndDispatch() {
+        _dbgState("endpointed");
         M5.Mic.end();
         M5.Speaker.end();
         M5.Speaker.begin();
@@ -649,6 +656,15 @@ private:
         return hasGoodbye && _isPhoebeName(t);
     }
 
+    // [DBG-STATE] fire-and-forget UDP state ping to Nyx — readable in the ph3b3
+    // journal (grep DIO_STATE). Cheap: no handshake, non-blocking, drops silently.
+    void _dbgState(const char* s) {
+        if (WiFi.status() != WL_CONNECTED || gSrvHost.length() == 0) return;
+        _dbgUdp.beginPacket(gSrvHost.c_str(), DBG_STATE_PORT);
+        _dbgUdp.printf("%lu %s", (unsigned long)millis(), s);
+        _dbgUdp.endPacket();
+    }
+
     // Dead-air exit: leave always-listening and go dormant (tap to resume).
     // Distinct from _endConversation(), which re-arms AWAITING.
     void _exitChatMode() {
@@ -660,6 +676,7 @@ private:
         _exitAfterTurn   = false;
         _convLastValidMs = 0;
         _phase           = PH_IDLE;
+        _dbgState("idle");
     }
 
     void _endConversation() {
@@ -689,6 +706,7 @@ private:
         serializeJson(body, payload);
 
         face.update();
+        _dbgState("sent /chat");
         int code = _http.POST(payload);
         Serial.printf("[D3b] /chat POST code=%d\n", code);
         if (code != HTTP_CODE_OK) { _http.end(); return "HTTP " + String(code); }
@@ -702,6 +720,7 @@ private:
         static char peek[PEEK_MAX + 1];
         auto* raw = _http.getStreamPtr();
         raw->setTimeout(30000);
+        int bodyTotal = _http.getSize();   // Content-Length; -1 if unknown/chunked
         int peekLen = 0;
         uint32_t peekDeadline = millis() + 60000;
         while (peekLen < PEEK_MAX && millis() < peekDeadline) {
@@ -711,8 +730,14 @@ private:
                 peekLen += raw->readBytes(peek + peekLen, n);
                 peek[peekLen] = '\0';
                 if (peekLen > 50 && strstr(peek, "\"audio\":\"")) break;
+                // Full short/empty body already in (e.g. wake-gate drop, 26 bytes):
+                // with keep-alive the socket never closes, so break on Content-Length
+                // instead of spinning to the 60s deadline.
+                if (bodyTotal > 0 && peekLen >= bodyTotal) break;
             } else if (!raw->connected()) {
                 break;
+            } else if (bodyTotal > 0 && peekLen >= bodyTotal) {
+                break;   // whole body buffered; keep-alive won't close — don't wait
             } else {
                 face.update();
                 delay(10);
@@ -725,11 +750,13 @@ private:
         deserializeJson(jdoc, peek, peekLen, DeserializationOption::Filter(filter));
         const char* resp = jdoc["response"];
         String responseText = (resp && *resp) ? String(resp) : "";
+        { char _sb[24]; snprintf(_sb, sizeof(_sb), "resp len=%d", (int)responseText.length()); _dbgState(_sb); }
 
         uint32_t speakSweepMs = 0;  // speaking emphasis timer; first sweep after 800ms
         if (responseText.length() > 0) {
             _applyMoodReaction(responseText);
             face.setState(Ph3b3Face::SPEAKING);
+            _dbgState("playing");
             face.setBubble(responseText);
             face.update();
             // Speaking start pose — direct command (loop() blocked by _doChatAndPlay).
@@ -846,9 +873,11 @@ private:
                         keepGoing  = false;
                         break;
                     }
-                    // Expensive UI (face SPI blit + servo I2C) only when the audio queue
-                    // is full (>=2 chunks ≈186ms buffered) — one blit can't underrun I2S.
-                    if (M5.Speaker.isPlaying(0) >= 2 && millis() - lastFaceMs >= 100) {
+                    // Face SPI blit + servo at ~FACE_TICK_MS during playback — enough for the
+                    // speech bubble to grow/scroll live, throttled so it doesn't starve the
+                    // I2S refill. (The old isPlaying>=2 gate rarely fired → bubble froze until
+                    // the post-playback drain loop. Raise FACE_TICK_MS if audio sputters.)
+                    if (millis() - lastFaceMs >= FACE_TICK_MS) {
                         lastFaceMs = millis();
                         face.update();
                         // Speaking emphasis: gentle pan/tilt on phrase boundaries during playback.
