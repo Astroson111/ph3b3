@@ -108,6 +108,7 @@ from dnd_module import DnDModule
 from film_module import FilmModule
 from translation_module import TranslationModule
 from memory_module import MemoryModule
+from wake_gate import wake_match
 from occult_module import OccultModule
 from jokes_module import JokesModule
 from vision_module import VisionModule
@@ -847,6 +848,20 @@ def _triage_context(prior_messages) -> str:
 async def chat_endpoint(body: dict, request: Request):
     session = get_session(body.get("session_id","default"))
     user_msg = body.get("message","")
+
+    # ── Wake-word gate (Dio / Stack-Chan only) ───────────────────────────────
+    # Dio is hands-free: she re-arms the mic the moment she stops speaking, so her
+    # own TTS tail can loop back through /chat and spawn an endless self-reply.
+    # Require the utterance to address her by name; her echo transcribes to her
+    # reply words, never her name, so it drops here and the device stays silent
+    # and simply re-arms. Iris (push-to-talk) and the web UI are exempt.
+    if request.headers.get("X-Ph3b3-Device", "") == "stackchan":
+        matched, cleaned = wake_match(user_msg)
+        if not matched:
+            log.info(f"[wake-gate] dropped non-wake utterance: {user_msg!r}")
+            return {"response": "", "audio": ""}
+        user_msg = cleaned or user_msg   # strip the wake token; model sees the request
+
     if "soul" in user_msg.lower():
         tts.soul_line()
 
