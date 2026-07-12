@@ -630,7 +630,7 @@ void setup() {
     appMgr.registerApp(&talkApp);     // 0
     appMgr.registerApp(&networkApp);  // 1
     appMgr.registerApp(&karaokeApp);  // 2
-    appMgr.registerApp(&ghostApp);    // 3
+    // appMgr.registerApp(&ghostApp);    // 3 — UNREGISTERED: a stray top-left crescent-tap trapped her in Ghost (FOCUSED/frown) with no voice; Ghost is a Rung-3 stub, so drop it from the menu
 
     appMgr.begin(0);  // boot into Talk
     Serial.println("[rung4] setup done");

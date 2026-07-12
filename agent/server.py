@@ -866,6 +866,27 @@ def _triage_context(prior_messages) -> str:
     return "\n".join(f"{m['role']}: {m['content']}" for m in turns[-8:])
 
 
+# ── Tap-to-wake + self-echo suppression (Dio / Stack-Chan) ────────────────────
+# Dio wakes on a physical TAP (reliable — no flaky "Phoebe" capture), then talks
+# hands-free. With no wake word to gate on, her own TTS echo is suppressed by
+# CONTENT: if a stackchan transcript substantially overlaps her LAST reply to
+# that session, it's her own voice looping back — drop it. Exit is "goodbye" /
+# dead-air / tap (device-side). Iris (push-to-talk) and the web UI never gate.
+_LAST_REPLY = {}   # session_id -> her last reply text, for echo suppression
+
+def _words(s):
+    return [w for w in "".join(c if c.isalpha() or c == " " else " "
+                          for c in (s or "").lower()).split() if len(w) >= 2]
+
+def _looks_like_self_echo(session_id, text):
+    tw = _words(text)
+    prev = _LAST_REPLY.get(session_id, "")
+    if len(tw) < 3 or not prev:
+        return False                      # too short to judge (let short commands through)
+    pw = set(_words(prev))
+    return sum(1 for w in tw if w in pw) / len(tw) >= 0.6
+
+
 async def _run_chat_pipeline(body: dict, request: Request):
     """Shared /chat brain: wake-gate → recitation → triage → inference.
 
@@ -877,18 +898,11 @@ async def _run_chat_pipeline(body: dict, request: Request):
     session = get_session(body.get("session_id","default"))
     user_msg = body.get("message","")
 
-    # ── Wake-word gate (Dio / Stack-Chan only) ───────────────────────────────
-    # Dio is hands-free: she re-arms the mic the moment she stops speaking, so her
-    # own TTS tail can loop back through /chat and spawn an endless self-reply.
-    # Require the utterance to address her by name; her echo transcribes to her
-    # reply words, never her name, so it drops here and the device stays silent
-    # and simply re-arms. Iris (push-to-talk) and the web UI are exempt.
+    # ── Tap-to-wake (Dio / Stack-Chan) — no voice wake word; suppress her echo by content ─
     if request.headers.get("X-Ph3b3-Device", "") == "stackchan":
-        matched, cleaned = wake_match(user_msg)
-        if not matched:
-            log.info(f"[wake-gate] dropped non-wake utterance: {user_msg!r}")
+        if _looks_like_self_echo(body.get("session_id", "default"), user_msg):
+            log.info("[echo-guard] dropped self-echo: %r", user_msg)
             return None
-        user_msg = cleaned or user_msg   # strip the wake token; model sees the request
 
     if "soul" in user_msg.lower():
         tts.soul_line()
@@ -962,6 +976,7 @@ async def chat_endpoint(body: dict, request: Request):
     reply = await _run_chat_pipeline(body, request)
     if reply is None:
         return {"response": "", "audio": ""}
+    _LAST_REPLY[body.get("session_id", "default")] = reply   # echo-guard memory
     audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, reply)
     return {"response": reply, "audio": audio_b64}
 
@@ -1007,6 +1022,7 @@ async def chat_stream_endpoint(body: dict, request: Request):
     if not reply:
         return {"response": "", "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}
+    _LAST_REPLY[body.get("session_id", "default")] = reply   # echo-guard memory
     chunks = split_for_tts(reply)
     if not chunks:
         return {"response": reply, "stream_id": "", "chunk_count": 0,
@@ -1015,8 +1031,12 @@ async def chat_stream_endpoint(body: dict, request: Request):
     audio0 = await _tts_chunk_b64(sid, 0)
     if len(chunks) > 1:
         asyncio.create_task(_tts_chunk_b64(sid, 1))   # read-ahead
-    return {"response": reply, "stream_id": sid, "chunk_count": len(chunks),
-            "chunk_index": 0, "audio": audio0 or "", "last": len(chunks) == 1}
+    # "text" (chunk 0's words) is placed before "audio" and "response" so the
+    # firmware can always peek it in its 6 KB head buffer, however long the reply
+    # is — Dio shows each chunk's text while that chunk plays, syncing to her voice.
+    return {"stream_id": sid, "chunk_count": len(chunks), "chunk_index": 0,
+            "text": chunks[0], "audio": audio0 or "", "last": len(chunks) == 1,
+            "response": reply}
 
 
 @app.get("/tts/chunk/{stream_id}/{n}")
@@ -1031,7 +1051,10 @@ async def tts_chunk_endpoint(stream_id: str, n: int):
     audio = await _tts_chunk_b64(stream_id, n)
     if n + 1 < len(st["chunks"]):
         asyncio.create_task(_tts_chunk_b64(stream_id, n + 1))   # read-ahead
-    return {"audio": audio or "", "chunk_index": n, "last": n + 1 >= len(st["chunks"])}
+    # "text" before "audio" so the firmware peeks it and shows this chunk's words
+    # while its audio plays (voice-synced captioning).
+    return {"text": st["chunks"][n], "audio": audio or "",
+            "chunk_index": n, "last": n + 1 >= len(st["chunks"])}
 
 @app.delete("/session/{session_id}")
 async def clear_session(session_id: str):
@@ -1084,7 +1107,12 @@ async def transcribe_audio(body: dict):
     if not audio_b64:
         return {"text": "", "error": "no audio provided"}
     audio_bytes = base64.b64decode(audio_b64)
+    try:                                                          # [DBG-MIC] keep last capture for audition
+        open("/tmp/dio_mic_last.wav", "wb").write(audio_bytes)
+    except Exception:
+        pass
     # [DBG-MIC] characterise captured audio: mic-dead (near-zero level) vs STT-mishear (real level, wrong text)
+    _rms = None
     try:
         import struct as _st
         _pcm = audio_bytes[44:]
@@ -1096,6 +1124,13 @@ async def transcribe_audio(body: dict):
             log.warning("[DBG-MIC] in %d B ~%.1fs peak=%d/32767 rms=%.0f", len(audio_bytes), _n / 16000.0, _peak, _rms)
     except Exception as _e:
         log.warning("[DBG-MIC] level calc failed: %s", _e)
+    # Silence-floor gate: auto-relisten captures ~1.2s of ambient room noise at rms<900; Whisper
+    # hallucinates words ("New York City." @ rms 684) out of that silence. Real speech lands rms>2600.
+    # Drop anything below the floor before STT — kills phantom transcripts and skips a wasted Whisper call.
+    SILENCE_FLOOR_RMS = 1200
+    if _rms is not None and _rms < SILENCE_FLOOR_RMS:
+        log.warning("[DBG-MIC] below silence floor (rms=%.0f < %d) — dropped, no STT", _rms, SILENCE_FLOOR_RMS)
+        return {"text": "", "error": None}
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         f.write(audio_bytes)
         tmp_path = f.name

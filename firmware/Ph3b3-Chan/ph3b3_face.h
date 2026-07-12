@@ -113,29 +113,20 @@ class Ph3b3Face {
     _bubbleStartMs    = millis();
     _bscrollLine      = 0;
     _bscrollLastMs    = _bubbleStartMs;
-    _blineCount       = 0;
-    int i = 0, len = (int)text.length();
-    while (i < len && _blineCount < _BMAX) {
-      while (i < len && text[i] == ' ') i++;
-      if (i >= len) break;
-      int end = min(len, i + _BCOLS);
-      if (end < len) {
-        int brk = end;
-        while (brk > i && text[brk] != ' ') brk--;
-        if (brk > i) end = brk;
-      }
-      int n = end - i;
-      if (n > _BCOLS) n = _BCOLS;
-      if (n > 0) {
-        strncpy(_blines[_blineCount], text.c_str() + i, n);
-        while (n > 0 && _blines[_blineCount][n-1] == ' ') n--;
-        _blines[_blineCount][n] = '\0';
-        if (n > 0) _blineCount++;
-      }
-      i = end;
-    }
+    _wrapBubble(text);
     for (int j = 0; j < 15; j++) { _starX[j]=random(100); _starY[j]=random(100); _starBright[j]=false; }
     for (int j = 15; j < 18; j++) { _starX[j]=random(100); _starY[j]=random(100); _starBright[j]=true; }
+  }
+
+  // Swap the bubble's text WITHOUT re-popping the grow animation. Used to track
+  // chunked-TTS audio: each chunk's text is shown while that chunk's audio plays,
+  // so the words follow her voice instead of scrolling on a blind fixed timer.
+  void setBubbleText(const String& text) {
+    if (!_bubbleGrowing && _bubbleProgress <= 0.0f) { setBubble(text); return; }
+    _bubbleCollapsing = false;
+    _bscrollLine      = 0;
+    _bscrollLastMs    = millis();
+    _wrapBubble(text);
   }
 
   void clearBubble() {
@@ -144,6 +135,15 @@ class Ph3b3Face {
       _bubbleCollapsing = true;
       _bubbleCollapseMs = millis();
     }
+  }
+
+  // Instant clear — no collapse animation. Use when the caller is about to block
+  // rendering (e.g. the tight mic-capture loop), where the animated collapse can't
+  // run and would otherwise freeze the stale bubble on-screen through LISTENING.
+  void clearBubbleNow() {
+    _bubbleGrowing    = false;
+    _bubbleCollapsing = false;
+    _bubbleProgress   = 0.0f;
   }
 
   void update() {
@@ -210,6 +210,31 @@ class Ph3b3Face {
 
  private:
   M5Canvas canvas{&M5.Display};
+
+  // Word-wrap `text` into _blines[] (shared by setBubble / setBubbleText).
+  void _wrapBubble(const String& text) {
+    _blineCount = 0;
+    int i = 0, len = (int)text.length();
+    while (i < len && _blineCount < _BMAX) {
+      while (i < len && text[i] == ' ') i++;
+      if (i >= len) break;
+      int end = min(len, i + _BCOLS);
+      if (end < len) {
+        int brk = end;
+        while (brk > i && text[brk] != ' ') brk--;
+        if (brk > i) end = brk;
+      }
+      int n = end - i;
+      if (n > _BCOLS) n = _BCOLS;
+      if (n > 0) {
+        strncpy(_blines[_blineCount], text.c_str() + i, n);
+        while (n > 0 && _blines[_blineCount][n-1] == ' ') n--;
+        _blines[_blineCount][n] = '\0';
+        if (n > 0) _blineCount++;
+      }
+      i = end;
+    }
+  }
 
   // Geometry (computed in begin())
   int W = 0, H = 0;

@@ -178,11 +178,22 @@ public:
         }
 
         case PH_RECORDING: {
-            if (_pttBuf && _pttSamples < PTT_MAX) {
+            // TIGHT capture loop. Reading ONE chunk per cooperative loop() iteration let
+            // ~50ms of other loop work (face blit + servo + delay) run between reads, so
+            // the mic DMA outran the reader and OVERFLOWED — ~60% of samples dropped →
+            // audio came out time-compressed ("too fast") and choppy → Whisper hallucinated
+            // regardless of gain. Drain the mic here WITHOUT yielding (no face blit) until
+            // VAD closes / full / a deliberate mid-turn tap. Face shows LISTENING once.
+            // Instant-clear any prior reply bubble: the animated collapse can't run inside
+            // the render-blocking tight loop below, so it would freeze stale on-screen.
+            face.clearBubbleNow();
+            face.setState(Ph3b3Face::LISTENING);
+            face.update();
+            while (_phase == PH_RECORDING && _pttBuf) {
                 int chunk = min(512, PTT_MAX - _pttSamples);
+                if (chunk <= 0) { _stopRecordingAndDispatch(); break; }
                 M5.Mic.record(&_pttBuf[_pttSamples], chunk, PTT_RATE);
 
-                // RMS of fresh chunk — ring visualizer + VAD input
                 float rms = 0.0f;
                 for (int i = 0; i < chunk; i++) {
                     float s = _pttBuf[_pttSamples + i] / 32768.0f;
@@ -193,44 +204,36 @@ public:
                 _pttSamples += chunk;
 
                 uint32_t elapsed = millis() - _recStartMs;
-
-                // Noise-floor calibration — first VAD_CALIBRATE_MS of real time
                 if (elapsed < VAD_CALIBRATE_MS) {
                     _noiseAccum += rms * rms;
                     _noiseSamples++;
                 } else if (_noiseFloor == 0.0f && _noiseSamples > 0) {
                     _noiseFloor = max(VAD_FLOOR_MIN,
                                      sqrtf(_noiseAccum / _noiseSamples) * VAD_THRESH_MULT);
-                    Serial.printf("[vad] floor=%.4f (from %d samples)\n",
-                                  _noiseFloor, _noiseSamples);
                 }
-
-                // VAD: track silence window after min duration
                 if (_noiseFloor > 0.0f && elapsed >= VAD_MIN_MS) {
-                    if (rms < _noiseFloor) {
-                        if (_silenceStartMs == 0) _silenceStartMs = millis();
-                    } else {
-                        _silenceStartMs = 0;
-                    }
+                    if (rms < _noiseFloor) { if (_silenceStartMs == 0) _silenceStartMs = millis(); }
+                    else _silenceStartMs = 0;
                 }
-            }
 
-            uint32_t elapsed  = millis() - _recStartMs;
-            bool vad      = (_silenceStartMs > 0 && millis() - _silenceStartMs >= VAD_SILENCE_MS);
-            bool full     = (elapsed >= VAD_MAX_MS || _pttSamples >= PTT_MAX);
-            bool convIdle = (_inConversation && _convLastValidMs > 0 &&
-                             millis() - _convLastValidMs > CONV_IDLE_MS);
-            if (tapped && _inConversation && millis() - _recStartMs >= VAD_MIN_MS) {
-                // Tap during active conversation loop → exit cleanly without dispatching.
-                // VAD_MIN_MS guard (600ms) rejects capacitive ghost bounces from the
-                // entry tap, which arrive within ~100ms and would otherwise immediately
-                // exit the conversation before any speech is captured.
-                M5.Mic.end();
-                if (_pttBuf) { heap_caps_free(_pttBuf); _pttBuf = nullptr; }
-                _pttSamples = 0;
-                _endConversation();
-            } else if (vad || full || convIdle || tapped) {
-                _stopRecordingAndDispatch();
+                bool vad      = (_silenceStartMs > 0 && millis() - _silenceStartMs >= VAD_SILENCE_MS);
+                bool full     = (elapsed >= VAD_MAX_MS || _pttSamples >= PTT_MAX);
+                bool convIdle = (_inConversation && _convLastValidMs > 0 &&
+                                 millis() - _convLastValidMs > CONV_IDLE_MS);
+
+                // Deliberate mid-turn tap → exit (entry bounce rejected by VAD_MIN_MS).
+                int16_t _tx, _ty;
+                if (M5StackChan.Display().getTouch(&_tx, &_ty) && _inConversation && elapsed >= VAD_MIN_MS) {
+                    M5.Mic.end();
+                    if (_pttBuf) { heap_caps_free(_pttBuf); _pttBuf = nullptr; }
+                    _pttSamples = 0;
+                    _endConversation();
+                    break;
+                }
+                if (vad || full || convIdle) {
+                    _stopRecordingAndDispatch();
+                    break;
+                }
             }
             break;
         }
@@ -287,6 +290,7 @@ private:
     static constexpr uint32_t PLAYBACK_WATCHDOG_MS  = 5000;   // no audio progress this long during playback → stream hung, tear down
     static constexpr uint32_t FACE_TICK_MS          = 100;   // playback face redraw cadence (~10fps) so the bubble grows/scrolls live; raise (125/166/200) if audio sputters
     static constexpr uint16_t DBG_STATE_PORT        = 7332;  // [DBG-STATE] UDP state telemetry port on Nyx (serial dead → journal-readable)
+    static constexpr int      MIC_MAGNIFICATION     = 6;     // mic gain (narrow clean window): 16 & 8 clipped (peak 32752), 4 too faint (rms ~500). 6 targets rms ~2000 with peaks just under clip. Calibrate via /transcribe [DBG-MIC]: want rms ~2000 AND peak < ~30000
     static constexpr int      JUNK_MIN_LEN          = 2;      // transcript chars below this → noise
     static constexpr int      PTT_RATE      = 16000;
     static constexpr int      PTT_MAX       = PTT_RATE * 12;  // 12s hard cap = 384 KB PSRAM
@@ -375,7 +379,7 @@ private:
         delay(30);
         auto mcfg = M5.Mic.config();
         mcfg.sample_rate   = PTT_RATE;
-        mcfg.magnification = 16;
+        mcfg.magnification = MIC_MAGNIFICATION;
         M5.Mic.config(mcfg);
         M5.Mic.begin();
         _awaitFloor    = 0.0f;
@@ -422,7 +426,7 @@ private:
 
         auto mcfg = M5.Mic.config();
         mcfg.sample_rate   = PTT_RATE;
-        mcfg.magnification = 16;
+        mcfg.magnification = MIC_MAGNIFICATION;
         M5.Mic.config(mcfg);
         M5.Mic.begin();
 
@@ -687,12 +691,16 @@ private:
         _startAwaiting();
     }
 
-    // ── /chat + streaming audio ───────────────────────────────────────────────
+    // ── /chat/stream + chunked TTS playback ───────────────────────────────────
+    // Long replies (a 1000-word story ≈ 5 min ≈ 12 MB of audio) cannot arrive as
+    // one monolithic /chat blob — the ESP32 has ~300 KB RAM and the single long
+    // TLS transfer times out. Consume /chat/stream instead: a small manifest
+    // {response, stream_id, chunk_count, audio(chunk0)} then lazy
+    // GET /tts/chunk/{sid}/{n}. Each chunk is a short independent request the
+    // server synthesises on demand (~1.3 s, with read-ahead); Dio plays + discards.
     String _doChatAndPlay(const String& message) {
-        // Reuse the same _tls/_http that carried /transcribe — no second handshake.
-        if (!_http.begin(_tls, gSrvHost.c_str(), gSrvPort, "/chat", true))
+        if (!_http.begin(_tls, gSrvHost.c_str(), gSrvPort, "/chat/stream", true))
             return String("ERR: begin failed");
-
         _http.setConnectTimeout(90000);
         _http.setTimeout(120000);
         _http.setAuthorization(gSrvUser.c_str(), gSrvPass.c_str());
@@ -708,198 +716,226 @@ private:
         face.update();
         _dbgState("sent /chat");
         int code = _http.POST(payload);
-        Serial.printf("[D3b] /chat POST code=%d\n", code);
+        Serial.printf("[D3b] /chat/stream POST code=%d\n", code);
         if (code != HTTP_CODE_OK) { _http.end(); return "HTTP " + String(code); }
-
         face.update();
 
-        // ── Phase A: first 6 KB captures the "response" text field ───────────
-        // Poll available() rather than blocking readBytes(6144) — the response body
-        // may be smaller than 6KB, causing readBytes to hang until socket timeout.
+        // ── Shared decode/playback state (persists across chunks → gapless queue) ─
         static const int PEEK_MAX = 6144;
-        static char peek[PEEK_MAX + 1];
-        auto* raw = _http.getStreamPtr();
-        raw->setTimeout(30000);
-        int bodyTotal = _http.getSize();   // Content-Length; -1 if unknown/chunked
-        int peekLen = 0;
-        uint32_t peekDeadline = millis() + 60000;
-        while (peekLen < PEEK_MAX && millis() < peekDeadline) {
-            int avail = raw->available();
-            if (avail > 0) {
-                int n = min(avail, PEEK_MAX - peekLen);
-                peekLen += raw->readBytes(peek + peekLen, n);
-                peek[peekLen] = '\0';
-                if (peekLen > 50 && strstr(peek, "\"audio\":\"")) break;
-                // Full short/empty body already in (e.g. wake-gate drop, 26 bytes):
-                // with keep-alive the socket never closes, so break on Content-Length
-                // instead of spinning to the 60s deadline.
-                if (bodyTotal > 0 && peekLen >= bodyTotal) break;
-            } else if (!raw->connected()) {
-                break;
-            } else if (bodyTotal > 0 && peekLen >= bodyTotal) {
-                break;   // whole body buffered; keep-alive won't close — don't wait
-            } else {
-                face.update();
-                delay(10);
-            }
-        }
-        peek[peekLen] = '\0';
+        static char      peek[PEEK_MAX + 1];
+        static int16_t   pcmBuf[2][CHUNK_SAMP];
+        int   fillIdx       = 0;
+        int   chunkPos      = 0;
+        int   wavHdrSkipped = 0;
+        uint8_t halfLo      = 0;
+        bool  halfReady     = false;
+        char  b4[4]; int b4pos = 0;
+        bool  keepGoing     = true;   // false at end of ONE chunk's audio field
+        bool  abort         = false;  // barge-in / watchdog → stop the whole reply
+        uint32_t speakSweepMs = 0;
 
-        JsonDocument filter; filter["response"] = true;
+        auto flushChunk = [&]() {
+            if (chunkPos == 0) return;
+            float rms = 0.0f;
+            for (int i = 0; i < chunkPos; i++) {
+                float s = pcmBuf[fillIdx][i] / 32768.0f;
+                rms += s * s;
+            }
+            face.setSpeakingLevel(min(1.0f, sqrtf(rms / chunkPos) * 5.0f));
+            while (M5.Speaker.isPlaying(0) >= 2) delay(1);
+            if (abort) return;   // barge-in/watchdog only; gating on !keepGoing here
+                                 // would drop every chunk's tail samples.
+            M5.Speaker.playRaw(pcmBuf[fillIdx], chunkPos, 22050, false, 1, 0);
+            fillIdx ^= 1;
+            chunkPos = 0;
+        };
+
+        auto pushByte = [&](uint8_t b) {
+            if (wavHdrSkipped++ < 44) return;     // skip this chunk's 44-byte WAV header
+            if (!halfReady) { halfLo = b; halfReady = true; return; }
+            if (chunkPos == 0) {
+                while (M5.Speaker.isPlaying(0) >= 2) delay(1);
+            }
+            pcmBuf[fillIdx][chunkPos++] = (int16_t)((b << 8) | halfLo);
+            halfReady = false;
+            if (chunkPos == CHUNK_SAMP) flushChunk();
+        };
+
+        auto feedCh = [&](char ch) {
+            if (!keepGoing) return;
+            if (ch == '"') { keepGoing = false; return; }
+            int v = _b64val(ch);
+            if (v < 0) return;
+            b4[b4pos++] = ch;
+            if (b4pos == 4) {
+                int v0=_b64val(b4[0]), v1=_b64val(b4[1]),
+                    v2=_b64val(b4[2]), v3=_b64val(b4[3]);
+                if (v0 >= 0 && v1 >= 0) {
+                    pushByte((uint8_t)((v0<<2)|(v1>>4)));
+                    if (v2 >= 0 && b4[2] != '=') {
+                        pushByte((uint8_t)((v1<<4)|(v2>>2)));
+                        if (v3 >= 0 && b4[3] != '=') pushByte((uint8_t)((v2<<6)|v3));
+                    }
+                }
+                b4pos = 0;
+            }
+        };
+
+        // Read the head of the current HTTP response into peek[], stopping once the
+        // "audio":" field start is buffered (or the whole short body is in). Returns len.
+        auto fillPeek = [&]() -> int {
+            auto* raw = _http.getStreamPtr();
+            raw->setTimeout(30000);
+            int bodyTotal = _http.getSize();
+            int pl = 0;
+            uint32_t deadline = millis() + 60000;
+            while (pl < PEEK_MAX && millis() < deadline) {
+                int avail = raw->available();
+                if (avail > 0) {
+                    int n = min(avail, PEEK_MAX - pl);
+                    pl += raw->readBytes(peek + pl, n);
+                    peek[pl] = '\0';
+                    if (pl > 20 && strstr(peek, "\"audio\":\"")) break;
+                    if (bodyTotal > 0 && pl >= bodyTotal) break;
+                } else if (!raw->connected()) {
+                    break;
+                } else if (bodyTotal > 0 && pl >= bodyTotal) {
+                    break;
+                } else {
+                    face.update();
+                    delay(10);
+                }
+            }
+            peek[pl] = '\0';
+            return pl;
+        };
+
+        // Decode + play ONE base64 WAV "audio" field: peek[audioStart..peekLen) is the
+        // already-read head, then drain the live stream to the field's closing quote /
+        // barge-in / watchdog. Resets per-chunk decode state (each chunk is its own WAV).
+        auto playField = [&](int peekLen, int audioStart) {
+            wavHdrSkipped = 0; halfReady = false; b4pos = 0; keepGoing = true;
+            auto* raw = _http.getStreamPtr();
+            for (int i = audioStart; i < peekLen && keepGoing; i++) feedCh(peek[i]);
+
+            uint32_t lastFaceMs     = 0;
+            uint32_t lastProgressMs = millis();
+            while (keepGoing) {
+                bool gotData = false;
+                while (keepGoing && raw->available() > 0) {
+                    feedCh((char)raw->read());
+                    gotData = true;
+                }
+                if (gotData || M5.Speaker.isPlaying(0) > 0) {
+                    lastProgressMs = millis();
+                } else if (millis() - lastProgressMs >= PLAYBACK_WATCHDOG_MS) {
+                    Serial.printf("[i2s] playback watchdog: no progress %ums — stream hung, tearing down\n",
+                                  (unsigned)PLAYBACK_WATCHDOG_MS);
+                    M5.Speaker.stop(0); M5.Speaker.end();
+                    keepGoing = false; abort = true;
+                    break;
+                }
+                M5.update();
+                int16_t tx2, ty2;
+                if (M5StackChan.Display().getTouch(&tx2, &ty2)) {
+                    M5.Speaker.stop(0); M5.Speaker.end();
+                    face.setSpeakingLevel(0.0f);
+                    _bargeIn = true; keepGoing = false; abort = true;
+                    break;
+                }
+                if (millis() - lastFaceMs >= FACE_TICK_MS) {
+                    lastFaceMs = millis();
+                    face.update();
+                    if (speakSweepMs > 0 && millis() >= speakSweepMs) {
+                        M5StackChan.Motion.moveX(random(-200, 201), 210);
+                        M5StackChan.Motion.moveY(450 + random(-25, 26), 190);
+                        speakSweepMs = millis() + 900 + random(800);
+                    }
+                }
+                delay(1);
+            }
+            flushChunk();   // queue this chunk's final partial buffer (unless aborted)
+        };
+
+        // Drain trailing body bytes (the small chunk_index/last tail) so the
+        // keep-alive TLS socket is clean before the next request reuses it.
+        auto drainTail = [&]() {
+            auto* raw = _http.getStreamPtr();
+            uint32_t idle = millis();
+            while (millis() - idle < 60) {
+                if (raw->available()) { raw->read(); idle = millis(); }
+                else delay(2);
+            }
+        };
+
+        // ── Manifest: stream_id + chunk_count + chunk 0's text & audio ───────────
+        // "text"/"stream_id"/"chunk_count" precede "audio"/"response" in the JSON, so
+        // they're always inside the 6 KB peek head regardless of reply length. The full
+        // reply lives server-side (echo-guard); Dio captions per chunk instead.
+        int peekLen = fillPeek();
+        JsonDocument filter;
+        filter["stream_id"]   = true;
+        filter["chunk_count"] = true;
+        filter["text"]        = true;
         JsonDocument jdoc;
         deserializeJson(jdoc, peek, peekLen, DeserializationOption::Filter(filter));
-        const char* resp = jdoc["response"];
-        String responseText = (resp && *resp) ? String(resp) : "";
-        { char _sb[24]; snprintf(_sb, sizeof(_sb), "resp len=%d", (int)responseText.length()); _dbgState(_sb); }
+        const char* sid = jdoc["stream_id"];
+        String streamId = (sid && *sid) ? String(sid) : "";
+        int chunkCount  = jdoc["chunk_count"] | 0;
+        const char* t0  = jdoc["text"];
+        String chunk0Text   = (t0 && *t0) ? String(t0) : "";
+        String responseText = chunk0Text;   // return/log value (first slice of the reply)
 
-        uint32_t speakSweepMs = 0;  // speaking emphasis timer; first sweep after 800ms
-        if (responseText.length() > 0) {
-            _applyMoodReaction(responseText);
+        char* foundTag = strstr(peek, "\"audio\":\"");
+        int audioStart = foundTag ? (int)(foundTag - peek) + 9 : -1;   // 9 = strlen("\"audio\":\"")
+
+        if (chunkCount > 0 && audioStart >= 0) {
+            // Speaking pose + mood beat once; caption chunk 0, then play it.
+            _applyMoodReaction(chunk0Text);
             face.setState(Ph3b3Face::SPEAKING);
             _dbgState("playing");
-            face.setBubble(responseText);
-            face.update();
-            // Speaking start pose — direct command (loop() blocked by _doChatAndPlay).
             M5StackChan.Motion.moveX(0, 280);
             M5StackChan.Motion.moveY(450, 280);
             speakSweepMs = millis() + 800;
-        }
-
-        // ── Phase B: stream-decode "audio":"<base64>" field ──────────────────
-        const char* audioTag  = "\"audio\":\"";
-        char* foundTag = strstr(peek, audioTag);
-        int audioStart = foundTag ? (int)(foundTag - peek) + (int)strlen(audioTag) : -1;
-
-        if (audioStart >= 0) {
-            // Double-buffered decode — same pattern as Iris
-            static int16_t pcmBuf[2][CHUNK_SAMP];
-            int   fillIdx       = 0;
-            int   chunkPos      = 0;
-            int   wavHdrSkipped = 0;
-            uint8_t halfLo      = 0;
-            bool  halfReady     = false;
-            char  b4[4]; int b4pos = 0;
-            bool  keepGoing     = true;
-
-            auto flushChunk = [&]() {
-                if (chunkPos == 0) return;
-                // RMS → lip-sync level (face.update() happens in outer loop, not here)
-                float rms = 0.0f;
-                for (int i = 0; i < chunkPos; i++) {
-                    float s = pcmBuf[fillIdx][i] / 32768.0f;
-                    rms += s * s;
-                }
-                face.setSpeakingLevel(min(1.0f, sqrtf(rms / chunkPos) * 5.0f));
-                // Queue next chunk as soon as there's room
-                while (M5.Speaker.isPlaying(0) >= 2) delay(1);
-                if (!keepGoing) return;
-                M5.Speaker.playRaw(pcmBuf[fillIdx], chunkPos, 22050, false, 1, 0);
-                fillIdx ^= 1;
-                chunkPos = 0;
-            };
-
-            auto pushByte = [&](uint8_t b) {
-                if (wavHdrSkipped++ < 44) return;
-                if (!halfReady) { halfLo = b; halfReady = true; return; }
-                // Race guard: pcmBuf[fillIdx] was queued two iterations ago and may
-                // still be playing. Wait until it leaves the queue before overwriting it.
-                if (chunkPos == 0) {
-                    while (M5.Speaker.isPlaying(0) >= 2) delay(1);
-                }
-                pcmBuf[fillIdx][chunkPos++] = (int16_t)((b << 8) | halfLo);
-                halfReady = false;
-                if (chunkPos == CHUNK_SAMP) flushChunk();
-            };
-
-            auto feedCh = [&](char ch) {
-                if (!keepGoing) return;
-                if (ch == '"') { keepGoing = false; return; }
-                int v = _b64val(ch);
-                if (v < 0) return;
-                b4[b4pos++] = ch;
-                if (b4pos == 4) {
-                    int v0=_b64val(b4[0]), v1=_b64val(b4[1]),
-                        v2=_b64val(b4[2]), v3=_b64val(b4[3]);
-                    if (v0 >= 0 && v1 >= 0) {
-                        pushByte((uint8_t)((v0<<2)|(v1>>4)));
-                        if (v2 >= 0 && b4[2] != '=') {
-                            pushByte((uint8_t)((v1<<4)|(v2>>2)));
-                            if (v3 >= 0 && b4[3] != '=') pushByte((uint8_t)((v2<<6)|v3));
-                        }
-                    }
-                    b4pos = 0;
-                }
-            };
-
-            // Decode from peek buffer first, then stream remaining bytes
-            for (int i = audioStart; i < peekLen; i++) feedCh(peek[i]);
-
-            if (keepGoing) {
-                face.update();
-
-                uint32_t lastFaceMs     = 0;          // throttle face SPI blit to <=10 fps during decode
-                uint32_t lastProgressMs = millis();   // watchdog: last stream byte consumed OR audio rendered
-                // No duration cap — active playback is NEVER truncated. A no-progress
-                // watchdog replaces the old 90s deadline as the hung-stream safety.
-                while (keepGoing) {
-                    // Drain all available TCP bytes before any UI work —
-                    // single-byte reads with M5.update() between each byte was
-                    // too slow (≈200 chars/s) to sustain 22050 Hz audio decode.
-                    bool gotData = false;
-                    while (keepGoing && raw->available() > 0) {
-                        feedCh((char)raw->read());
-                        gotData = true;
-                    }
-                    // Progress = bytes still arriving OR speaker still rendering queued audio.
-                    if (gotData || M5.Speaker.isPlaying(0) > 0) {
-                        lastProgressMs = millis();
-                    } else if (millis() - lastProgressMs >= PLAYBACK_WATCHDOG_MS) {
-                        // Nominally streaming but no bytes and speaker drained → stream hung.
-                        Serial.printf("[i2s] playback watchdog: no progress %ums (speaker drained, avail=%d) — stream hung, tearing down\n",
-                                      (unsigned)PLAYBACK_WATCHDOG_MS, raw->available());
-                        M5.Speaker.stop(0);
-                        M5.Speaker.end();
-                        keepGoing = false;
-                        break;
-                    }
-                    // Barge-in stays every iteration — getTouch()/M5.update() are cheap.
-                    M5.update();
-                    int16_t tx2, ty2;
-                    if (M5StackChan.Display().getTouch(&tx2, &ty2)) {
-                        M5.Speaker.stop(0);
-                        M5.Speaker.end();  // fully release I2S before mic can start
-                        face.setSpeakingLevel(0.0f);
-                        _bargeIn   = true;
-                        keepGoing  = false;
-                        break;
-                    }
-                    // Face SPI blit + servo at ~FACE_TICK_MS during playback — enough for the
-                    // speech bubble to grow/scroll live, throttled so it doesn't starve the
-                    // I2S refill. (The old isPlaying>=2 gate rarely fired → bubble froze until
-                    // the post-playback drain loop. Raise FACE_TICK_MS if audio sputters.)
-                    if (millis() - lastFaceMs >= FACE_TICK_MS) {
-                        lastFaceMs = millis();
-                        face.update();
-                        // Speaking emphasis: gentle pan/tilt on phrase boundaries during playback.
-                        if (speakSweepMs > 0 && millis() >= speakSweepMs) {
-                            M5StackChan.Motion.moveX(random(-200, 201), 210);
-                            M5StackChan.Motion.moveY(450 + random(-25, 26), 190);
-                            speakSweepMs = millis() + 900 + random(800);
-                        }
-                    }
-                    delay(1);
-                }
-            }
-
-            flushChunk();
+            face.setBubble(chunk0Text);
+            face.update();
+            playField(peekLen, audioStart);          // chunk 0 (carried in the manifest)
+            drainTail();
             _http.end();
 
+            // ── Chunks 1..N-1: lazy GET, play each ──────────────────────────────
+            for (int n = 1; n < chunkCount && !abort; n++) {
+                String path = "/tts/chunk/" + streamId + "/" + String(n);
+                if (!_http.begin(_tls, gSrvHost.c_str(), gSrvPort, path.c_str(), true)) break;
+                _http.setConnectTimeout(30000);
+                _http.setTimeout(60000);
+                _http.setAuthorization(gSrvUser.c_str(), gSrvPass.c_str());
+                _http.addHeader("X-Ph3b3-Device", "stackchan");
+                int gc = _http.GET();
+                if (gc != HTTP_CODE_OK) {
+                    Serial.printf("[chunk %d] GET code=%d — stopping\n", n, gc);
+                    _http.end(); break;
+                }
+                int cpl = fillPeek();
+                JsonDocument cfilter; cfilter["text"] = true;
+                JsonDocument cjdoc;
+                deserializeJson(cjdoc, peek, cpl, DeserializationOption::Filter(cfilter));
+                const char* ctx = cjdoc["text"];
+                char* ct = strstr(peek, "\"audio\":\"");
+                int cAudio = ct ? (int)(ct - peek) + 9 : -1;
+                if (cAudio < 0) { Serial.printf("[chunk %d] no audio field\n", n); _http.end(); break; }
+                if (ctx && *ctx) face.setBubbleText(String(ctx));   // caption this chunk, synced to its audio
+                playField(cpl, cAudio);
+                drainTail();
+                _http.end();
+            }
+
+            // Post-drain: let the last queued audio finish (barge-in still honoured).
             while (M5.Speaker.isPlaying(0)) {
                 M5.update();
                 int16_t tx2, ty2;
                 if (M5StackChan.Display().getTouch(&tx2, &ty2)) {
-                    M5.Speaker.stop(0);
-                    M5.Speaker.end();
+                    M5.Speaker.stop(0); M5.Speaker.end();
                     face.setSpeakingLevel(0.0f);
                     _bargeIn = true;
                     break;
@@ -907,16 +943,10 @@ private:
                 face.update();
                 delay(50);
             }
-
-            // Release speaker I2S unconditionally after playback.
-            // BCK/WS are shared with mic (GPIO 34/33); if speaker I2S stays
-            // initialised, the next M5.Mic.begin() gets the bus in a broken
-            // state and records zeros. Barge-in already calls end() above;
-            // this covers the normal non-interrupted drain path.
             if (!_bargeIn) {
                 Serial.println("[i2s] speaker.end() — normal drain complete");
                 M5.Speaker.end();
-                delay(15);  // let shared clock lines settle before mic takes the bus
+                delay(15);
             }
         } else {
             _http.end();
