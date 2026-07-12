@@ -850,6 +850,20 @@ async def chat_endpoint(body: dict, request: Request):
     if "soul" in user_msg.lower():
         tts.soul_line()
 
+    # ── Direct story recitation — tell a saved story verbatim, PRE-triage ─────
+    # When the user asks to TELL/READ a saved story by title, return the stored
+    # text word-for-word with a short lead-in, bypassing triage + inference
+    # (inference summarises long stories; this recites them whole).
+    _tell = stories.tellable(user_msg)
+    if _tell:
+        _title, _text = _tell
+        _reply = f"Come close, then — here is {_title}, told whole.\n\n{_text}"
+        session.add("user", user_msg)
+        session.add("assistant", _reply)
+        log.info("STORY_TOLD verbatim: %s (%d chars)", _title, len(_text))
+        _audio = await asyncio.to_thread(tts.synthesize_to_b64, _reply)
+        return {"response": _reply, "audio": _audio}
+
     # ── Triage gate — clarification guard, general chat path, PRE-inference ────
     # Decide if the request is answerable from context/knowledge/tools before
     # committing to a full inference; on a confident "no", ask instead of
