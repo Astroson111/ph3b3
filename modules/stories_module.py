@@ -75,7 +75,7 @@ class StoriesModule:
             text = s.get("story","") + s.get("title","")
             if not topic or topic.lower() in text.lower():
                 who = s.get("from", s.get("title", "unknown"))
-                results.append(f"[{s['date'][:10]}] {who}: {s.get('story','')[:150]}")
+                results.append(f"[{s['date'][:10]}] {who}: {s.get('story','')}")
         if results:
             return "\n\n".join(results[-5:])
         return "No stories found."
