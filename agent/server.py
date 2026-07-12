@@ -109,11 +109,12 @@ from film_module import FilmModule
 from translation_module import TranslationModule
 from memory_module import MemoryModule
 from wake_gate import wake_match
+from tts_chunker import split_for_tts
 from occult_module import OccultModule
 from jokes_module import JokesModule
 from vision_module import VisionModule
 from search_module import SearchModule
-from tts_module import TTSModule
+from tts_module import TTSModule, trim_silence_b64
 from stt_module import STTModule
 from anime_module import AnimeModule
 from stories_module import StoriesModule
@@ -865,8 +866,14 @@ def _triage_context(prior_messages) -> str:
     return "\n".join(f"{m['role']}: {m['content']}" for m in turns[-8:])
 
 
-@app.post("/chat")
-async def chat_endpoint(body: dict, request: Request):
+async def _run_chat_pipeline(body: dict, request: Request):
+    """Shared /chat brain: wake-gate → recitation → triage → inference.
+
+    Returns the reply TEXT (with session bookkeeping done exactly as before), or
+    None if the wake-gate dropped the utterance. Synthesis is the CALLER's job —
+    /chat renders it whole, /chat/stream renders it in bounded chunks. Single
+    source of truth so the two endpoints can never diverge.
+    """
     session = get_session(body.get("session_id","default"))
     user_msg = body.get("message","")
 
@@ -880,16 +887,13 @@ async def chat_endpoint(body: dict, request: Request):
         matched, cleaned = wake_match(user_msg)
         if not matched:
             log.info(f"[wake-gate] dropped non-wake utterance: {user_msg!r}")
-            return {"response": "", "audio": ""}
+            return None
         user_msg = cleaned or user_msg   # strip the wake token; model sees the request
 
     if "soul" in user_msg.lower():
         tts.soul_line()
 
     # ── Direct story recitation — tell a saved story verbatim, PRE-triage ─────
-    # When the user asks to TELL/READ a saved story by title, return the stored
-    # text word-for-word with a short lead-in, bypassing triage + inference
-    # (inference summarises long stories; this recites them whole).
     _tell = stories.tellable(user_msg)
     if _tell:
         _title, _text = _tell
@@ -897,38 +901,27 @@ async def chat_endpoint(body: dict, request: Request):
         session.add("user", user_msg)
         session.add("assistant", _reply)
         log.info("STORY_TOLD verbatim: %s (%d chars)", _title, len(_text))
-        _audio = await asyncio.to_thread(tts.synthesize_to_b64, _reply)
-        return {"response": _reply, "audio": _audio}
+        return _reply
 
     # ── Triage gate — clarification guard, general chat path, PRE-inference ────
-    # Decide if the request is answerable from context/knowledge/tools before
-    # committing to a full inference; on a confident "no", ask instead of
-    # confabulating. Fails open on any error (see modules/triage.py). Never
-    # touches Morpheus gpu_lock; Hermes-resident-only (no reload trigger).
     _triage = await triage_gate(user_msg, _triage_context(session.messages()))
     if not _triage.answerable:
         _q = _triage.question or "I don't have enough to go on yet — can you give me a bit more detail?"
         log.info("TRIAGE_HOLD — missing=%s", _triage.missing or [])
         session.add("user", user_msg)
         session.add("assistant", _q)
-        _audio = await asyncio.to_thread(tts.synthesize_to_b64, _q)
-        return {"response": _q, "audio": _audio}
+        return _q
 
     session.add("user", user_msg)
-
     messages = session.messages()
 
     # ── Live datetime (additive, ephemeral — read fresh every request) ────────
-    # Injected per-call; never stored in session history so it never accumulates.
-    # datetime.now().astimezone() reads the OS clock + local timezone at call time.
     _now = datetime.now().astimezone()
     _dt_str = _now.strftime("%A, %B %-d, %Y, %-I:%M %p")
     _dt_note = {"role": "system", "content": f"Current date and time: {_dt_str}."}
     messages.insert(1, _dt_note)
 
     # ── Device-awareness (additive, ephemeral, soul untouched) ───────────────
-    # Injected per-call into the Ollama context only; never stored in session
-    # history so it doesn't accumulate. Add new devices here as needed.
     _DEVICE_NOTES = {
         "iris": (
             "You are speaking through your Iris combadge (body), running on Nyx (host). "
@@ -959,8 +952,86 @@ async def chat_endpoint(body: dict, request: Request):
 
     session.history = updated
     session.add("assistant", response)
-    audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, response)
-    return {"response": response, "audio": audio_b64}
+    return response
+
+
+@app.post("/chat")
+async def chat_endpoint(body: dict, request: Request):
+    # Response shape is FROZEN: {response, audio} with the WHOLE reply as one WAV.
+    # Iris + web UI depend on this — do not change. Chunked delivery is /chat/stream.
+    reply = await _run_chat_pipeline(body, request)
+    if reply is None:
+        return {"response": "", "audio": ""}
+    audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, reply)
+    return {"response": reply, "audio": audio_b64}
+
+
+# ── Chunked TTS (synth-on-demand) — additive; clients opt in via /chat/stream ──
+# Long replies (a 5.4 KB story = ~5 min / 18 MB as one WAV) are split into
+# bounded sentence-sized pieces so no single synth scales with reply length.
+# First call returns a manifest + chunk 0's audio; the client fetches chunk N+1
+# while playing N; the server synthesises lazily per fetch with a one-chunk
+# read-ahead. Piper is CPU and already serialised by tts._lock (synthesize_to_b64
+# holds it) → chunk renders serialise naturally; no GPU lock is involved.
+_TTS_STREAMS = {}          # sid -> {"chunks": [str], "audio": {n: b64}, "ts": float}
+_TTS_STREAM_TTL = 900      # evict streams idle > 15 min
+
+def _tts_stream_gc(now):
+    for k in [k for k, v in _TTS_STREAMS.items() if now - v["ts"] > _TTS_STREAM_TTL]:
+        _TTS_STREAMS.pop(k, None)
+
+def _tts_stream_new(chunks):
+    now = time.monotonic()
+    _tts_stream_gc(now)
+    sid = uuid.uuid4().hex[:12]
+    _TTS_STREAMS[sid] = {"chunks": chunks, "audio": {}, "ts": now}
+    return sid
+
+async def _tts_chunk_b64(sid, n):
+    st = _TTS_STREAMS.get(sid)
+    if not st or n < 0 or n >= len(st["chunks"]):
+        return None
+    st["ts"] = time.monotonic()
+    if n not in st["audio"]:
+        b64 = await asyncio.to_thread(tts.synthesize_to_b64, st["chunks"][n]) or ""
+        st["audio"][n] = trim_silence_b64(b64) if b64 else ""   # drop Piper's ~200ms per-chunk gaps
+    return st["audio"][n]
+
+
+@app.post("/chat/stream")
+async def chat_stream_endpoint(body: dict, request: Request):
+    """Chunked-TTS variant of /chat — same brain via _run_chat_pipeline, but
+    returns a manifest + chunk 0 instead of one monolithic WAV. Wake-gate drop
+    is preserved (empty manifest, no synthesis)."""
+    reply = await _run_chat_pipeline(body, request)
+    if not reply:
+        return {"response": "", "stream_id": "", "chunk_count": 0,
+                "chunk_index": -1, "audio": "", "last": True}
+    chunks = split_for_tts(reply)
+    if not chunks:
+        return {"response": reply, "stream_id": "", "chunk_count": 0,
+                "chunk_index": -1, "audio": "", "last": True}
+    sid = _tts_stream_new(chunks)
+    audio0 = await _tts_chunk_b64(sid, 0)
+    if len(chunks) > 1:
+        asyncio.create_task(_tts_chunk_b64(sid, 1))   # read-ahead
+    return {"response": reply, "stream_id": sid, "chunk_count": len(chunks),
+            "chunk_index": 0, "audio": audio0 or "", "last": len(chunks) == 1}
+
+
+@app.get("/tts/chunk/{stream_id}/{n}")
+async def tts_chunk_endpoint(stream_id: str, n: int):
+    """Fetch chunk n's audio for a /chat/stream session (lazy synth, cached,
+    one-chunk read-ahead)."""
+    st = _TTS_STREAMS.get(stream_id)
+    if not st:
+        return {"audio": "", "chunk_index": n, "last": True, "error": "unknown or expired stream"}
+    if n < 0 or n >= len(st["chunks"]):
+        return {"audio": "", "chunk_index": n, "last": True, "error": "chunk out of range"}
+    audio = await _tts_chunk_b64(stream_id, n)
+    if n + 1 < len(st["chunks"]):
+        asyncio.create_task(_tts_chunk_b64(stream_id, n + 1))   # read-ahead
+    return {"audio": audio or "", "chunk_index": n, "last": n + 1 >= len(st["chunks"])}
 
 @app.delete("/session/{session_id}")
 async def clear_session(session_id: str):

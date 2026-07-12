@@ -1,3 +1,4 @@
+import array
 import base64
 import io
 import os
@@ -8,6 +9,45 @@ import sys
 import threading
 import wave
 from pathlib import Path
+
+
+def trim_silence_b64(b64, thr=350, keep_ms=40):
+    """Trim leading/trailing near-silence from a base64 WAV (22050/mono/16-bit),
+    keeping `keep_ms` of pad each side.
+
+    Piper emits ~100 ms of silence at each end of every utterance; concatenating
+    per-sentence chunks would otherwise leave ~200 ms gaps at every boundary.
+    Trimming to a small pad makes chunk playback flow like continuous speech.
+    Returns the input unchanged on any error or unexpected format.
+    """
+    try:
+        wav = base64.b64decode(b64)
+        wf = wave.open(io.BytesIO(wav), "rb")
+        if (wf.getframerate(), wf.getnchannels(), wf.getsampwidth()) != (22050, 1, 2):
+            return b64
+        s = array.array("h")
+        s.frombytes(wf.readframes(wf.getnframes()))
+        n = len(s)
+        i = 0
+        while i < n and abs(s[i]) < thr:
+            i += 1
+        j = n
+        while j > i and abs(s[j - 1]) < thr:
+            j -= 1
+        if i >= j:
+            return b64  # all silence — leave as-is
+        keep = int(22050 * keep_ms / 1000)
+        i = max(0, i - keep)
+        j = min(n, j + keep)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(22050)
+            w.writeframes(s[i:j].tobytes())
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return b64
 
 
 def _strip_for_piper(text: str) -> str:
