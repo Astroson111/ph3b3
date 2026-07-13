@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import secrets
+import subprocess
 import sys
 import tempfile
 import threading
@@ -109,6 +110,7 @@ from scam_detector import ScamDetector
 from investigation_module import InvestigationModule
 from camera_module import CameraModule
 from vision_stream_module import VisionStreamModule
+import morpheus_lite  # Morpheus-lite: floor-gated image path (gallery/live/auto)
 
 app = FastAPI(title="Ph3b3 Agent", version="2.0.0")
 app.add_middleware(
@@ -622,11 +624,77 @@ async def transcribe_audio(body: dict):
             pass
 
 
+@app.post("/image")
+async def image_endpoint(body: dict):
+    """Morpheus-lite image request. The content-safety floor runs first (every
+    mode); the handler always returns a clean dict — never a stack trace."""
+    prompt = body.get("prompt", "")
+    return await asyncio.to_thread(morpheus_lite.handle, prompt)
+
+
+@app.get("/image/config")
+async def image_config():
+    """Image-mode UI state. `live_enabled` is the server master gate — the UI greys
+    Live/Auto when it is false; the gate itself is enforced server-side regardless."""
+    return {"mode": morpheus_lite.get_mode(),
+            "live_enabled": morpheus_lite.LIVE_GEN_ENABLED,
+            "modes": list(morpheus_lite._VALID_MODES)}
+
+
+@app.post("/image/mode")
+async def image_set_mode(body: dict):
+    """Switch the runtime image mode (gallery|live|auto) with no restart. Setting a
+    mode does NOT enable live generation — that stays gated by PH3B3_LIVE_GEN_ENABLED."""
+    try:
+        mode = morpheus_lite.set_mode(body.get("mode", ""))
+    except ValueError:
+        return Response(content="invalid mode", status_code=400)
+    return {"mode": mode, "live_enabled": morpheus_lite.LIVE_GEN_ENABLED}
+
+
+@app.get("/image/file/{name}")
+async def image_file(name: str):
+    """Serve a generated or pre-baked gallery image by filename. Behind the global
+    basic_auth middleware; the resolver validates against path traversal."""
+    path = morpheus_lite.resolve_served_image(name)
+    if path is None:
+        return Response(content="not found", status_code=404)
+    media = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+             ".webp": "image/webp"}.get(path.suffix.lower(), "application/octet-stream")
+    return Response(content=path.read_bytes(), media_type=media)
+
+
+@app.get("/image/gallery")
+async def image_gallery():
+    """List every servable image (generated + pre-baked), newest first, for the web
+    UI's gallery view. Behind the global basic_auth middleware; each returned name is
+    fetched via /image/file/{name}."""
+    return {"images": morpheus_lite.list_served_images()}
+
+
+@app.post("/power/off")
+async def power_off():
+    """Stop the Ph3b3 systemd user service (the panel OFF button). Behind the auth
+    middleware. Responds first, then asks systemd to stop the unit — a clean stop,
+    so Restart=on-failure does NOT relaunch it. Restart via the desktop shortcut or
+    `ph3b3 up`."""
+    def _stop():
+        time.sleep(0.6)  # let the HTTP response flush before systemd SIGTERMs us
+        try:
+            subprocess.Popen(["systemctl", "--user", "stop", "ph3b3"], start_new_session=True)
+        except Exception as e:
+            log.error(f"[power/off] stop failed: {e}")
+    threading.Thread(target=_stop, daemon=True).start()
+    log.info("[power/off] shutdown requested via panel")
+    return {"status": "stopping", "message": "Ph3b3 is shutting down."}
+
+
 @app.get("/")
 async def index():
     return Response(
         content=(ROOT / "static" / "index.html").read_text(encoding="utf-8"),
         media_type="text/html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
     )
 
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")

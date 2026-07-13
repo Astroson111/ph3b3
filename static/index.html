@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ph3b3</title>
+    <title>Ph3b3-Light</title>
     <link rel="icon" href="/static/favicon.ico" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png">
@@ -192,12 +192,93 @@
         }
         #login-btn:hover { background: #a855f7; }
         #login-err { color: #ef4444; font-size: 12px; min-height: 16px; }
+
+        /* ── Image-mode control (topbar) ────────────────────────────────── */
+        #img-mode { display: flex; align-items: center; gap: 4px; margin-left: 16px; }
+        #img-mode-label { color: #5b5280; font-size: 10px; letter-spacing: 1px; }
+        .img-mode-btn {
+            background: #18182e; color: #5b5280;
+            border: 1px solid #2a1f4a; border-radius: 3px;
+            padding: 3px 8px; font-family: 'Courier New', monospace;
+            font-size: 10px; letter-spacing: 1px; cursor: pointer;
+            transition: background .15s, color .15s, border-color .15s;
+        }
+        .img-mode-btn:hover:not(:disabled):not(.active) { border-color: #7c3aed; color: #a78bfa; }
+        .img-mode-btn.active   { background: #7c3aed; color: #fff; border-color: #a855f7; }
+        .img-mode-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+        /* ── Inline generated/gallery image ─────────────────────────────── */
+        .chat-img {
+            display: block; max-width: min(340px, 82%);
+            margin: 6px 0 4px 2px;
+            border: 1px solid #2a1f4a; border-radius: 6px;
+        }
+        .img-cap { color: #5b5280; font-size: 11px; font-style: italic; margin: 0 0 8px 4px; }
+
+        /* ── Power / OFF button ─────────────────────────────────────────── */
+        #power-off {
+            background: #2a1010; color: #fca5a5;
+            border: 1px solid #ef4444; border-radius: 3px;
+            padding: 3px 10px; margin-left: 12px; flex-shrink: 0;
+            font-family: 'Courier New', monospace; font-size: 12px; font-weight: bold;
+            letter-spacing: 1px; cursor: pointer; transition: background .15s, color .15s;
+        }
+        #power-off:hover { background: #ef4444; color: #fff; }
+
+        /* ── Gallery view ───────────────────────────────────────────────── */
+        #gallery-open {
+            background: #18182e; color: #a78bfa; border: 1px solid #2a1f4a;
+            border-radius: 4px; cursor: pointer; font-size: 13px; line-height: 1;
+            padding: 4px 8px; margin-left: 8px; flex-shrink: 0;
+            transition: background .15s, border-color .15s;
+        }
+        #gallery-open:hover { background: #2a1f4a; border-color: #7c3aed; }
+        #gallery-overlay {
+            position: fixed; inset: 0; z-index: 8000; background: #0a0a14;
+            display: none; flex-direction: column;
+        }
+        #gallery-overlay.open { display: flex; }
+        #gallery-bar {
+            display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+            padding: 10px 14px; background: #13132c; border-bottom: 1px solid #2a1f4a;
+        }
+        #gallery-back {
+            background: #7c3aed; color: #fff; border: none; border-radius: 4px;
+            font: inherit; font-weight: bold; letter-spacing: 1px;
+            padding: 6px 14px; cursor: pointer; transition: background .15s;
+        }
+        #gallery-back:hover { background: #a855f7; }
+        #gallery-title { color: #cbb8ff; letter-spacing: 2px; font-weight: bold; }
+        #gallery-count { color: #5b5280; font-size: 12px; }
+        #gallery-grid {
+            flex: 1; overflow-y: auto; padding: 14px; align-content: start;
+            display: grid; gap: 12px;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        }
+        .gallery-cell {
+            border: 1px solid #2a1f4a; border-radius: 6px; overflow: hidden; background: #0d0d1c;
+        }
+        .gallery-cell img {
+            display: block; width: 100%; height: 150px; object-fit: cover;
+            cursor: zoom-in; background: #0d0d1c;
+        }
+        .gallery-cell .gcap {
+            font-size: 10px; color: #5b5280; padding: 3px 6px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        #gallery-msg { color: #5b5280; padding: 20px; font-style: italic; }
+        #gallery-lightbox {
+            position: fixed; inset: 0; z-index: 8100; background: rgba(5, 5, 12, .94);
+            display: none; align-items: center; justify-content: center; cursor: zoom-out;
+        }
+        #gallery-lightbox.open { display: flex; }
+        #gallery-lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 6px; }
     </style>
 </head>
 <body>
     <div id="login-overlay">
         <div id="login-box">
-            <div id="login-title">PH3B3</div>
+            <div id="login-title">PH3B3-LIGHT</div>
             <div id="login-sub">Enter access code</div>
             <input id="login-pass" type="password" placeholder="password…" autocomplete="current-password" />
             <button id="login-btn">CONNECT</button>
@@ -208,7 +289,17 @@
     <div id="topbar">
         <span id="status-dot">●</span>
         <span id="status-text">Idle</span>
-        <span id="title">PH3B3</span>
+        <span id="img-mode" title="image generation mode">
+            <span id="img-mode-label">IMG</span>
+            <button class="img-mode-btn" data-mode="gallery">GALLERY</button>
+            <button class="img-mode-btn" data-mode="live">LIVE</button>
+            <button class="img-mode-btn" data-mode="auto">AUTO</button>
+        </span>
+        <button id="gallery-open" title="Browse the image gallery">🖼 GALLERY</button>
+        <select id="server-select" title="Ph3b3 server" style="background:#1a1530;color:#cbb8ff;border:1px solid #3d3660;border-radius:4px;font:inherit;font-size:11px;padding:2px 4px;margin:0 4px;"></select>
+        <button id="server-edit" title="Edit servers (Iris / Dio / Nyx / local)" style="background:none;border:none;color:#8b7fb8;cursor:pointer;font-size:13px;padding:0 4px;">⚙</button>
+        <span id="title">PH3B3-LIGHT</span>
+        <button id="power-off" title="Shut down Ph3b3 (stops the server)">⏻ OFF</button>
     </div>
 
     <div id="chat"></div>
@@ -233,25 +324,67 @@
         </div>
     </div>
 
-    <script>
-    // ── Auth (mobile-safe Basic auth) ─────────────────────────────────────────
-    const CRED_KEY = 'ph3b3_creds';
-    let authHeader = '';
+    <div id="gallery-overlay">
+        <div id="gallery-bar">
+            <button id="gallery-back" title="Return to chat">← CHAT</button>
+            <span id="gallery-title">GALLERY</span>
+            <span id="gallery-count"></span>
+        </div>
+        <div id="gallery-grid"></div>
+    </div>
+    <div id="gallery-lightbox"><img id="gallery-lightbox-img" alt="" /></div>
 
+    <script>
+    // ── Servers (selectable Ph3b3 backends: Local / Iris / Dio / Nyx) ──────────
+    // Each entry is a FULL Ph3b3 instance. This page is a thin client that talks
+    // to whichever server is selected in the top-bar dropdown. base:'' means
+    // same-origin (the server that served this page). Fill in Iris/Dio/Nyx with
+    // their real hosts via the ⚙ button — the list is saved in this browser.
+    // NOTE: for a remote server to answer this page, that server's .env must add
+    // this page's origin to PH3B3_CORS_ORIGINS (else the browser blocks the call).
+    const SERVERS_KEY = 'ph3b3_servers';
+    const ACTIVE_KEY  = 'ph3b3_active_server';
+    const DEFAULT_SERVERS = [
+        { id: 'local',  label: 'Local (this machine)', base: '',                          user: 'astroson' },
+        { id: 'ph3b3',  label: 'Ph3b3 (main)',         base: 'http://100.82.221.100:7331', user: 'astroson' },
+        { id: 'helios', label: 'Helios',               base: 'http://100.68.222.78:7331',  user: 'astroson' },
+    ];
+    function loadServers() {
+        try {
+            const raw = localStorage.getItem(SERVERS_KEY);
+            if (raw) { const a = JSON.parse(raw); if (Array.isArray(a) && a.length) return a; }
+        } catch {}
+        return DEFAULT_SERVERS.slice();
+    }
+    function saveServers(list) { localStorage.setItem(SERVERS_KEY, JSON.stringify(list)); }
+    let SERVERS = loadServers();
+    let currentServerId = localStorage.getItem(ACTIVE_KEY) || SERVERS[0].id;
+    function currentServer() { return SERVERS.find(s => s.id === currentServerId) || SERVERS[0]; }
+    // Build a full API URL for the active server. Absolute URLs pass through
+    // unchanged (e.g. image_url that a remote server returns as its own origin).
+    function api(path) {
+        if (/^https?:\/\//i.test(path)) return path;
+        return (currentServer().base || '') + path;
+    }
+
+    // ── Auth (per-server Basic auth, mobile-safe) ─────────────────────────────
+    let authHeader = '';
+    function _credKey(id) { return 'ph3b3_creds_' + id; }
     function _loadStoredAuth() {
-        const b64 = localStorage.getItem(CRED_KEY);
+        const b64 = localStorage.getItem(_credKey(currentServerId));
         authHeader = b64 ? 'Basic ' + b64 : '';
     }
     function _storeAuth(password) {
-        const b64 = btoa('astroson:' + password);
-        localStorage.setItem(CRED_KEY, b64);
+        const b64 = btoa(currentServer().user + ':' + password);
+        localStorage.setItem(_credKey(currentServerId), b64);
         authHeader = 'Basic ' + b64;
     }
     function _clearAuth() {
-        localStorage.removeItem(CRED_KEY);
+        localStorage.removeItem(_credKey(currentServerId));
         authHeader = '';
     }
     function _showLogin(msg) {
+        document.getElementById('login-sub').textContent = 'Connect to ' + currentServer().label;
         document.getElementById('login-err').textContent = msg || '';
         document.getElementById('login-pass').value = '';
         document.getElementById('login-overlay').classList.add('visible');
@@ -264,11 +397,12 @@
         if (!password) return;
         _storeAuth(password);
         try {
-            const r = await fetch('/health', { headers: { 'Authorization': authHeader } });
+            const r = await fetch(api('/health'), { headers: { 'Authorization': authHeader } });
             if (r.ok) { _hideLogin(); initApp(); return; }
         } catch {}
         _clearAuth();
-        document.getElementById('login-err').textContent = 'Wrong password — try again.';
+        document.getElementById('login-err').textContent =
+            'Wrong password (or server unreachable) — try again.';
         document.getElementById('login-pass').value = '';
         document.getElementById('login-pass').focus();
     }
@@ -278,6 +412,53 @@
     document.getElementById('login-btn').addEventListener('click', () => {
         _tryLogin(document.getElementById('login-pass').value);
     });
+
+    // ── Server switching / editor ─────────────────────────────────────────────
+    function renderServerSelect() {
+        const sel = document.getElementById('server-select');
+        sel.innerHTML = '';
+        for (const s of SERVERS) {
+            const o = document.createElement('option');
+            o.value = s.id; o.textContent = s.label;
+            if (s.id === currentServerId) o.selected = true;
+            sel.appendChild(o);
+        }
+    }
+    function switchServer(id) {
+        if (!SERVERS.find(s => s.id === id)) return;
+        currentServerId = id;
+        localStorage.setItem(ACTIVE_KEY, id);
+        const s = currentServer();
+        addSys('→ ' + s.label + (s.base ? '  (' + s.base + ')' : '  (local)'));
+        _loadStoredAuth();
+        if (!authHeader) { _showLogin(); return; }
+        initApp();
+    }
+    function openServerEditor() {
+        const text = SERVERS.map(s => [s.id, s.label, s.base, s.user].join(' | ')).join('\n');
+        const next = prompt(
+            'Edit Ph3b3 servers — one per line:\n' +
+            '  id | label | base-url | user\n' +
+            '(base-url empty = this machine; e.g.  iris | Iris | http://iris:7331 | astroson )',
+            text);
+        if (next == null) return;
+        const list = [];
+        for (const line of next.split('\n')) {
+            const t = line.trim(); if (!t) continue;
+            const [id, label, base, user] = t.split('|').map(x => (x || '').trim());
+            if (!id) continue;
+            list.push({ id, label: label || id, base: base || '', user: user || 'astroson' });
+        }
+        if (!list.length) return;
+        SERVERS = list; saveServers(SERVERS);
+        if (!SERVERS.find(s => s.id === currentServerId)) currentServerId = SERVERS[0].id;
+        renderServerSelect();
+        switchServer(currentServerId);
+    }
+    renderServerSelect();
+    document.getElementById('server-select').addEventListener('change', e => switchServer(e.target.value));
+    document.getElementById('server-edit').addEventListener('click', openServerEditor);
+
     _loadStoredAuth();
     if (!authHeader) _showLogin();
 
@@ -394,7 +575,7 @@
         setStatus('Thinking');
         const thinking = addThinking();
         try {
-            const res = await fetch('/chat', {
+            const res = await fetch(api('/chat'), {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
                 body:    JSON.stringify({ message: text, session_id: 'web' }),
@@ -418,15 +599,77 @@
         setStatus('Idle');
     }
 
+    // ── Image request + inline render ─────────────────────────────────────────
+    function addImage(objUrl, caption) {
+        const header = document.createElement('div');
+        header.style.marginTop = '10px';
+        header.innerHTML =
+            `<span class="msg-ts">${ts()}  </span>` +
+            `<span class="msg-name-bot">Ph3b3</span>`;
+        chatEl.appendChild(header);
+        const img = document.createElement('img');
+        img.className = 'chat-img';
+        img.src = objUrl;
+        img.alt = caption || 'generated image';
+        chatEl.appendChild(img);
+        if (caption) {
+            const cap = document.createElement('div');
+            cap.className = 'img-cap';
+            cap.textContent = `  ${caption}`;
+            chatEl.appendChild(cap);
+        }
+        chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    async function sendImage(prompt) {
+        addMsg('You', `🖼  ${prompt}`);
+        setStatus('Thinking');
+        const thinking = addThinking();
+        try {
+            const res = await fetch(api('/image'), {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
+                body:    JSON.stringify({ prompt }),
+            });
+            thinking.remove();
+            if (res.status === 401) { _clearAuth(); _showLogin('Session expired — please reconnect.'); return; }
+            if (!res.ok) { addSys(`Image error: ${res.status}`); return; }
+            const data = await res.json();
+            if (!data.ok) {                        // floor block / gate refusal / empty gallery → clean line
+                addSys(data.reason || data.error || 'Image request could not be completed.');
+                return;
+            }
+            // <img> can't send the auth header, so fetch the bytes with auth → blob URL.
+            const imgRes = await fetch(api(data.image_url), { headers: { 'Authorization': authHeader } });
+            if (!imgRes.ok) { addSys('Could not load image.'); return; }
+            const objUrl = URL.createObjectURL(await imgRes.blob());
+            let cap = data.source === 'live'
+                ? `live · ${data.gen_seconds != null ? data.gen_seconds + 's' : 'ok'}`
+                : 'gallery';
+            if (data.fell_back) cap += ' (live unavailable — fallback)';
+            addImage(objUrl, cap);
+        } catch {
+            thinking.remove();
+            addSys('Cannot reach server — is Ph3b3 running?');
+        } finally {
+            setStatus('Idle');
+        }
+    }
+
     // ── Text box send ─────────────────────────────────────────────────────────
     async function send() {
-        const text = inputEl.value.trim();
-        if (!text || busy) return;
+        const raw = inputEl.value.trim();
+        if (!raw || busy) return;
         inputEl.value = '';
         busy = true;
         lockInput();
-        addMsg('You', text);
-        await doSend(text);
+        const m = raw.match(/^\/(?:img|image)\s+([\s\S]+)/i);
+        if (m) {
+            await sendImage(m[1].trim());
+        } else {
+            addMsg('You', raw);
+            await doSend(raw);
+        }
         busy = false;
         unlockInput();
     }
@@ -475,7 +718,7 @@
         const b64 = chunksToB64(chunks, sr);
         let text = '';
         try {
-            const tr = await fetch('/transcribe', {
+            const tr = await fetch(api('/transcribe'), {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
                 body:    JSON.stringify({ audio: b64 }),
@@ -818,13 +1061,127 @@
         drawMic('#1e1730', '#4a3880', '#5b5280');
     }
 
+    // ── Image-mode control ────────────────────────────────────────────────────
+    const imgBtns = Array.from(document.querySelectorAll('.img-mode-btn'));
+
+    function paintImgMode(mode, liveEnabled) {
+        imgBtns.forEach(b => {
+            const m = b.dataset.mode;
+            b.classList.toggle('active', m === mode);
+            const gated = (m === 'live' || m === 'auto') && !liveEnabled;
+            b.disabled = gated;
+            b.title    = gated ? 'not enabled on this build' : '';
+        });
+    }
+
+    async function initImageMode() {
+        try {
+            const r = await fetch(api('/image/config'), { headers: { 'Authorization': authHeader } });
+            if (!r.ok) return;
+            const d = await r.json();
+            paintImgMode(d.mode, d.live_enabled);
+        } catch {}
+    }
+
+    imgBtns.forEach(b => b.addEventListener('click', async () => {
+        if (b.disabled) return;
+        try {
+            const r = await fetch(api('/image/mode'), {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
+                body:    JSON.stringify({ mode: b.dataset.mode }),
+            });
+            if (!r.ok) { addSys('Could not switch image mode'); return; }
+            const d = await r.json();
+            paintImgMode(d.mode, d.live_enabled);
+            addSys(`Image mode → ${d.mode}`);
+        } catch { addSys('Could not switch image mode'); }
+    }));
+
+    // ── Gallery view ──────────────────────────────────────────────────────────
+    const galleryOverlay     = document.getElementById('gallery-overlay');
+    const galleryGrid        = document.getElementById('gallery-grid');
+    const galleryCount       = document.getElementById('gallery-count');
+    const galleryLightbox    = document.getElementById('gallery-lightbox');
+    const galleryLightboxImg = document.getElementById('gallery-lightbox-img');
+    let galleryUrls = [];   // active blob URLs; revoked on close to free memory
+
+    function closeGallery() {
+        galleryOverlay.classList.remove('open');
+        galleryLightbox.classList.remove('open');
+        galleryUrls.forEach(u => URL.revokeObjectURL(u));
+        galleryUrls = [];
+        galleryGrid.innerHTML = '';
+    }
+
+    async function openGallery() {
+        galleryOverlay.classList.add('open');
+        galleryGrid.innerHTML = '<div id="gallery-msg">Loading gallery…</div>';
+        galleryCount.textContent = '';
+        let names;
+        try {
+            const r = await fetch(api('/image/gallery'), { headers: { 'Authorization': authHeader } });
+            if (r.status === 401) { closeGallery(); _clearAuth(); _showLogin('Session expired — please reconnect.'); return; }
+            if (!r.ok) { galleryGrid.innerHTML = '<div id="gallery-msg">Could not load gallery.</div>'; return; }
+            names = (await r.json()).images || [];
+        } catch { galleryGrid.innerHTML = '<div id="gallery-msg">Cannot reach server — is Ph3b3 running?</div>'; return; }
+
+        if (!names.length) {
+            galleryGrid.innerHTML = '<div id="gallery-msg">No images yet — generate one with /img &lt;prompt&gt;.</div>';
+            return;
+        }
+        galleryGrid.innerHTML = '';
+        galleryCount.textContent = `${names.length} image${names.length === 1 ? '' : 's'}`;
+        // <img> can't send the auth header, so fetch each with auth → blob URL.
+        for (const name of names) {
+            try {
+                const ir = await fetch(api('/image/file/' + encodeURIComponent(name)), { headers: { 'Authorization': authHeader } });
+                if (!ir.ok) continue;
+                const url = URL.createObjectURL(await ir.blob());
+                galleryUrls.push(url);
+                const cell = document.createElement('div');
+                cell.className = 'gallery-cell';
+                const im = document.createElement('img');
+                im.src = url; im.alt = name; im.loading = 'lazy';
+                im.addEventListener('click', () => { galleryLightboxImg.src = url; galleryLightbox.classList.add('open'); });
+                const cap = document.createElement('div');
+                cap.className = 'gcap'; cap.textContent = name;
+                cell.appendChild(im); cell.appendChild(cap);
+                galleryGrid.appendChild(cell);
+            } catch {}
+        }
+    }
+
+    document.getElementById('gallery-open').addEventListener('click', openGallery);
+    document.getElementById('gallery-back').addEventListener('click', closeGallery);
+    galleryLightbox.addEventListener('click', () => galleryLightbox.classList.remove('open'));
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (galleryLightbox.classList.contains('open'))      galleryLightbox.classList.remove('open');
+        else if (galleryOverlay.classList.contains('open'))  closeGallery();
+    });
+
+    // ── Power / OFF button ────────────────────────────────────────────────────
+    document.getElementById('power-off').addEventListener('click', async () => {
+        if (!confirm('Shut down Ph3b3? The server will stop and must be restarted from the desktop shortcut.')) return;
+        try {
+            const r = await fetch(api('/power/off'), { method: 'POST', headers: { 'Authorization': authHeader } });
+            if (r.status === 401) { _clearAuth(); _showLogin('Session expired — please reconnect.'); return; }
+            addSys('Ph3b3 is shutting down…  (restart with the desktop shortcut)');
+            setStatus('Idle');
+            lockInput();
+        } catch { addSys('Shutdown request failed.'); }
+    });
+
     async function initApp() {
         try {
-            const res = await fetch('/health', { headers: { 'Authorization': authHeader } });
+            const res = await fetch(api('/health'), { headers: { 'Authorization': authHeader } });
             if (res.status === 401) { _clearAuth(); _showLogin('Access denied.'); return; }
             const d = await res.json();
-            document.title = `Ph3b3 — Boot #${d.boot}`;
+            document.title = `Ph3b3-Light · ${currentServer().label} — Boot #${d.boot}`;
             addSys(`Connected · Boot #${d.boot} · ${d.model}`);
+            initImageMode();
+            addSys('Type  /img <prompt>  to generate an image.');
         } catch {
             addSys('Server offline — launch Ph3b3 first');
         }

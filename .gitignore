@@ -5,8 +5,10 @@ ph3b3_data/
 __pycache__/
 *.pyc
 .env
+.cache
 firmware/.pio/
 stack-chan/
 *.wav
 voices/*.png
 soul/soul.md
+gallery/
