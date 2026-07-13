@@ -99,6 +99,8 @@ Iris is a wearable voice combadge built on the **M5StickS3** — a device smalle
 
 **No captive portal in the field.** Networks are managed entirely through the Control Panel's **Iris tab** (see below) and synced to the device automatically. The portal exists as a fallback for first-time setup; in practice you never touch it again.
 
+Iris's firmware lives in its own repository — **[astroson111/iris](https://github.com/astroson111/iris)**.
+
 ---
 
 ## The Control Panel
