@@ -1939,6 +1939,39 @@ async def index():
 
 _MORPHEUS_LOCAL_ADDRS = frozenset({"127.0.0.1", "::1", "localhost"})
 
+
+def _morpheus_floor_gate(positive: str, negative: str, request: Request) -> None:
+    """SHARED safety gate for ALL Morpheus generation (txt2img / edit / video) —
+    one implementation, not per-endpoint copies, so they can never drift apart.
+    Order: hardcoded FLOOR (no off switch, both fields) → localhost interlock
+    (permissive collapses to strict off-localhost) → profile check (both fields).
+    Raises HTTPException(403) with the standard refusal on any violation. Logs
+    field/category only — NEVER prompt text."""
+    fields = ((positive, "positive"), (negative, "negative"))
+    # ── FLOOR — hardcoded, always first, no off switch, profile-independent ──
+    for field, which in fields:
+        if not field:
+            continue
+        floor_cat = morpheus.floor_check(field)
+        if floor_cat:
+            log.warning("[safety] floor-blocked (%s) — category: %s", which, floor_cat)
+            raise HTTPException(403, detail="Content policy: prompt not permitted")
+    # ── Localhost interlock — permissive latitude auto-collapses off-localhost ──
+    forced_denylist = None
+    if morpheus.ACTIVE_PROFILE == "permissive":
+        client_host = (request.client.host if request.client else None) or ""
+        if client_host not in _MORPHEUS_LOCAL_ADDRS:
+            forced_denylist = morpheus.STRICT_DENYLIST
+            log.warning("[safety] permissive active but non-local request from %r — forcing strict", client_host)
+    # ── Profile check — denylist applies to the negative too ───────────────────
+    for field, which in fields:
+        if not field:
+            continue
+        if not morpheus.profile_check(field, denylist=forced_denylist):
+            label = morpheus.ACTIVE_PROFILE + (" [forced strict by interlock]" if forced_denylist else "")
+            log.warning("[safety] profile-blocked (%s) — profile: %s", which, label)
+            raise HTTPException(403, detail="Content policy: prompt not permitted")
+
 # ── Morpheus image generation ─────────────────────────────────────────
 # ── Morpheus Edit Mode (img2img) — Phase 1: upload + validation ──────────────
 # Uploads are validated by DECODE (magic-byte equivalent — never by extension or
@@ -2052,40 +2085,8 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
     # the same safety gate below as the positive prompt.
     negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
 
-    # ── FLOOR — hardcoded, always first, no off switch, profile-independent ──
-    # Evaluated over BOTH prompt fields: a banned term in the negative must hard
-    # block identically to one in the positive (new input = new attack surface).
-    for field, which in ((positive, "positive"), (negative, "negative")):
-        if not field:
-            continue
-        floor_cat = morpheus.floor_check(field)
-        if floor_cat:
-            log.warning("[safety] floor-blocked (%s) — category: %s", which, floor_cat)
-            raise HTTPException(403, detail="Content policy: prompt not permitted")
-
-    # ── Localhost interlock (Part 3) ─────────────────────────────────────────
-    # If permissive is active but the request is not from localhost, force strict
-    # for this request only. Forgetting to close external access can never expose
-    # permissive latitude — it auto-collapses the moment the source is non-local.
-    forced_denylist = None
-    if morpheus.ACTIVE_PROFILE == "permissive":
-        client_host = (request.client.host if request.client else None) or ""
-        if client_host not in _MORPHEUS_LOCAL_ADDRS:
-            forced_denylist = morpheus.STRICT_DENYLIST
-            log.warning(
-                "[safety] permissive active but non-local request from %r — forcing strict",
-                client_host,
-            )
-
-    # ── Profile check ─────────────────────────────────────────────────────────
-    # Same broadening as the floor: the denylist applies to the negative too.
-    for field, which in ((positive, "positive"), (negative, "negative")):
-        if not field:
-            continue
-        if not morpheus.profile_check(field, denylist=forced_denylist):
-            label = morpheus.ACTIVE_PROFILE + (" [forced strict by interlock]" if forced_denylist else "")
-            log.warning("[safety] profile-blocked (%s) — profile: %s", which, label)
-            raise HTTPException(403, detail="Content policy: prompt not permitted")
+    # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
+    _morpheus_floor_gate(positive, negative, request)
 
     params = {
         "positive":  positive,
@@ -2117,31 +2118,8 @@ async def image_edit_run(request: Request, body: dict, background_tasks: Backgro
         raise HTTPException(400, "prompt is required")
     negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
 
-    # ── FLOOR — hardcoded, first, pre-lock, BOTH fields (identical to txt2img) ──
-    for field, which in ((positive, "positive"), (negative, "negative")):
-        if not field:
-            continue
-        floor_cat = morpheus.floor_check(field)
-        if floor_cat:
-            log.warning("[safety] edit floor-blocked (%s) — category: %s", which, floor_cat)
-            raise HTTPException(403, detail="Content policy: prompt not permitted")
-
-    # ── Localhost interlock — permissive collapses to strict for non-local ─────
-    forced_denylist = None
-    if morpheus.ACTIVE_PROFILE == "permissive":
-        client_host = (request.client.host if request.client else None) or ""
-        if client_host not in _MORPHEUS_LOCAL_ADDRS:
-            forced_denylist = morpheus.STRICT_DENYLIST
-            log.warning("[safety] edit permissive+non-local from %r — forcing strict", client_host)
-
-    # ── Profile check — denylist applies to the negative too ───────────────────
-    for field, which in ((positive, "positive"), (negative, "negative")):
-        if not field:
-            continue
-        if not morpheus.profile_check(field, denylist=forced_denylist):
-            label = morpheus.ACTIVE_PROFILE + (" [forced strict by interlock]" if forced_denylist else "")
-            log.warning("[safety] edit profile-blocked (%s) — profile: %s", which, label)
-            raise HTTPException(403, detail="Content policy: prompt not permitted")
+    # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
+    _morpheus_floor_gate(positive, negative, request)
 
     try:
         strength = float(body.get("strength", 0.45))
@@ -2232,23 +2210,8 @@ async def morpheus_video(request: Request, body: dict, background_tasks: Backgro
     if preset not in morpheus.VIDEO_PRESETS:
         raise HTTPException(400, f"unknown preset; choose from {list(morpheus.VIDEO_PRESETS)}")
 
-    # ── FLOOR — hardcoded, first, pre-lock, BOTH fields (shared with image gen) ──
-    for field, which in ((positive, "positive"), (negative, "negative")):
-        if field and morpheus.floor_check(field):
-            log.warning("[safety] video floor-blocked (%s)", which)
-            raise HTTPException(403, detail="Content policy: prompt not permitted")
-    # ── Localhost interlock — permissive collapses to strict for non-local ─────
-    forced_denylist = None
-    if morpheus.ACTIVE_PROFILE == "permissive":
-        client_host = (request.client.host if request.client else None) or ""
-        if client_host not in _MORPHEUS_LOCAL_ADDRS:
-            forced_denylist = morpheus.STRICT_DENYLIST
-            log.warning("[safety] video permissive+non-local from %r — forcing strict", client_host)
-    # ── Profile check — denylist applies to the negative too ───────────────────
-    for field, which in ((positive, "positive"), (negative, "negative")):
-        if field and not morpheus.profile_check(field, denylist=forced_denylist):
-            log.warning("[safety] video profile-blocked (%s)", which)
-            raise HTTPException(403, detail="Content policy: prompt not permitted")
+    # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
+    _morpheus_floor_gate(positive, negative, request)
 
     params = {"positive": positive, "negative": negative, "preset": preset,
               "seed": int(body.get("seed", -1))}
@@ -2258,7 +2221,15 @@ async def morpheus_video(request: Request, body: dict, background_tasks: Backgro
     # gallery renders are accepted here.
     src_job = (body.get("source_job_id") or "").strip()
     if src_job:
+        # I2V input-image gate: accept ONLY a real gallery-render job UUID. The
+        # strict UUID shape (36 chars, hex+hyphen) forbids path separators/dots,
+        # so this can never traverse out of IMAGE_DIR to animate an un-floored
+        # image. Existing renders were floor-passed at creation → provenance-safe.
+        if not (len(src_job) == 36 and all(c in "0123456789abcdef-" for c in src_job)):
+            raise HTTPException(400, "invalid source_job_id")
         src_path = morpheus.IMAGE_DIR / f"{src_job}.png"
+        if not src_path.resolve().parent == morpheus.IMAGE_DIR.resolve():
+            raise HTTPException(400, "invalid source_job_id")
         if not src_path.exists():
             raise HTTPException(404, "source render not found")
         params["_comfy_image"] = await asyncio.to_thread(
