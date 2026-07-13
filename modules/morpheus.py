@@ -20,10 +20,12 @@ poll below is defense-in-depth, not the primary eviction signal.
 import asyncio
 import copy
 import io
+import json
 import logging
 import os
 import random
 import re
+import shutil
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -691,6 +693,122 @@ async def run_edit(job_id: str, params: dict) -> None:
                         run_img.unlink(missing_ok=True)
                 except OSError:
                     pass
+
+
+# ══ Video generation ("Oneiroi") — Phase 3 orchestration ════════════════════
+# Mirrors the image GPU-swap lifecycle (run_generation) but with a long comfy_wait
+# and mp4 output. Reuses gpu_lock / evict_hermes / ensure_comfy_up / comfy_free.
+VIDEO_DIR    = Path(os.getenv("MORPHEUS_VIDEO_DIR", str(MORPHEUS_DATA / "videos")))
+_WF_DIR      = Path(os.getenv("MORPHEUS_WF_DIR",  "/home/astroson/Desktop/comfyui/user/morpheus_workflows"))
+_COMFY_INPUT = Path(os.getenv("COMFY_INPUT_DIR",  "/home/astroson/Desktop/comfyui/input"))
+
+# preset registry: name → {wf (i2v graph), t2v? (text-only graph), eta_s, label}
+VIDEO_PRESETS: dict = {
+    "ltx-fast":    {"wf": "ltx_i2v.json", "t2v": "ltx_t2v.json", "eta_s": 90,   "label": "LTX fast (~1.5 min)"},
+    "wan-fast":    {"wf": "wan_i2v.json",                        "eta_s": 720,  "label": "Wan quality (~10 min)"},
+    "wan-quality": {"wf": "wan_i2v_quality.json",               "eta_s": 2400, "label": "Wan premium (~35 min)"},
+}
+DEFAULT_VIDEO_PRESET = "ltx-fast"
+
+
+def video_eta(preset: str) -> int:
+    return VIDEO_PRESETS.get(preset, VIDEO_PRESETS[DEFAULT_VIDEO_PRESET])["eta_s"]
+
+
+def prepare_video_source(image_path: str, job_id: str) -> str:
+    """Copy a source still into ComfyUI/input for I2V; return the input filename."""
+    _COMFY_INPUT.mkdir(parents=True, exist_ok=True)
+    name = f"morph_vid_{job_id}.png"
+    shutil.copyfile(image_path, _COMFY_INPUT / name)
+    return name
+
+
+def build_video_workflow(params: dict) -> dict:
+    """Load a preset workflow JSON and fill prompt / source image / seed.
+    I2V when params['_comfy_image'] is set (a filename already in ComfyUI/input);
+    otherwise T2V (uses the preset's t2v graph if it has one)."""
+    p = VIDEO_PRESETS.get(params.get("preset", DEFAULT_VIDEO_PRESET),
+                          VIDEO_PRESETS[DEFAULT_VIDEO_PRESET])
+    img_name = params.get("_comfy_image")
+    wf_file = p["t2v"] if (not img_name and p.get("t2v")) else p["wf"]
+    wf = json.loads((_WF_DIR / wf_file).read_text())
+    seed = params["seed"] if params.get("seed", -1) >= 0 else random.randint(0, 2**31 - 1)
+    for node in wf.values():
+        ins = node.get("inputs", {})
+        if ins.get("text") == "PLACEHOLDER_POSITIVE":
+            ins["text"] = params["positive"]
+        if ins.get("image") == "PLACEHOLDER_IMAGE":
+            ins["image"] = img_name
+        if "noise_seed" in ins:      # add-noise=disable nodes ignore their seed → harmless
+            ins["noise_seed"] = seed
+    return wf
+
+
+async def fetch_and_save_video(http: httpx.AsyncClient, outputs: dict, job_id: str) -> Path:
+    """Pull the SaveVideo mp4 from ComfyUI /view and save as VIDEO_DIR/{job_id}.mp4."""
+    fn = sub = None
+    typ = "output"
+    for node_out in outputs.values():
+        for v in node_out.values():
+            if isinstance(v, list):
+                for f in v:
+                    if isinstance(f, dict) and str(f.get("filename", "")).lower().endswith(
+                            (".mp4", ".webm", ".mkv")):
+                        fn, sub, typ = f["filename"], f.get("subfolder", ""), f.get("type", "output")
+    if not fn:
+        raise RuntimeError("no video file in ComfyUI outputs")
+    r = await http.get(f"{COMFY_HOST}/view",
+                       params={"filename": fn, "subfolder": sub or "", "type": typ}, timeout=120.0)
+    r.raise_for_status()
+    VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+    path = VIDEO_DIR / f"{job_id}.mp4"
+    path.write_bytes(r.content)
+    return path
+
+
+async def run_video(job_id: str, params: dict) -> None:
+    """Video GPU-swap lifecycle. Always call as a FastAPI BackgroundTask.
+    Holds gpu_lock for the whole render (2–40 min) so Ollama stays evicted."""
+    async with gpu_lock:
+        async with httpx.AsyncClient() as http:
+            if jobs[job_id].get("state") == "cancelled":
+                return   # cancelled while queued on the lock — nothing allocated yet
+            try:
+                jobs[job_id]["state"] = "evicting"
+                await evict_hermes(http)
+
+                jobs[job_id]["state"] = "starting"
+                await ensure_comfy_up(http)
+
+                jobs[job_id]["state"] = "loading"
+                wf = build_video_workflow(params)
+                prompt_id = await comfy_queue(http, wf)
+                jobs[job_id]["prompt_id"] = prompt_id   # stored so cancel can /interrupt
+
+                jobs[job_id]["state"] = "rendering"
+                eta = video_eta(params.get("preset", DEFAULT_VIDEO_PRESET))
+                outputs = await comfy_wait(http, prompt_id, timeout_s=max(2700, eta * 3))
+                if jobs[job_id].get("state") == "cancelled":
+                    return   # cancelled during render — finally still frees VRAM
+
+                jobs[job_id]["state"] = "saving"
+                path = await fetch_and_save_video(http, outputs, job_id)
+                jobs[job_id].update(state="done", video_url=f"/morpheus/video/file/{job_id}")
+                log.info("Morpheus video: job %s done — %s", job_id, path)
+
+            except Exception as exc:
+                log.error("Morpheus video: job %s failed: %s", job_id, exc)
+                if jobs[job_id].get("state") != "cancelled":   # don't clobber a user cancel
+                    jobs[job_id].update(state="error", error=str(exc))
+
+            finally:
+                await comfy_free(http)   # always free VRAM
+                src = params.get("_comfy_image")
+                if src:
+                    try:
+                        (_COMFY_INPUT / src).unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
 
 # ── Module-level init: create dirs + DB schema on import ─────────────

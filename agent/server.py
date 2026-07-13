@@ -108,11 +108,13 @@ from dnd_module import DnDModule
 from film_module import FilmModule
 from translation_module import TranslationModule
 from memory_module import MemoryModule
+from wake_gate import wake_match
+from tts_chunker import split_for_tts
 from occult_module import OccultModule
 from jokes_module import JokesModule
 from vision_module import VisionModule
 from search_module import SearchModule
-from tts_module import TTSModule
+from tts_module import TTSModule, trim_silence_b64
 from stt_module import STTModule
 from anime_module import AnimeModule
 from stories_module import StoriesModule
@@ -134,6 +136,16 @@ from screenshot_module import ScreenshotModule
 from recipes import RecipeStore
 import morpheus
 from triage import triage_gate   # clarification guard before main inference
+
+# ── Dio state telemetry (UDP) ────────────────────────────────────────────────
+# Dio's serial is dead, so its state machine is invisible on-device. It fires
+# fire-and-forget UDP pings on each transition; log them here so the flow
+# (idle→armed→capturing→endpointed→sent→resp len=N→playing→idle) is greppable
+# in the journal (grep DIO_STATE). Temporary diagnostic instrumentation.
+class _DioStateProtocol(asyncio.DatagramProtocol):
+    def datagram_received(self, data, addr):
+        log.info("DIO_STATE %s (from %s)", data.decode("utf-8", "replace").strip(), addr[0])
+
 
 @asynccontextmanager
 async def lifespan(app):
@@ -166,7 +178,18 @@ async def lifespan(app):
                 log.info(f"[edit] scratch janitor removed {n} stale upload(s)")
     _janitor = asyncio.create_task(_edit_scratch_janitor())
 
+    _dio_state_transport = None
+    try:
+        _loop = asyncio.get_running_loop()
+        _dio_state_transport, _ = await _loop.create_datagram_endpoint(
+            _DioStateProtocol, local_addr=("0.0.0.0", 7332))
+        log.info("Dio state telemetry listening on udp/7332")
+    except Exception as e:
+        log.warning("Dio state listener failed to bind udp/7332: %s", e)
+
     yield
+    if _dio_state_transport is not None:
+        _dio_state_transport.close()
     _janitor.cancel()
     if _ec_mod._session and _ec_mod._session.is_running():
         _ec_mod.tool_stop_evening_capture()
@@ -374,7 +397,8 @@ TOOLS = [
     {"type":"function","function":{"name":"analyze_screenshot","description":"Analyze a screenshot or image file from disk. Pass the path to a PNG or JPG and an optional question. Uses LLaVA to describe the image, then Hermes3 to reason over that description and answer the question.","parameters":{"type":"object","properties":{"image_path":{"type":"string","description":"Absolute or relative path to the image file (PNG, JPG, JPEG, WEBP, BMP)"},"question":{"type":"string","description":"What to ask or focus on (optional — defaults to a general description and analysis)"}},"required":["image_path"]}}},
     {"type":"function","function":{"name":"start_evening_capture","description":"Start capturing photos of the evening to the Desktop at a timed interval using the 4K AI webcam. Say 'start capturing the evening' or 'start evening capture' to trigger this.","parameters":{"type":"object","properties":{"label":{"type":"string","default":"evening","description":"Folder label — becomes part of the directory name on the Desktop"},"interval":{"type":"number","default":120,"description":"Seconds between shots"},"source":{"type":"string","default":"opencv:0@3840x2160","description":"Camera source spec — leave as default for the 4K webcam"}}}}},
     {"type":"function","function":{"name":"stop_evening_capture","description":"Stop the evening photo capture session and report how many photos were saved to the Desktop.","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"find_recipe","description":"Search 2+ million local recipes from the RecipeNLG corpus — fully offline, zero network, zero GPU. Three modes: 'text' for free-text search (e.g. 'carbonara', 'Thai noodles'), 'strict' to find recipes that use ALL listed ingredients, 'pantry' (default) to find the best matches from what you have on hand — results are ranked by fewest missing ingredients. You will receive structured recipe rows: narrate them to the user (title, key ingredients, directions summary, what they're missing in pantry mode). Do NOT fabricate or invent recipe details — report exactly what the tool returns.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Free-text search term — used in 'text' mode (e.g. 'carbonara', 'banana bread')"},"ingredients":{"type":"array","items":{"type":"string"},"description":"List of ingredient names — used in 'strict' and 'pantry' modes (e.g. ['chicken', 'rice', 'lime'])"},"mode":{"type":"string","enum":["text","strict","pantry"],"default":"pantry","description":"'text': free-text FTS search. 'strict': recipes using ALL listed ingredients. 'pantry': best matches from what you have, ranked by fewest missing."},"limit":{"type":"integer","default":5,"description":"Number of results to return (1–20)"}},"required":[]}}}
+    {"type":"function","function":{"name":"find_recipe","description":"Search 2+ million local recipes from the RecipeNLG corpus — fully offline, zero network, zero GPU. Three modes: 'text' for free-text search (e.g. 'carbonara', 'Thai noodles'), 'strict' to find recipes that use ALL listed ingredients, 'pantry' (default) to find the best matches from what you have on hand — results are ranked by fewest missing ingredients. You will receive structured recipe rows: narrate them to the user (title, key ingredients, directions summary, what they're missing in pantry mode). Do NOT fabricate or invent recipe details — report exactly what the tool returns.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Free-text search term — used in 'text' mode (e.g. 'carbonara', 'banana bread')"},"ingredients":{"type":"array","items":{"type":"string"},"description":"List of ingredient names — used in 'strict' and 'pantry' modes (e.g. ['chicken', 'rice', 'lime'])"},"mode":{"type":"string","enum":["text","strict","pantry"],"default":"pantry","description":"'text': free-text FTS search. 'strict': recipes using ALL listed ingredients. 'pantry': best matches from what you have, ranked by fewest missing."},"limit":{"type":"integer","default":5,"description":"Number of results to return (1–20)"}},"required":[]}}},
+    {"type":"function","function":{"name":"generate_video","description":"Generate a short AI video clip from a text description, or animate an EXISTING generated image into a video. Use when the user asks to make/create/render a video, or to animate/bring an image to life. Presets: ltx-fast (~1.5 min, quick default), wan-fast (~10 min, higher quality), wan-quality (~35 min, best). The render runs in the background and holds the GPU — tell the user the ETA from the tool's reply. Report the status line the tool returns; never fabricate progress.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What the video should show and how it should move"},"preset":{"type":"string","enum":["ltx-fast","wan-fast","wan-quality"],"description":"Speed/quality preset; default ltx-fast"},"source_job_id":{"type":"string","description":"Optional job id of an existing generated image to animate (image-to-video)"}},"required":["prompt"]}}}
 ]
 
 _SENSITIVE_KEY_FRAGMENTS = frozenset({
@@ -489,6 +513,7 @@ async def execute_tool(name, args):
         elif name == "log_anomaly": result = memory.log_anomaly(args["description"], args.get("source","camera"))
         elif name == "recall_memory": result = memory.recall(args["topic"])
         elif name == "occult_lookup": result = occult.lookup(args["query"], args.get("category","any"))
+        elif name == "generate_video": result = _tool_generate_video(args)
         elif name == "occult_random": result = occult.random_phenomenon()
         elif name == "tell_joke":
             joke = jokes.tell_joke(args.get("category","any"))
@@ -843,17 +868,48 @@ def _triage_context(prior_messages) -> str:
     return "\n".join(f"{m['role']}: {m['content']}" for m in turns[-8:])
 
 
-@app.post("/chat")
-async def chat_endpoint(body: dict, request: Request):
+# ── Tap-to-wake + self-echo suppression (Dio / Stack-Chan) ────────────────────
+# Dio wakes on a physical TAP (reliable — no flaky "Phoebe" capture), then talks
+# hands-free. With no wake word to gate on, her own TTS echo is suppressed by
+# CONTENT: if a stackchan transcript substantially overlaps her LAST reply to
+# that session, it's her own voice looping back — drop it. Exit is "goodbye" /
+# dead-air / tap (device-side). Iris (push-to-talk) and the web UI never gate.
+_LAST_REPLY = {}   # session_id -> her last reply text, for echo suppression
+
+def _words(s):
+    return [w for w in "".join(c if c.isalpha() or c == " " else " "
+                          for c in (s or "").lower()).split() if len(w) >= 2]
+
+def _looks_like_self_echo(session_id, text):
+    tw = _words(text)
+    prev = _LAST_REPLY.get(session_id, "")
+    if len(tw) < 3 or not prev:
+        return False                      # too short to judge (let short commands through)
+    pw = set(_words(prev))
+    return sum(1 for w in tw if w in pw) / len(tw) >= 0.6
+
+
+async def _run_chat_pipeline(body: dict, request: Request):
+    """Shared /chat brain: wake-gate → recitation → triage → inference.
+
+    Returns the reply TEXT (with session bookkeeping done exactly as before), or
+    None if the wake-gate dropped the utterance. Synthesis is the CALLER's job —
+    /chat renders it whole, /chat/stream renders it in bounded chunks. Single
+    source of truth so the two endpoints can never diverge.
+    """
     session = get_session(body.get("session_id","default"))
     user_msg = body.get("message","")
+
+    # ── Tap-to-wake (Dio / Stack-Chan) — no voice wake word; suppress her echo by content ─
+    if request.headers.get("X-Ph3b3-Device", "") == "stackchan":
+        if _looks_like_self_echo(body.get("session_id", "default"), user_msg):
+            log.info("[echo-guard] dropped self-echo: %r", user_msg)
+            return None
+
     if "soul" in user_msg.lower():
         tts.soul_line()
 
     # ── Direct story recitation — tell a saved story verbatim, PRE-triage ─────
-    # When the user asks to TELL/READ a saved story by title, return the stored
-    # text word-for-word with a short lead-in, bypassing triage + inference
-    # (inference summarises long stories; this recites them whole).
     _tell = stories.tellable(user_msg)
     if _tell:
         _title, _text = _tell
@@ -861,38 +917,42 @@ async def chat_endpoint(body: dict, request: Request):
         session.add("user", user_msg)
         session.add("assistant", _reply)
         log.info("STORY_TOLD verbatim: %s (%d chars)", _title, len(_text))
-        _audio = await asyncio.to_thread(tts.synthesize_to_b64, _reply)
-        return {"response": _reply, "audio": _audio}
+        return _reply
+
+    # ── Video-render grace — a Morpheus video holds the GPU, so Ollama/Hermes is
+    # evicted and cannot answer; reply conversationally instead of muting/timing
+    # out. (Stories above still work — they're memory text, no GPU.) ────────────
+    _vid = next((r for r in morpheus.jobs.values()
+                 if r.get("kind") == "video" and r.get("state") in _VIDEO_ACTIVE), None)
+    if _vid:
+        _mins = max(1, round(_vid.get("eta_s", 0) / 60))
+        _reply = (f"I'm rendering a video right now — Morpheus has the GPU, so I'm briefly "
+                  f"offline for chat (about {_mins} minute{'s' if _mins != 1 else ''} left). "
+                  f"Ask me again once it wraps and I'll be right here.")
+        session.add("user", user_msg)
+        session.add("assistant", _reply)
+        log.info("VIDEO_RENDER_GRACE — %d min eta", _mins)
+        return _reply
 
     # ── Triage gate — clarification guard, general chat path, PRE-inference ────
-    # Decide if the request is answerable from context/knowledge/tools before
-    # committing to a full inference; on a confident "no", ask instead of
-    # confabulating. Fails open on any error (see modules/triage.py). Never
-    # touches Morpheus gpu_lock; Hermes-resident-only (no reload trigger).
     _triage = await triage_gate(user_msg, _triage_context(session.messages()))
     if not _triage.answerable:
         _q = _triage.question or "I don't have enough to go on yet — can you give me a bit more detail?"
         log.info("TRIAGE_HOLD — missing=%s", _triage.missing or [])
         session.add("user", user_msg)
         session.add("assistant", _q)
-        _audio = await asyncio.to_thread(tts.synthesize_to_b64, _q)
-        return {"response": _q, "audio": _audio}
+        return _q
 
     session.add("user", user_msg)
-
     messages = session.messages()
 
     # ── Live datetime (additive, ephemeral — read fresh every request) ────────
-    # Injected per-call; never stored in session history so it never accumulates.
-    # datetime.now().astimezone() reads the OS clock + local timezone at call time.
     _now = datetime.now().astimezone()
     _dt_str = _now.strftime("%A, %B %-d, %Y, %-I:%M %p")
     _dt_note = {"role": "system", "content": f"Current date and time: {_dt_str}."}
     messages.insert(1, _dt_note)
 
     # ── Device-awareness (additive, ephemeral, soul untouched) ───────────────
-    # Injected per-call into the Ollama context only; never stored in session
-    # history so it doesn't accumulate. Add new devices here as needed.
     _DEVICE_NOTES = {
         "iris": (
             "You are speaking through your Iris combadge (body), running on Nyx (host). "
@@ -914,6 +974,7 @@ async def chat_endpoint(body: dict, request: Request):
         messages.insert(1, device_note)   # after soul + id_anchor, before conversation turns
 
     response, updated = await chat_with_tools(messages)
+    _fire_pending_video()   # start any render queued by generate_video — AFTER the reply
 
     # Strip ephemeral notes before storing so they never accumulate in history
     if _dt_note in updated:
@@ -923,8 +984,95 @@ async def chat_endpoint(body: dict, request: Request):
 
     session.history = updated
     session.add("assistant", response)
-    audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, response)
-    return {"response": response, "audio": audio_b64}
+    return response
+
+
+@app.post("/chat")
+async def chat_endpoint(body: dict, request: Request):
+    # Response shape is FROZEN: {response, audio} with the WHOLE reply as one WAV.
+    # Iris + web UI depend on this — do not change. Chunked delivery is /chat/stream.
+    reply = await _run_chat_pipeline(body, request)
+    if reply is None:
+        return {"response": "", "audio": ""}
+    _LAST_REPLY[body.get("session_id", "default")] = reply   # echo-guard memory
+    audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, reply)
+    return {"response": reply, "audio": audio_b64}
+
+
+# ── Chunked TTS (synth-on-demand) — additive; clients opt in via /chat/stream ──
+# Long replies (a 5.4 KB story = ~5 min / 18 MB as one WAV) are split into
+# bounded sentence-sized pieces so no single synth scales with reply length.
+# First call returns a manifest + chunk 0's audio; the client fetches chunk N+1
+# while playing N; the server synthesises lazily per fetch with a one-chunk
+# read-ahead. Piper is CPU and already serialised by tts._lock (synthesize_to_b64
+# holds it) → chunk renders serialise naturally; no GPU lock is involved.
+_TTS_STREAMS = {}          # sid -> {"chunks": [str], "audio": {n: b64}, "ts": float}
+_TTS_STREAM_TTL = 900      # evict streams idle > 15 min
+
+def _tts_stream_gc(now):
+    for k in [k for k, v in _TTS_STREAMS.items() if now - v["ts"] > _TTS_STREAM_TTL]:
+        _TTS_STREAMS.pop(k, None)
+
+def _tts_stream_new(chunks):
+    now = time.monotonic()
+    _tts_stream_gc(now)
+    sid = uuid.uuid4().hex[:12]
+    _TTS_STREAMS[sid] = {"chunks": chunks, "audio": {}, "ts": now}
+    return sid
+
+async def _tts_chunk_b64(sid, n):
+    st = _TTS_STREAMS.get(sid)
+    if not st or n < 0 or n >= len(st["chunks"]):
+        return None
+    st["ts"] = time.monotonic()
+    if n not in st["audio"]:
+        b64 = await asyncio.to_thread(tts.synthesize_to_b64, st["chunks"][n]) or ""
+        st["audio"][n] = trim_silence_b64(b64) if b64 else ""   # drop Piper's ~200ms per-chunk gaps
+    return st["audio"][n]
+
+
+@app.post("/chat/stream")
+async def chat_stream_endpoint(body: dict, request: Request):
+    """Chunked-TTS variant of /chat — same brain via _run_chat_pipeline, but
+    returns a manifest + chunk 0 instead of one monolithic WAV. Wake-gate drop
+    is preserved (empty manifest, no synthesis)."""
+    reply = await _run_chat_pipeline(body, request)
+    if not reply:
+        return {"response": "", "stream_id": "", "chunk_count": 0,
+                "chunk_index": -1, "audio": "", "last": True}
+    _LAST_REPLY[body.get("session_id", "default")] = reply   # echo-guard memory
+    chunks = split_for_tts(reply)
+    if not chunks:
+        return {"response": reply, "stream_id": "", "chunk_count": 0,
+                "chunk_index": -1, "audio": "", "last": True}
+    sid = _tts_stream_new(chunks)
+    audio0 = await _tts_chunk_b64(sid, 0)
+    if len(chunks) > 1:
+        asyncio.create_task(_tts_chunk_b64(sid, 1))   # read-ahead
+    # "text" (chunk 0's words) is placed before "audio" and "response" so the
+    # firmware can always peek it in its 6 KB head buffer, however long the reply
+    # is — Dio shows each chunk's text while that chunk plays, syncing to her voice.
+    return {"stream_id": sid, "chunk_count": len(chunks), "chunk_index": 0,
+            "text": chunks[0], "audio": audio0 or "", "last": len(chunks) == 1,
+            "response": reply}
+
+
+@app.get("/tts/chunk/{stream_id}/{n}")
+async def tts_chunk_endpoint(stream_id: str, n: int):
+    """Fetch chunk n's audio for a /chat/stream session (lazy synth, cached,
+    one-chunk read-ahead)."""
+    st = _TTS_STREAMS.get(stream_id)
+    if not st:
+        return {"audio": "", "chunk_index": n, "last": True, "error": "unknown or expired stream"}
+    if n < 0 or n >= len(st["chunks"]):
+        return {"audio": "", "chunk_index": n, "last": True, "error": "chunk out of range"}
+    audio = await _tts_chunk_b64(stream_id, n)
+    if n + 1 < len(st["chunks"]):
+        asyncio.create_task(_tts_chunk_b64(stream_id, n + 1))   # read-ahead
+    # "text" before "audio" so the firmware peeks it and shows this chunk's words
+    # while its audio plays (voice-synced captioning).
+    return {"text": st["chunks"][n], "audio": audio or "",
+            "chunk_index": n, "last": n + 1 >= len(st["chunks"])}
 
 @app.delete("/session/{session_id}")
 async def clear_session(session_id: str):
@@ -960,6 +1108,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str = "default"):
             await websocket.send_json({"status":"thinking"})
             session.add("user", user_input)
             response, updated = await chat_with_tools(session.messages())
+            _fire_pending_video()   # start any render queued by generate_video — AFTER the reply
             session.history = updated
             session.add("assistant", response)
             t = response.lower()
@@ -977,11 +1126,36 @@ async def transcribe_audio(body: dict):
     if not audio_b64:
         return {"text": "", "error": "no audio provided"}
     audio_bytes = base64.b64decode(audio_b64)
+    try:                                                          # [DBG-MIC] keep last capture for audition
+        open("/tmp/dio_mic_last.wav", "wb").write(audio_bytes)
+    except Exception:
+        pass
+    # [DBG-MIC] characterise captured audio: mic-dead (near-zero level) vs STT-mishear (real level, wrong text)
+    _rms = None
+    try:
+        import struct as _st
+        _pcm = audio_bytes[44:]
+        _n = len(_pcm) // 2
+        if _n:
+            _s = _st.unpack("<%dh" % _n, _pcm[:_n * 2])
+            _peak = max(abs(x) for x in _s)
+            _rms = (sum(x * x for x in _s) / _n) ** 0.5
+            log.warning("[DBG-MIC] in %d B ~%.1fs peak=%d/32767 rms=%.0f", len(audio_bytes), _n / 16000.0, _peak, _rms)
+    except Exception as _e:
+        log.warning("[DBG-MIC] level calc failed: %s", _e)
+    # Silence-floor gate: auto-relisten captures ~1.2s of ambient room noise at rms<900; Whisper
+    # hallucinates words ("New York City." @ rms 684) out of that silence. Real speech lands rms>2600.
+    # Drop anything below the floor before STT — kills phantom transcripts and skips a wasted Whisper call.
+    SILENCE_FLOOR_RMS = 1200
+    if _rms is not None and _rms < SILENCE_FLOOR_RMS:
+        log.warning("[DBG-MIC] below silence floor (rms=%.0f < %d) — dropped, no STT", _rms, SILENCE_FLOOR_RMS)
+        return {"text": "", "error": None}
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         f.write(audio_bytes)
         tmp_path = f.name
     try:
         result = stt.transcribe_file(tmp_path)
+        log.warning("[DBG-MIC] transcript=%r err=%s", (result.get("text") or "")[:80], result.get("error"))
         return {"text": result.get("text") or "", "error": result.get("error")}
     finally:
         try:
@@ -1769,6 +1943,89 @@ async def index():
 
 _MORPHEUS_LOCAL_ADDRS = frozenset({"127.0.0.1", "::1", "localhost"})
 
+
+def _morpheus_floor_gate(positive: str, negative: str, request: Request) -> None:
+    """SHARED safety gate for ALL Morpheus generation (txt2img / edit / video) —
+    one implementation, not per-endpoint copies, so they can never drift apart.
+    Order: hardcoded FLOOR (no off switch, both fields) → localhost interlock
+    (permissive collapses to strict off-localhost) → profile check (both fields).
+    Raises HTTPException(403) with the standard refusal on any violation. Logs
+    field/category only — NEVER prompt text."""
+    fields = ((positive, "positive"), (negative, "negative"))
+    # ── FLOOR — hardcoded, always first, no off switch, profile-independent ──
+    for field, which in fields:
+        if not field:
+            continue
+        floor_cat = morpheus.floor_check(field)
+        if floor_cat:
+            log.warning("[safety] floor-blocked (%s) — category: %s", which, floor_cat)
+            raise HTTPException(403, detail="Content policy: prompt not permitted")
+    # ── Localhost interlock — permissive latitude auto-collapses off-localhost ──
+    forced_denylist = None
+    if morpheus.ACTIVE_PROFILE == "permissive":
+        client_host = (request.client.host if request.client else None) or ""
+        if client_host not in _MORPHEUS_LOCAL_ADDRS:
+            forced_denylist = morpheus.STRICT_DENYLIST
+            log.warning("[safety] permissive active but non-local request from %r — forcing strict", client_host)
+    # ── Profile check — denylist applies to the negative too ───────────────────
+    for field, which in fields:
+        if not field:
+            continue
+        if not morpheus.profile_check(field, denylist=forced_denylist):
+            label = morpheus.ACTIVE_PROFILE + (" [forced strict by interlock]" if forced_denylist else "")
+            log.warning("[safety] profile-blocked (%s) — profile: %s", which, label)
+            raise HTTPException(403, detail="Content policy: prompt not permitted")
+
+
+# ── generate_video tool plumbing ─────────────────────────────────────────────
+# The render evicts Ollama, so a tool call must NOT start it inline (that would
+# kill Hermes' follow-up reply). The tool QUEUES params here; _fire_pending_video()
+# starts them after the chat turn is fully composed.
+_pending_video_params: dict = {}   # job_id -> params
+
+
+def _tool_generate_video(args: dict) -> str:
+    """Hermes tool handler: floor-gate + queue a video render, return a status line.
+    Floor is the same hardcoded check as the HTTP path (Hermes runs local on Nyx)."""
+    global _video_seq
+    prompt = (args.get("prompt") or args.get("positive") or "").strip()
+    if not prompt:
+        return "I need a description of the video you'd like me to make."
+    preset = args.get("preset", morpheus.DEFAULT_VIDEO_PRESET)
+    if preset not in morpheus.VIDEO_PRESETS:
+        preset = morpheus.DEFAULT_VIDEO_PRESET
+    if morpheus.floor_check(prompt) or not morpheus.profile_check(prompt):
+        log.warning("[safety] video(tool) blocked")
+        return "I can't make that one — it's outside what I'm allowed to generate."
+    params = {"positive": prompt, "negative": "", "preset": preset, "seed": -1}
+    src = (args.get("source_job_id") or "").strip()
+    if src:
+        if not (len(src) == 36 and all(c in "0123456789abcdef-" for c in src)):
+            return "That source-image id isn't valid."
+        sp = morpheus.IMAGE_DIR / f"{src}.png"
+        if sp.resolve().parent != morpheus.IMAGE_DIR.resolve() or not sp.exists():
+            return "I couldn't find that image to animate."
+        job_id = morpheus.create_job()
+        params["_comfy_image"] = morpheus.prepare_video_source(str(sp), job_id)
+    else:
+        job_id = morpheus.create_job()
+    _video_seq += 1
+    eta = morpheus.video_eta(preset)
+    morpheus.jobs[job_id].update(kind="video", preset=preset, eta_s=eta, created_seq=_video_seq)
+    _pending_video_params[job_id] = params
+    mins = max(1, round(eta / 60))
+    return (f"Rendering started (job {job_id[:8]}, {morpheus.VIDEO_PRESETS[preset]['label']}). "
+            f"About {mins} minute{'s' if mins != 1 else ''}; I'll be offline for chat on the GPU "
+            f"until it finishes.")
+
+
+def _fire_pending_video() -> None:
+    """Start renders queued by generate_video this turn — AFTER the reply is composed,
+    so the eviction never kills Hermes mid-response."""
+    for jid, params in list(_pending_video_params.items()):
+        del _pending_video_params[jid]
+        asyncio.create_task(morpheus.run_video(jid, params))
+
 # ── Morpheus image generation ─────────────────────────────────────────
 # ── Morpheus Edit Mode (img2img) — Phase 1: upload + validation ──────────────
 # Uploads are validated by DECODE (magic-byte equivalent — never by extension or
@@ -1882,40 +2139,8 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
     # the same safety gate below as the positive prompt.
     negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
 
-    # ── FLOOR — hardcoded, always first, no off switch, profile-independent ──
-    # Evaluated over BOTH prompt fields: a banned term in the negative must hard
-    # block identically to one in the positive (new input = new attack surface).
-    for field, which in ((positive, "positive"), (negative, "negative")):
-        if not field:
-            continue
-        floor_cat = morpheus.floor_check(field)
-        if floor_cat:
-            log.warning("[safety] floor-blocked (%s) — category: %s", which, floor_cat)
-            raise HTTPException(403, detail="Content policy: prompt not permitted")
-
-    # ── Localhost interlock (Part 3) ─────────────────────────────────────────
-    # If permissive is active but the request is not from localhost, force strict
-    # for this request only. Forgetting to close external access can never expose
-    # permissive latitude — it auto-collapses the moment the source is non-local.
-    forced_denylist = None
-    if morpheus.ACTIVE_PROFILE == "permissive":
-        client_host = (request.client.host if request.client else None) or ""
-        if client_host not in _MORPHEUS_LOCAL_ADDRS:
-            forced_denylist = morpheus.STRICT_DENYLIST
-            log.warning(
-                "[safety] permissive active but non-local request from %r — forcing strict",
-                client_host,
-            )
-
-    # ── Profile check ─────────────────────────────────────────────────────────
-    # Same broadening as the floor: the denylist applies to the negative too.
-    for field, which in ((positive, "positive"), (negative, "negative")):
-        if not field:
-            continue
-        if not morpheus.profile_check(field, denylist=forced_denylist):
-            label = morpheus.ACTIVE_PROFILE + (" [forced strict by interlock]" if forced_denylist else "")
-            log.warning("[safety] profile-blocked (%s) — profile: %s", which, label)
-            raise HTTPException(403, detail="Content policy: prompt not permitted")
+    # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
+    _morpheus_floor_gate(positive, negative, request)
 
     params = {
         "positive":  positive,
@@ -1947,31 +2172,8 @@ async def image_edit_run(request: Request, body: dict, background_tasks: Backgro
         raise HTTPException(400, "prompt is required")
     negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
 
-    # ── FLOOR — hardcoded, first, pre-lock, BOTH fields (identical to txt2img) ──
-    for field, which in ((positive, "positive"), (negative, "negative")):
-        if not field:
-            continue
-        floor_cat = morpheus.floor_check(field)
-        if floor_cat:
-            log.warning("[safety] edit floor-blocked (%s) — category: %s", which, floor_cat)
-            raise HTTPException(403, detail="Content policy: prompt not permitted")
-
-    # ── Localhost interlock — permissive collapses to strict for non-local ─────
-    forced_denylist = None
-    if morpheus.ACTIVE_PROFILE == "permissive":
-        client_host = (request.client.host if request.client else None) or ""
-        if client_host not in _MORPHEUS_LOCAL_ADDRS:
-            forced_denylist = morpheus.STRICT_DENYLIST
-            log.warning("[safety] edit permissive+non-local from %r — forcing strict", client_host)
-
-    # ── Profile check — denylist applies to the negative too ───────────────────
-    for field, which in ((positive, "positive"), (negative, "negative")):
-        if not field:
-            continue
-        if not morpheus.profile_check(field, denylist=forced_denylist):
-            label = morpheus.ACTIVE_PROFILE + (" [forced strict by interlock]" if forced_denylist else "")
-            log.warning("[safety] edit profile-blocked (%s) — profile: %s", which, label)
-            raise HTTPException(403, detail="Content policy: prompt not permitted")
+    # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
+    _morpheus_floor_gate(positive, negative, request)
 
     try:
         strength = float(body.get("strength", 0.45))
@@ -2040,6 +2242,103 @@ async def image_file(job_id: str, download: int = 0, format: str = "png"):
 async def image_gallery(n: int = 20):
     rows = await asyncio.to_thread(morpheus._db_gallery, n)
     return {"images": rows}
+
+
+# ══ Video generation ("Oneiroi") endpoints — Phase 3 ════════════════════════
+# Async job model (returns job_id + ETA immediately); the render runs in the
+# background under morpheus.gpu_lock. Prompt goes through the SAME safety floor as
+# image gen. NOT registered as a Hermes tool yet — that + the input-image floor
+# gate + values audit are Phase 4 (Captain sign-off).
+_video_seq = 0
+_VIDEO_ACTIVE = {"queued", "evicting", "starting", "loading", "rendering", "saving"}
+
+
+@app.post("/morpheus/video")
+async def morpheus_video(request: Request, body: dict, background_tasks: BackgroundTasks):
+    global _video_seq
+    positive = (body.get("positive") or body.get("prompt") or "").strip()
+    if not positive:
+        raise HTTPException(400, "positive prompt is required")
+    negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
+    preset = body.get("preset", morpheus.DEFAULT_VIDEO_PRESET)
+    if preset not in morpheus.VIDEO_PRESETS:
+        raise HTTPException(400, f"unknown preset; choose from {list(morpheus.VIDEO_PRESETS)}")
+
+    # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
+    _morpheus_floor_gate(positive, negative, request)
+
+    params = {"positive": positive, "negative": negative, "preset": preset,
+              "seed": int(body.get("seed", -1))}
+    job_id = morpheus.create_job()
+    # I2V: animate an EXISTING Morpheus render (already floored at creation). The
+    # input-image floor gate for arbitrary uploads is Phase 4 — only existing
+    # gallery renders are accepted here.
+    src_job = (body.get("source_job_id") or "").strip()
+    if src_job:
+        # I2V input-image gate: accept ONLY a real gallery-render job UUID. The
+        # strict UUID shape (36 chars, hex+hyphen) forbids path separators/dots,
+        # so this can never traverse out of IMAGE_DIR to animate an un-floored
+        # image. Existing renders were floor-passed at creation → provenance-safe.
+        if not (len(src_job) == 36 and all(c in "0123456789abcdef-" for c in src_job)):
+            raise HTTPException(400, "invalid source_job_id")
+        src_path = morpheus.IMAGE_DIR / f"{src_job}.png"
+        if not src_path.resolve().parent == morpheus.IMAGE_DIR.resolve():
+            raise HTTPException(400, "invalid source_job_id")
+        if not src_path.exists():
+            raise HTTPException(404, "source render not found")
+        params["_comfy_image"] = await asyncio.to_thread(
+            morpheus.prepare_video_source, str(src_path), job_id)
+
+    _video_seq += 1
+    eta = morpheus.video_eta(preset)
+    morpheus.jobs[job_id].update(kind="video", preset=preset, eta_s=eta, created_seq=_video_seq)
+    background_tasks.add_task(morpheus.run_video, job_id, params)
+    return {"job_id": job_id, "preset": preset, "eta_s": eta,
+            "label": morpheus.VIDEO_PRESETS[preset]["label"],
+            "mode": "i2v" if src_job else "t2v"}
+
+
+@app.get("/morpheus/jobs/{job_id}")
+async def morpheus_job_status(job_id: str):
+    rec = morpheus.jobs.get(job_id)
+    if not rec:
+        raise HTTPException(404, "Unknown job")
+    ahead = sum(1 for r in morpheus.jobs.values()
+                if r.get("kind") == "video" and r.get("state") in _VIDEO_ACTIVE
+                and r.get("created_seq", 0) < rec.get("created_seq", 0))
+    return {**rec, "queue_position": ahead}   # 0 = active / next up
+
+
+@app.delete("/morpheus/jobs/{job_id}")
+async def morpheus_job_cancel(job_id: str):
+    rec = morpheus.jobs.get(job_id)
+    if not rec:
+        raise HTTPException(404, "Unknown job")
+    if rec.get("state") in ("done", "error", "cancelled"):
+        return {"job_id": job_id, "state": rec.get("state"), "already_terminal": True}
+    was_rendering = rec.get("state") == "rendering" and rec.get("prompt_id")
+    rec.update(state="cancelled", error="cancelled by user")
+    # Only /interrupt if THIS job is the one actually running on ComfyUI — otherwise
+    # a queued cancel would kill someone else's active render. run_video's finally
+    # still frees VRAM; the queued-cancel case bails right after acquiring the lock.
+    if was_rendering:
+        async with httpx.AsyncClient() as http:
+            try:
+                await http.post(f"{morpheus.COMFY_HOST}/interrupt", timeout=10.0)
+                await http.post(f"{morpheus.COMFY_HOST}/free",
+                                json={"unload_models": True, "free_memory": True}, timeout=10.0)
+            except Exception as e:
+                log.warning("video cancel interrupt/free failed: %s", e)
+    return {"job_id": job_id, "state": "cancelled", "interrupted": bool(was_rendering)}
+
+
+@app.get("/morpheus/video/file/{job_id}")
+async def morpheus_video_file(job_id: str, download: int = 0):
+    path = morpheus.VIDEO_DIR / f"{job_id}.mp4"
+    if not path.exists():
+        raise HTTPException(404, "Video not found")
+    headers = {"Content-Disposition": f'attachment; filename="ph3b3_{job_id}.mp4"'} if download else {}
+    return FileResponse(str(path), media_type="video/mp4", headers=headers)
 
 
 @app.delete("/image/{job_id}")
