@@ -156,7 +156,7 @@ means her local playback buffer has drained, not that the network stream
 closed.
 
 Firmware lives in its own repository —
-**[Astroson111/Dionysus](https://github.com/Astroson111/Dionysus)** —
+**[astroson111/Dionysus](https://github.com/astroson111/Dionysus)** —
 extracted from this repo so Ph3b3 stays server-only. Build with `arduino-cli`
 targeting `m5stack:esp32:m5stack_cores3`; copy `secrets.example.h` to
 `secrets.h` and fill in your WiFi and server credentials.
