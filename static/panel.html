@@ -520,6 +520,27 @@
       color: var(--dim); font-size: .84rem; font-style: italic;
     }
     .morph-gallery { display: flex; flex-direction: column; gap: .42rem; }
+    /* ── Video mode (Phase 3.5) ── */
+    .morph-vid-warn { font-size:.78rem; color:#fbbf24; background:rgba(251,191,36,.09);
+      border:1px solid rgba(251,191,36,.30); border-radius:6px; padding:.4rem .55rem; margin:.15rem 0; }
+    .morph-src-row { display:flex; align-items:center; gap:.5rem; font-size:.78rem;
+      background:rgba(130,90,220,.10); border:1px solid rgba(130,90,220,.28);
+      border-radius:6px; padding:.35rem .5rem; margin:.15rem 0; }
+    .morph-src-row img { width:34px; height:34px; object-fit:cover; border-radius:4px; }
+    .morph-src-row #morphSrcLabel { flex:1; opacity:.85; }
+    .morph-src-row #morphSrcClear { background:none; border:none; color:var(--err);
+      cursor:pointer; font-size:.9rem; padding:0 .2rem; }
+    .morph-vid-timer { font-size:.75rem; opacity:.7; margin-left:.1rem; }
+    .morph-cancel-btn { margin-left:auto; font-size:.72rem; padding:.2rem .5rem;
+      background:rgba(248,113,113,.10); color:var(--err);
+      border:1px solid rgba(248,113,113,.35); border-radius:5px; cursor:pointer; }
+    .morph-gal-item { position:relative; }
+    .morph-gal-play { position:absolute; left:.5rem; top:50%; transform:translateY(-50%);
+      pointer-events:none; font-size:.6rem; color:#fff; background:rgba(0,0,0,.6);
+      border-radius:3px; padding:1px 4px; }
+    .morph-gal-anim { background:none; border:none; color:#c4a8ff; cursor:pointer;
+      font-size:.8rem; padding:0 .2rem; line-height:1; flex-shrink:0; }
+    .morph-gal-anim:hover { color:#e0d0ff; }
     .morph-gal-empty {
       text-align: center; padding: 1.25rem;
       color: var(--dim); font-size: .82rem; font-style: italic;
@@ -881,12 +902,26 @@
     <div class="card">
       <div class="card-title">Generate</div>
       <div class="sr">
+        <span class="sr-l">Mode</span>
+        <select id="morphModeSel" class="morph-eng-sel">
+          <option value="image">Image — SDXL</option>
+          <option value="ltx-fast">Clip · Fast — LTX (~1.5 min)</option>
+          <option value="wan-fast">Clip · Quality — Wan (~10 min)</option>
+        </select>
+      </div>
+      <div class="sr" id="morphEngRow">
         <span class="sr-l">Engine</span>
         <select id="morphEngSel" class="morph-eng-sel">
           <option value="sdxl">SDXL — sd_xl_base_1.0</option>
           <option value="flux" disabled>FLUX — not installed</option>
           <option value="qwen" disabled>Qwen — not installed</option>
         </select>
+      </div>
+      <div id="morphVidWarn" class="morph-vid-warn" style="display:none"></div>
+      <div id="morphSrcRow" class="morph-src-row" style="display:none">
+        <img id="morphSrcThumb" alt="source still">
+        <span id="morphSrcLabel">Animating a still</span>
+        <button id="morphSrcClear" type="button" title="Clear source">&#10005;</button>
       </div>
       <textarea id="morphPrompt" class="morph-textarea" rows="1"
         placeholder="Describe the image…" autocomplete="off" autocorrect="off" autocapitalize="none"
@@ -932,6 +967,8 @@
           <circle cx="12" cy="12" r="10" fill="currentColor" mask="url(#morphmask)"/>
         </svg>
         <span id="morphStatePill" class="badge morph-state-pill state-queued">Queued</span>
+        <span id="morphVidTimer" class="morph-vid-timer" style="display:none"></span>
+        <button id="morphCancelBtn" class="morph-cancel-btn" style="display:none" type="button">Cancel</button>
       </div>
     </div>
 
@@ -939,6 +976,7 @@
       <div class="card-title">Output</div>
       <div id="morphOutputEmpty" class="morph-output-empty">Nothing yet — hit Generate.</div>
       <img id="morphOutput" class="morph-output" style="display:none" alt="Generated image">
+      <video id="morphOutputVid" class="morph-output" style="display:none" controls loop playsinline></video>
       <div id="morphDlRow" class="morph-dl-row" style="display:none">
         <select id="morphFmtSel" class="morph-dl-sel">
           <option value="png">PNG</option>
@@ -965,6 +1003,9 @@
     <div id="morphEditMode" style="display:none">
       <div class="card">
         <div class="card-title">Edit — img2img</div>
+        <div id="editClipNote" class="morph-vid-warn" style="display:none">
+          Clip editing isn't supported yet — Edit works on stills only. Pick an image, or drop one below.
+        </div>
         <div class="edit-drop" id="editDrop" tabindex="0" role="button" aria-label="Upload an image">
           <input type="file" id="editFile" accept="image/png,image/jpeg,image/webp" hidden>
           <div class="edit-drop-lbl" id="editDropLbl">🖼️&ensp;Drop an image · or Browse</div>
@@ -1862,29 +1903,86 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
   const dlBtn        = document.getElementById('morphDlBtn');
   const fmtSel       = document.getElementById('morphFmtSel');
   const delAllBtn    = document.getElementById('morphDelAllBtn');
+  const modeSel      = document.getElementById('morphModeSel');
+  const engRow       = document.getElementById('morphEngRow');
+  const vidWarn      = document.getElementById('morphVidWarn');
+  const srcRow       = document.getElementById('morphSrcRow');
+  const srcThumb     = document.getElementById('morphSrcThumb');
+  const srcLabel     = document.getElementById('morphSrcLabel');
+  const srcClear     = document.getElementById('morphSrcClear');
+  const outputVid    = document.getElementById('morphOutputVid');
+  const vidTimer     = document.getElementById('morphVidTimer');
+  const cancelBtn    = document.getElementById('morphCancelBtn');
+  const advEl        = document.querySelector('.morph-adv');
 
+  const VID_ETA = { 'ltx-fast': 90, 'wan-fast': 720, 'wan-quality': 2400 };
   let currentJobId = null;
+  let currentIsVideo = false;
+  let sourceJobId = null;   // set by gallery "Animate" → makes the clip an I2V
+  let curVidJob = null;     // active video job id (for Cancel)
 
-  function showDownload(jobId) {
+  function showDownload(jobId, isVideo) {
     currentJobId = jobId;
+    currentIsVideo = !!isVideo;
     dlRow.style.display = '';
+    fmtSel.style.display = isVideo ? 'none' : '';   // mp4 has no format choice
   }
 
   dlBtn.addEventListener('click', () => {
     if (!currentJobId) return;
-    window.location.href = `/image/file/${currentJobId}?download=1&format=${fmtSel.value}`;
+    window.location.href = currentIsVideo
+      ? `/morpheus/video/file/${currentJobId}?download=1`
+      : `/image/file/${currentJobId}?download=1&format=${fmtSel.value}`;
   });
+
+  const isClip = () => modeSel.value !== 'image';
+  function setMode() {
+    const clip = isClip();
+    engRow.style.display = clip ? 'none' : '';
+    advEl.style.display  = clip ? 'none' : '';
+    promptEl.placeholder = clip ? 'Describe the clip / how it should move…' : 'Describe the image…';
+    genBtn.textContent   = clip ? '✦ Render clip' : '✦ Generate';
+    if (clip) {
+      const mins = Math.max(1, Math.round(VID_ETA[modeSel.value] / 60));
+      vidWarn.style.display = '';
+      vidWarn.textContent = modeSel.value.startsWith('wan')
+        ? `⚠ Quality clip: ~${mins} min, GPU held — chat pauses during the render.`
+        : `Fast clip: ~${mins} min.`;
+    } else { vidWarn.style.display = 'none'; }
+    srcRow.style.display = (clip && sourceJobId) ? '' : 'none';
+  }
+  modeSel.addEventListener('change', setMode);
+  srcClear.addEventListener('click', () => { sourceJobId = null; setMode(); });
+
+  // Called by the gallery "Animate" action: preload a still as the clip source.
+  function animateStill(jobId) {
+    sourceJobId = jobId;
+    if (modeSel.value === 'image') modeSel.value = 'ltx-fast';
+    srcThumb.src = '/image/file/' + jobId;
+    srcLabel.textContent = 'Animating a still → clip';
+    // Force back to the Generate tab (Animate may be clicked while on Edit)
+    const genTab = document.querySelector('.morph-mode-tab[data-mode="gen"]');
+    if (genTab && !genTab.classList.contains('active')) genTab.click();
+    setMode();
+    promptEl.focus();
+    document.getElementById('morphGenMode').scrollIntoView({behavior:'smooth', block:'start'});
+  }
+  window.__morphAnimate = animateStill;
+  window.__morphClipSelected = () => currentIsVideo;
 
   const STATE_LABELS = {
     queued:   'Queued',
     evicting: 'Evicting Hermes…',
-    loading:  'Loading SDXL…',
+    starting: 'Starting engine…',
+    loading:  'Loading model…',
     sampling: 'Sampling…',
+    rendering:'Rendering…',
     saving:   'Saving…',
     done:     'Done',
     error:    'Error',
+    cancelled:'Cancelled',
   };
-  const BUSY_STATES = new Set(['queued','evicting','loading','sampling','saving']);
+  const BUSY_STATES = new Set(['queued','evicting','starting','loading','sampling','rendering','saving']);
 
   // Grow-up textarea (same verified behavior as index.html)
   promptEl.addEventListener('input', function () {
@@ -1936,14 +2034,15 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
     if (!positive) { promptEl.focus(); return; }
     const negative_prompt = negativeEl.value.trim();
 
+    genBtn.disabled = true;
+    setStatePill('queued');
+    if (isClip()) return generateClip(positive, negative_prompt);
+
     const steps  = parseInt(document.getElementById('morphSteps').value)  || 20;
     const width  = parseInt(document.getElementById('morphWidth').value)   || 1024;
     const height = parseInt(document.getElementById('morphHeight').value)  || 1024;
     const seedRaw = document.getElementById('morphSeed').value.trim();
     const seed = seedRaw !== '' ? parseInt(seedRaw) : -1;
-
-    genBtn.disabled = true;
-    setStatePill('queued');
 
     try {
       const res  = await fetch('/image/generate', {
@@ -1971,6 +2070,57 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
 
   genBtn.addEventListener('click', generate);
 
+  // ── Video (clip) generation ──────────────────────────────────────────────
+  function fmtDur(s){ s=Math.max(0,Math.floor(s)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+
+  async function generateClip(positive, negative_prompt) {
+    try {
+      const body = {positive, negative_prompt, preset: modeSel.value};
+      if (sourceJobId) body.source_job_id = sourceJobId;
+      const res = await fetch('/morpheus/video', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+      if (!res.ok) { setStatePill('error'); genBtn.disabled = false; return; }
+      const data = await res.json();
+      curVidJob = data.job_id;
+      const eta = data.eta_s || VID_ETA[modeSel.value] || 120;
+      const t0 = Date.now();
+      cancelBtn.style.display = ''; cancelBtn.disabled = false; vidTimer.style.display = '';
+      stateCardEl.scrollIntoView({behavior:'smooth', block:'nearest'});
+      stopPoll();
+      pollId = setInterval(() => pollVideoStatus(curVidJob, t0, eta), 1500);
+    } catch (e) { console.warn('[Morpheus] clip error:', e); setStatePill('error'); genBtn.disabled = false; }
+  }
+
+  async function pollVideoStatus(jobId, t0, eta) {
+    try {
+      const d = await fetch('/morpheus/jobs/' + jobId).then(r => r.json());
+      setStatePill(d.state);
+      const q = (d.state === 'queued' && d.queue_position > 0) ? ` · #${d.queue_position} in queue` : '';
+      vidTimer.textContent = `${fmtDur((Date.now()-t0)/1000)} / ~${fmtDur(eta)}${q}`;
+      if (d.state === 'done') {
+        stopPoll(); cancelBtn.style.display='none'; vidTimer.style.display='none';
+        showClip(jobId); genBtn.disabled = false; refreshGallery();
+      } else if (d.state === 'error' || d.state === 'cancelled') {
+        stopPoll(); cancelBtn.style.display='none'; vidTimer.style.display='none';
+        genBtn.disabled = false;
+      }
+    } catch (e) { /* transient — keep polling */ }
+  }
+
+  function showClip(jobId) {
+    outputEmpty.style.display = 'none';
+    outputImg.style.display = 'none';
+    outputVid.src = '/morpheus/video/file/' + jobId + '?t=' + Date.now();
+    outputVid.style.display = 'block';
+    showDownload(jobId, true);
+    outputVid.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
+
+  cancelBtn.addEventListener('click', async () => {
+    if (!curVidJob) return;
+    cancelBtn.disabled = true;
+    try { await fetch('/morpheus/jobs/' + curVidJob, {method:'DELETE'}); } catch {}
+  });
+
   async function refreshGallery() {
     try {
       const data = await fetch('/image/gallery?n=12').then(r => r.json());
@@ -1981,30 +2131,43 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
       }
       galleryEl.innerHTML = imgs.map(g => {
         const ts = new Date(g.created_at).toLocaleTimeString(undefined, {hour:'2-digit',minute:'2-digit'});
-        const prompt = g.prompt || '—';
-        return `<div class="morph-gal-item" data-job="${g.job_id}" title="${prompt}">
-          <img src="/image/file/${g.job_id}" class="morph-gal-thumb" alt="${prompt}" loading="lazy">
+        const prompt = (g.prompt || '—').replace(/"/g, '&quot;');
+        const isVid = g.kind === 'video';
+        const thumb = isVid ? `/morpheus/video/thumb/${g.job_id}` : `/image/file/${g.job_id}`;
+        const meta  = isVid ? `${ts} &middot; clip &middot; ${g.model || ''}` : `${ts} &middot; seed ${g.seed ?? '?'}`;
+        const anim  = isVid ? '' : `<button class="morph-gal-anim" data-anim="${g.job_id}" title="Animate → clip">&#9654;</button>`;
+        return `<div class="morph-gal-item${isVid ? ' is-video' : ''}" data-job="${g.job_id}" data-kind="${g.kind || 'image'}" title="${prompt}">
+          <img src="${thumb}" class="morph-gal-thumb" alt="${prompt}" loading="lazy">
+          ${isVid ? '<span class="morph-gal-play">&#9654;</span>' : ''}
           <div class="morph-gal-meta">
             <div class="morph-gal-prompt">${prompt}</div>
-            <div class="morph-gal-ts">${ts} &middot; seed ${g.seed ?? '?'}</div>
+            <div class="morph-gal-ts">${meta}</div>
           </div>
-          <button class="morph-gal-dl" data-job="${g.job_id}" title="Download">&#8595;</button>
+          ${anim}
+          <button class="morph-gal-dl" data-job="${g.job_id}" data-kind="${g.kind || 'image'}" title="Download">&#8595;</button>
           <button class="morph-gal-del" data-job="${g.job_id}" title="Delete">&#10005;</button>
         </div>`;
       }).join('');
       galleryEl.querySelectorAll('.morph-gal-item').forEach(item => {
         item.addEventListener('click', () => {
+          if (item.dataset.kind === 'video') { showClip(item.dataset.job); return; }
           outputEmpty.style.display = 'none';
+          outputVid.style.display = 'none';
           outputImg.src = '/image/file/' + item.dataset.job + '?t=' + Date.now();
           outputImg.style.display = 'block';
-          showDownload(item.dataset.job);
+          showDownload(item.dataset.job, false);
           outputImg.scrollIntoView({behavior:'smooth', block:'nearest'});
         });
+      });
+      galleryEl.querySelectorAll('.morph-gal-anim').forEach(btn => {
+        btn.addEventListener('click', e => { e.stopPropagation(); animateStill(btn.dataset.anim); });
       });
       galleryEl.querySelectorAll('.morph-gal-dl').forEach(btn => {
         btn.addEventListener('click', e => {
           e.stopPropagation();
-          window.location.href = `/image/file/${btn.dataset.job}?download=1&format=${fmtSel.value}`;
+          window.location.href = btn.dataset.kind === 'video'
+            ? `/morpheus/video/file/${btn.dataset.job}?download=1`
+            : `/image/file/${btn.dataset.job}?download=1&format=${fmtSel.value}`;
         });
       });
       galleryEl.querySelectorAll('.morph-gal-del').forEach(btn => {
@@ -2055,6 +2218,10 @@ document.querySelectorAll('.morph-mode-tab').forEach(t => t.addEventListener('cl
   const mode = t.dataset.mode;
   document.getElementById('morphGenMode').style.display  = mode === 'gen'  ? '' : 'none';
   document.getElementById('morphEditMode').style.display = mode === 'edit' ? '' : 'none';
+  if (mode === 'edit') {
+    const clip = window.__morphClipSelected && window.__morphClipSelected();
+    document.getElementById('editClipNote').style.display = clip ? '' : 'none';
+  }
 }));
 
 // ── Morpheus Edit (img2img) ───────────────────────────────────────────────────

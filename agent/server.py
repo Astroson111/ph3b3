@@ -2341,6 +2341,14 @@ async def morpheus_video_file(job_id: str, download: int = 0):
     return FileResponse(str(path), media_type="video/mp4", headers=headers)
 
 
+@app.get("/morpheus/video/thumb/{job_id}")
+async def morpheus_video_thumb(job_id: str):
+    path = morpheus.VIDEO_DIR / f"{job_id}.jpg"
+    if not path.exists():
+        raise HTTPException(404, "Thumbnail not found")
+    return FileResponse(str(path), media_type="image/jpeg")
+
+
 @app.delete("/image/{job_id}")
 async def image_delete(job_id: str):
     return await asyncio.to_thread(morpheus._db_delete, job_id)

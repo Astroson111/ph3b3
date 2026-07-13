@@ -27,6 +27,7 @@ import random
 import re
 import shutil
 import sqlite3
+import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -262,6 +263,10 @@ def _db_init() -> None:
           created_at  TEXT NOT NULL
         )
     """)
+    # Migration: `kind` distinguishes image rows from video rows in the shared gallery.
+    cols = [r[1] for r in con.execute("PRAGMA table_info(generations)").fetchall()]
+    if "kind" not in cols:
+        con.execute("ALTER TABLE generations ADD COLUMN kind TEXT DEFAULT 'image'")
     con.commit()
     con.close()
 
@@ -289,17 +294,40 @@ def _db_insert(job_id: str, params: dict, path: Path) -> None:
     con.close()
 
 
+def _db_insert_video(job_id: str, params: dict, path: Path) -> None:
+    con = sqlite3.connect(str(DB_PATH))
+    con.execute("""
+        INSERT OR IGNORE INTO generations
+          (job_id, prompt, negative, model, seed, steps,
+           width, height, filename, created_at, kind)
+        VALUES (?,?,?,?,?,?,?,?,?,?, 'video')
+    """, (
+        job_id,
+        params.get("positive", ""),
+        params.get("negative", ""),
+        params.get("preset", DEFAULT_VIDEO_PRESET),   # model column carries the preset for video
+        params.get("seed", 0),
+        0,
+        params.get("width", 0),
+        params.get("height", 0),
+        str(path),
+        datetime.now(timezone.utc).isoformat(),
+    ))
+    con.commit()
+    con.close()
+
+
 def _db_gallery(n: int) -> list[dict]:
     con = sqlite3.connect(str(DB_PATH))
     rows = con.execute(
-        "SELECT job_id, prompt, model, seed, width, height, created_at "
+        "SELECT job_id, prompt, model, seed, width, height, created_at, COALESCE(kind,'image') "
         "FROM generations ORDER BY id DESC LIMIT ?",
         (n,),
     ).fetchall()
     con.close()
     return [
-        {"job_id": r[0], "prompt": r[1], "model": r[2],
-         "seed": r[3], "width": r[4], "height": r[5], "created_at": r[6]}
+        {"job_id": r[0], "prompt": r[1], "model": r[2], "seed": r[3],
+         "width": r[4], "height": r[5], "created_at": r[6], "kind": r[7]}
         for r in rows
     ]
 
@@ -328,6 +356,8 @@ def _db_delete(job_id: str) -> dict:
         con.execute("BEGIN")
         con.execute("DELETE FROM generations WHERE job_id=?", (job_id,))
         path.unlink(missing_ok=True)
+        if path.suffix == ".mp4":                       # video: also drop its thumbnail
+            path.with_suffix(".jpg").unlink(missing_ok=True)
         con.commit()
         return {"ok": True, "job_id": job_id, "freed_bytes": freed}
     except Exception as e:
@@ -744,6 +774,23 @@ def build_video_workflow(params: dict) -> dict:
     return wf
 
 
+def _make_video_thumb(mp4_path: Path, job_id: str) -> None:
+    """Grab a middle frame as VIDEO_DIR/{job_id}.jpg for the gallery (best-effort)."""
+    thumb = VIDEO_DIR / f"{job_id}.jpg"
+    try:
+        dur = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(mp4_path)],
+            capture_output=True, text=True, timeout=15).stdout.strip()
+        mid = max(0.0, float(dur) / 2.0) if dur else 0.0
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", str(mid), "-i", str(mp4_path),
+             "-frames:v", "1", "-vf", "scale=360:-1", str(thumb)],
+            capture_output=True, timeout=30)
+    except Exception as e:
+        log.warning("video thumb failed for %s: %s", job_id, e)
+
+
 async def fetch_and_save_video(http: httpx.AsyncClient, outputs: dict, job_id: str) -> Path:
     """Pull the SaveVideo mp4 from ComfyUI /view and save as VIDEO_DIR/{job_id}.mp4."""
     fn = sub = None
@@ -793,7 +840,11 @@ async def run_video(job_id: str, params: dict) -> None:
 
                 jobs[job_id]["state"] = "saving"
                 path = await fetch_and_save_video(http, outputs, job_id)
-                jobs[job_id].update(state="done", video_url=f"/morpheus/video/file/{job_id}")
+                await asyncio.to_thread(_make_video_thumb, path, job_id)   # middle-frame jpg for the gallery
+                await asyncio.to_thread(_db_insert_video, job_id, params, path)  # record → visible in gallery
+                jobs[job_id].update(state="done",
+                                    video_url=f"/morpheus/video/file/{job_id}",
+                                    thumb_url=f"/morpheus/video/thumb/{job_id}")
                 log.info("Morpheus video: job %s done — %s", job_id, path)
 
             except Exception as exc:
