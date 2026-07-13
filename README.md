@@ -120,7 +120,9 @@ It installs as a real standalone PWA (manifest + service worker), with Ph3b3's f
 
 Ph3b3 generates images locally through Morpheus, a txt2img module running on the same single GPU as everything else. Because one card can't hold two minds at once, Morpheus parks the chat model, takes the card, renders, frees it, and hands it back — no second machine, no cloud, no prompt ever leaving the box.
 
-Every generation passes through a safety floor that runs locally before anything renders and cannot be disabled by any setting. It refuses content involving minors, non-consensual material, and sexualized or compromising depictions of real, identifiable people — categorically, on every request. Local generation doesn't mean no guardrails. The line is enforced on your hardware, by default, with no off switch.
+Morpheus does more than stills now. It can **edit** an image you point it at, and it can **make short video** — from a text description, or by animating a still it already generated. Video comes in three tiers on that same single card: a fast lane for quick clips, and two higher-quality lanes that trade minutes for richer, longer motion (a clip runs anywhere from under two minutes to about half an hour, depending on the tier). Because a render holds the whole GPU for that stretch, Ph3b3 treats it as a background job — ask her, in conversation, to make a video and she starts it, tells you the estimate, and steps away from chat until it's done, letting you know she's rendering rather than falling silent.
+
+Every generation passes through a safety floor that runs locally before anything renders and cannot be disabled by any setting. It refuses content involving minors, non-consensual material, and sexualized or compromising depictions of real, identifiable people — categorically, on every request. The floor covers video exactly as it covers images: the prompt, and for image-to-video the source image too, are checked before a single frame renders. Local generation doesn't mean no guardrails. The line is enforced on your hardware, by default, with no off switch.
 
 ---
 
