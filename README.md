@@ -89,7 +89,7 @@ Iris is a wearable voice combadge built on the **M5StickS3** — a device smalle
 
 **Push-to-talk voice round-trip.** Hold BtnA and speak. Iris records in 16 kHz mono PCM, wraps it in a WAV header, and POSTs it to Ph3b3's `/transcribe` endpoint (Whisper on CUDA). The transcript flows directly to `/chat` (Hermes3 + her soul). Ph3b3 responds in text *and* streams back a TTS audio payload (Piper, Alba voice). Iris decodes and plays it in real time.
 
-**Double-buffered audio streaming.** Audio arrives as a base64 WAV stream over HTTPS. Iris decodes it in chunks using a double-buffer: buffer A plays while buffer B is being filled from the TLS stream, then they swap. This eliminates the race condition that caused audio cuts, producing clean continuous speech even over a hotspot.
+**Chunked TTS streaming — long stories play whole.** Ph3b3 splits a reply at sentence boundaries and serves it as a manifest plus per-chunk audio (`POST /chat/stream`, then lazy `GET /tts/chunk/{id}/{n}` synthesised on demand with read-ahead). Iris plays the first chunk while fetching the next, decoding each with a double-buffer — buffer A plays while buffer B fills from the TLS stream, then they swap — for clean continuous speech even over a hotspot. Because every request is short-lived, a five-minute recitation streams end to end; the earlier single-WAV response couldn't sustain a multi-minute reply and cut off mid-story. An inter-chunk watchdog resets on every byte and tears down a genuinely stalled stream without ever capping a long one, and playback state transitions fire only when the audio buffer actually drains.
 
 **Interrupt.** Press BtnA mid-sentence and she stops immediately. She listens; she can be interrupted. The decode loop and the playback tail both respond to the button.
 
@@ -147,9 +147,19 @@ Ghost, Network) navigated from a crescent swipe menu. When in Talk mode
 the face expresses live state — LISTENING, THINKING, SPEAKING — driven by
 the same M5GFX face engine as Iris.
 
-Firmware lives in `firmware/Ph3b3-Chan/`. Flash with Arduino IDE targeting
-`m5stack:esp32:m5stack_cores3`; copy `secrets.example.h` to `secrets.h`
-and fill in your WiFi and server credentials.
+Like Iris, Stack-chan consumes the chunked `/chat/stream` API, so long
+recitations play through to the end. An activity-based session watchdog —
+where an arriving chunk, playing audio, detected speech, or a head-pat all
+count as activity — keeps her awake mid-story and drops to idle only on a
+genuine stall or true dead air, never on a fixed timer. "Response complete"
+means her local playback buffer has drained, not that the network stream
+closed.
+
+Firmware lives in its own repository —
+**[Astroson111/Dionysus](https://github.com/Astroson111/Dionysus)** —
+extracted from this repo so Ph3b3 stays server-only. Build with `arduino-cli`
+targeting `m5stack:esp32:m5stack_cores3`; copy `secrets.example.h` to
+`secrets.h` and fill in your WiFi and server credentials.
 
 ---
 
