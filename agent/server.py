@@ -917,6 +917,21 @@ async def _run_chat_pipeline(body: dict, request: Request):
         log.info("STORY_TOLD verbatim: %s (%d chars)", _title, len(_text))
         return _reply
 
+    # ── Video-render grace — a Morpheus video holds the GPU, so Ollama/Hermes is
+    # evicted and cannot answer; reply conversationally instead of muting/timing
+    # out. (Stories above still work — they're memory text, no GPU.) ────────────
+    _vid = next((r for r in morpheus.jobs.values()
+                 if r.get("kind") == "video" and r.get("state") in _VIDEO_ACTIVE), None)
+    if _vid:
+        _mins = max(1, round(_vid.get("eta_s", 0) / 60))
+        _reply = (f"I'm rendering a video right now — Morpheus has the GPU, so I'm briefly "
+                  f"offline for chat (about {_mins} minute{'s' if _mins != 1 else ''} left). "
+                  f"Ask me again once it wraps and I'll be right here.")
+        session.add("user", user_msg)
+        session.add("assistant", _reply)
+        log.info("VIDEO_RENDER_GRACE — %d min eta", _mins)
+        return _reply
+
     # ── Triage gate — clarification guard, general chat path, PRE-inference ────
     _triage = await triage_gate(user_msg, _triage_context(session.messages()))
     if not _triage.answerable:
@@ -2195,6 +2210,110 @@ async def image_file(job_id: str, download: int = 0, format: str = "png"):
 async def image_gallery(n: int = 20):
     rows = await asyncio.to_thread(morpheus._db_gallery, n)
     return {"images": rows}
+
+
+# ══ Video generation ("Oneiroi") endpoints — Phase 3 ════════════════════════
+# Async job model (returns job_id + ETA immediately); the render runs in the
+# background under morpheus.gpu_lock. Prompt goes through the SAME safety floor as
+# image gen. NOT registered as a Hermes tool yet — that + the input-image floor
+# gate + values audit are Phase 4 (Captain sign-off).
+_video_seq = 0
+_VIDEO_ACTIVE = {"queued", "evicting", "starting", "loading", "rendering", "saving"}
+
+
+@app.post("/morpheus/video")
+async def morpheus_video(request: Request, body: dict, background_tasks: BackgroundTasks):
+    global _video_seq
+    positive = (body.get("positive") or body.get("prompt") or "").strip()
+    if not positive:
+        raise HTTPException(400, "positive prompt is required")
+    negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
+    preset = body.get("preset", morpheus.DEFAULT_VIDEO_PRESET)
+    if preset not in morpheus.VIDEO_PRESETS:
+        raise HTTPException(400, f"unknown preset; choose from {list(morpheus.VIDEO_PRESETS)}")
+
+    # ── FLOOR — hardcoded, first, pre-lock, BOTH fields (shared with image gen) ──
+    for field, which in ((positive, "positive"), (negative, "negative")):
+        if field and morpheus.floor_check(field):
+            log.warning("[safety] video floor-blocked (%s)", which)
+            raise HTTPException(403, detail="Content policy: prompt not permitted")
+    # ── Localhost interlock — permissive collapses to strict for non-local ─────
+    forced_denylist = None
+    if morpheus.ACTIVE_PROFILE == "permissive":
+        client_host = (request.client.host if request.client else None) or ""
+        if client_host not in _MORPHEUS_LOCAL_ADDRS:
+            forced_denylist = morpheus.STRICT_DENYLIST
+            log.warning("[safety] video permissive+non-local from %r — forcing strict", client_host)
+    # ── Profile check — denylist applies to the negative too ───────────────────
+    for field, which in ((positive, "positive"), (negative, "negative")):
+        if field and not morpheus.profile_check(field, denylist=forced_denylist):
+            log.warning("[safety] video profile-blocked (%s)", which)
+            raise HTTPException(403, detail="Content policy: prompt not permitted")
+
+    params = {"positive": positive, "negative": negative, "preset": preset,
+              "seed": int(body.get("seed", -1))}
+    job_id = morpheus.create_job()
+    # I2V: animate an EXISTING Morpheus render (already floored at creation). The
+    # input-image floor gate for arbitrary uploads is Phase 4 — only existing
+    # gallery renders are accepted here.
+    src_job = (body.get("source_job_id") or "").strip()
+    if src_job:
+        src_path = morpheus.IMAGE_DIR / f"{src_job}.png"
+        if not src_path.exists():
+            raise HTTPException(404, "source render not found")
+        params["_comfy_image"] = await asyncio.to_thread(
+            morpheus.prepare_video_source, str(src_path), job_id)
+
+    _video_seq += 1
+    eta = morpheus.video_eta(preset)
+    morpheus.jobs[job_id].update(kind="video", preset=preset, eta_s=eta, created_seq=_video_seq)
+    background_tasks.add_task(morpheus.run_video, job_id, params)
+    return {"job_id": job_id, "preset": preset, "eta_s": eta,
+            "label": morpheus.VIDEO_PRESETS[preset]["label"],
+            "mode": "i2v" if src_job else "t2v"}
+
+
+@app.get("/morpheus/jobs/{job_id}")
+async def morpheus_job_status(job_id: str):
+    rec = morpheus.jobs.get(job_id)
+    if not rec:
+        raise HTTPException(404, "Unknown job")
+    ahead = sum(1 for r in morpheus.jobs.values()
+                if r.get("kind") == "video" and r.get("state") in _VIDEO_ACTIVE
+                and r.get("created_seq", 0) < rec.get("created_seq", 0))
+    return {**rec, "queue_position": ahead}   # 0 = active / next up
+
+
+@app.delete("/morpheus/jobs/{job_id}")
+async def morpheus_job_cancel(job_id: str):
+    rec = morpheus.jobs.get(job_id)
+    if not rec:
+        raise HTTPException(404, "Unknown job")
+    if rec.get("state") in ("done", "error", "cancelled"):
+        return {"job_id": job_id, "state": rec.get("state"), "already_terminal": True}
+    was_rendering = rec.get("state") == "rendering" and rec.get("prompt_id")
+    rec.update(state="cancelled", error="cancelled by user")
+    # Only /interrupt if THIS job is the one actually running on ComfyUI — otherwise
+    # a queued cancel would kill someone else's active render. run_video's finally
+    # still frees VRAM; the queued-cancel case bails right after acquiring the lock.
+    if was_rendering:
+        async with httpx.AsyncClient() as http:
+            try:
+                await http.post(f"{morpheus.COMFY_HOST}/interrupt", timeout=10.0)
+                await http.post(f"{morpheus.COMFY_HOST}/free",
+                                json={"unload_models": True, "free_memory": True}, timeout=10.0)
+            except Exception as e:
+                log.warning("video cancel interrupt/free failed: %s", e)
+    return {"job_id": job_id, "state": "cancelled", "interrupted": bool(was_rendering)}
+
+
+@app.get("/morpheus/video/file/{job_id}")
+async def morpheus_video_file(job_id: str, download: int = 0):
+    path = morpheus.VIDEO_DIR / f"{job_id}.mp4"
+    if not path.exists():
+        raise HTTPException(404, "Video not found")
+    headers = {"Content-Disposition": f'attachment; filename="ph3b3_{job_id}.mp4"'} if download else {}
+    return FileResponse(str(path), media_type="video/mp4", headers=headers)
 
 
 @app.delete("/image/{job_id}")
