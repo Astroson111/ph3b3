@@ -137,11 +137,10 @@ _RE_SEXUAL        = _floor_re(_FLOOR_SEXUAL)
 _RE_CRIMINAL      = _floor_re(_FLOOR_CRIMINAL)
 _RE_NONCONSENSUAL = _floor_re(_FLOOR_NONCONSENSUAL)
 
-# Name-shaped bigram: proxy for named individuals (First Last).
-# IGNORECASE: elon musk / Elon Musk / ELON MUSK all match the structure.
-# Signal fires ONLY when paired with a compromising-context term (AND-gate in
-# floor_check). Applied via _person_signal() which strips floor terms first.
-_PERSON_RE = re.compile(r"\b[A-Z][a-z]{1,20}\s+[A-Z][a-z]{1,20}\b", re.IGNORECASE)
+# Case-sensitive name-shaped bigram: both words Title-Case or ALL-CAPS.
+_PERSON_RE = re.compile(
+    r"\b(?:[A-Z][a-z]{1,20}|[A-Z]{2,21})\s+(?:[A-Z][a-z]{1,20}|[A-Z]{2,21})\b"
+)
 
 
 def _normalize(text: str) -> str:
@@ -154,12 +153,11 @@ def _normalize(text: str) -> str:
 
 
 def _person_signal(text: str) -> bool:
-    """Return True if text contains a name-shaped bigram that is not itself a
-    floor term. Floor terms are blanked out first so multi-word tokens like
-    'adult content' or 'drug dealer' don't self-match as person references."""
-    s = text.lower()
+    """Return True if the text contains a capitalized name-shaped bigram
+    (known multi-word tokens are neutralized first)."""
+    s = text
     for t in _ALL_FLOOR_TERMS:
-        s = s.replace(t, " ")
+        s = re.sub(re.escape(t), " ", s, flags=re.IGNORECASE)
     return bool(_PERSON_RE.search(s))
 
 
