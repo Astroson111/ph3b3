@@ -3,12 +3,15 @@ import base64
 import io
 import os
 import logging
+import queue
 import re
 import subprocess
 import sys
 import threading
 import wave
 from pathlib import Path
+
+from tts_chunker import split_for_tts
 
 
 def trim_silence_b64(b64, thr=350, keep_ms=40):
@@ -151,32 +154,99 @@ class TTSModule:
             t.start()
         return f"Speaking: {text[:60]}"
 
-    def _speak_now(self, text):
-        # Resolve per-utterance — handles plug/unplug live, no restart needed.
-        sink = _resolve_sink()
-        if sink:
-            log.info(f"[TTS] routing → {sink}")
-            device_arg = f" --device={sink}"
-        else:
-            log.info("[TTS] routing → default")
-            device_arg = ""
+    # Per-chunk pacat playback lives on Nyx; the old monolithic
+    # `echo | piper | pacat` synthesised the whole reply as ONE job under a single
+    # 30 s wall-clock timeout — long stories cut out and dead-air-before-first-word
+    # grew with length. It now splits at sentence boundaries and pipelines synth
+    # against playback (Dio's chunking pattern), so time-to-first-audio is one
+    # chunk's synth regardless of story length and no timer spans the whole reply.
+    _SPEAK_MAX_CHARS = 200        # run-on cap; ~<1 s synth, ~15 s audio per chunk
 
+    def _piper_raw(self, text: str) -> bytes | None:
+        """Synthesise one chunk to raw s16le/22050/mono PCM (headerless), or None."""
+        try:
+            cmd = f'echo {subprocess.list2cmdline([text])} | {PIPER_BIN} --model {VOICE_MODEL} --output-raw'
+            proc = subprocess.run(
+                cmd, shell=True, capture_output=True, timeout=20,
+                env={**os.environ, **_XDG_ENV},
+            )
+            return proc.stdout or None
+        except subprocess.TimeoutExpired:
+            log.warning("[TTS] chunk synth timed out (20 s)")
+            return None
+        except Exception as e:
+            log.error(f"[TTS] chunk synth error: {e}")
+            return None
+
+    def _play_pcm(self, pcm: bytes) -> bool:
+        """Play raw PCM through pacat. Sink is resolved per chunk by stable node
+        NAME (never a volatile index) so a live plug/unplug re-routes cleanly.
+        The playback timeout is derived from the chunk's own duration, so it
+        bounds a single chunk — never the whole reply."""
+        sink = _resolve_sink()
+        device_arg = f" --device={sink}" if sink else ""
+        dur = len(pcm) / 2 / 22050.0                 # s16le mono @ 22050 Hz
+        try:
+            subprocess.run(
+                f"pacat --playback --raw --format=s16le --rate=22050 --channels=1{device_arg}",
+                shell=True, input=pcm, check=True, timeout=dur + 15,
+                env={**os.environ, **_XDG_ENV},
+            )
+            return True
+        except subprocess.TimeoutExpired:
+            log.warning("[TTS] chunk playback timed out")
+            return False
+        except Exception as e:
+            log.error(f"[TTS] chunk playback error: {e}")
+            return False
+
+    def _speak_now(self, text):
+        chunks = split_for_tts(text, max_chars=self._SPEAK_MAX_CHARS)
+        if not chunks:
+            return
         with self._lock:
+            # Producer synthesises chunks ahead into a depth-3 queue while the
+            # consumer (this thread) plays them in order. Piper is ~<1 s/chunk and
+            # pacat plays in real time, so the queue stays full and playback never
+            # starves. Completion = producer signalled done (all chunks synthesised)
+            # AND the queue has fully drained — never a wall-clock deadline.
+            q: queue.Queue = queue.Queue(maxsize=3)
+            DONE = object()
+            stop = threading.Event()
+
+            def _producer():
+                for ch in chunks:
+                    if stop.is_set():
+                        break
+                    pcm = self._piper_raw(ch)
+                    if not pcm:
+                        continue          # skip a failed chunk, keep the stream alive
+                    while not stop.is_set():
+                        try:
+                            q.put(pcm, timeout=0.5)
+                            break
+                        except queue.Full:
+                            continue
+                q.put(DONE)
+
+            prod = threading.Thread(target=_producer, daemon=True)
+            prod.start()
             try:
-                pacat_cmd = f"pacat --playback --raw --format=s16le --rate=22050 --channels=1{device_arg}"
-                cmd = (
-                    f"echo {subprocess.list2cmdline([text])} | "
-                    f"{PIPER_BIN} --model {VOICE_MODEL} --output-raw | "
-                    f"{pacat_cmd}"
-                )
-                subprocess.run(
-                    cmd, shell=True, check=True, timeout=30,
-                    env={**os.environ, **_XDG_ENV},
-                )
-            except subprocess.TimeoutExpired:
-                log.warning("TTS timed out after 30 s — audio device may not be ready")
-            except Exception as e:
-                log.error(f"TTS error: {e}")
+                while True:
+                    item = q.get()
+                    if item is DONE:
+                        break
+                    self._play_pcm(item)
+            finally:
+                # On an early/exception exit, tell the producer to stop and drain
+                # the queue so its blocked put() unblocks, then join.
+                stop.set()
+                try:
+                    while q.get_nowait() is not DONE:
+                        pass
+                except queue.Empty:
+                    pass
+                prod.join(timeout=2)
 
     def synthesize_to_b64(self, text: str) -> str | None:
         """Run Piper and return base64-encoded WAV, or None if unavailable."""
