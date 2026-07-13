@@ -397,7 +397,8 @@ TOOLS = [
     {"type":"function","function":{"name":"analyze_screenshot","description":"Analyze a screenshot or image file from disk. Pass the path to a PNG or JPG and an optional question. Uses LLaVA to describe the image, then Hermes3 to reason over that description and answer the question.","parameters":{"type":"object","properties":{"image_path":{"type":"string","description":"Absolute or relative path to the image file (PNG, JPG, JPEG, WEBP, BMP)"},"question":{"type":"string","description":"What to ask or focus on (optional — defaults to a general description and analysis)"}},"required":["image_path"]}}},
     {"type":"function","function":{"name":"start_evening_capture","description":"Start capturing photos of the evening to the Desktop at a timed interval using the 4K AI webcam. Say 'start capturing the evening' or 'start evening capture' to trigger this.","parameters":{"type":"object","properties":{"label":{"type":"string","default":"evening","description":"Folder label — becomes part of the directory name on the Desktop"},"interval":{"type":"number","default":120,"description":"Seconds between shots"},"source":{"type":"string","default":"opencv:0@3840x2160","description":"Camera source spec — leave as default for the 4K webcam"}}}}},
     {"type":"function","function":{"name":"stop_evening_capture","description":"Stop the evening photo capture session and report how many photos were saved to the Desktop.","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"find_recipe","description":"Search 2+ million local recipes from the RecipeNLG corpus — fully offline, zero network, zero GPU. Three modes: 'text' for free-text search (e.g. 'carbonara', 'Thai noodles'), 'strict' to find recipes that use ALL listed ingredients, 'pantry' (default) to find the best matches from what you have on hand — results are ranked by fewest missing ingredients. You will receive structured recipe rows: narrate them to the user (title, key ingredients, directions summary, what they're missing in pantry mode). Do NOT fabricate or invent recipe details — report exactly what the tool returns.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Free-text search term — used in 'text' mode (e.g. 'carbonara', 'banana bread')"},"ingredients":{"type":"array","items":{"type":"string"},"description":"List of ingredient names — used in 'strict' and 'pantry' modes (e.g. ['chicken', 'rice', 'lime'])"},"mode":{"type":"string","enum":["text","strict","pantry"],"default":"pantry","description":"'text': free-text FTS search. 'strict': recipes using ALL listed ingredients. 'pantry': best matches from what you have, ranked by fewest missing."},"limit":{"type":"integer","default":5,"description":"Number of results to return (1–20)"}},"required":[]}}}
+    {"type":"function","function":{"name":"find_recipe","description":"Search 2+ million local recipes from the RecipeNLG corpus — fully offline, zero network, zero GPU. Three modes: 'text' for free-text search (e.g. 'carbonara', 'Thai noodles'), 'strict' to find recipes that use ALL listed ingredients, 'pantry' (default) to find the best matches from what you have on hand — results are ranked by fewest missing ingredients. You will receive structured recipe rows: narrate them to the user (title, key ingredients, directions summary, what they're missing in pantry mode). Do NOT fabricate or invent recipe details — report exactly what the tool returns.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Free-text search term — used in 'text' mode (e.g. 'carbonara', 'banana bread')"},"ingredients":{"type":"array","items":{"type":"string"},"description":"List of ingredient names — used in 'strict' and 'pantry' modes (e.g. ['chicken', 'rice', 'lime'])"},"mode":{"type":"string","enum":["text","strict","pantry"],"default":"pantry","description":"'text': free-text FTS search. 'strict': recipes using ALL listed ingredients. 'pantry': best matches from what you have, ranked by fewest missing."},"limit":{"type":"integer","default":5,"description":"Number of results to return (1–20)"}},"required":[]}}},
+    {"type":"function","function":{"name":"generate_video","description":"Generate a short AI video clip from a text description, or animate an EXISTING generated image into a video. Use when the user asks to make/create/render a video, or to animate/bring an image to life. Presets: ltx-fast (~1.5 min, quick default), wan-fast (~10 min, higher quality), wan-quality (~35 min, best). The render runs in the background and holds the GPU — tell the user the ETA from the tool's reply. Report the status line the tool returns; never fabricate progress.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What the video should show and how it should move"},"preset":{"type":"string","enum":["ltx-fast","wan-fast","wan-quality"],"description":"Speed/quality preset; default ltx-fast"},"source_job_id":{"type":"string","description":"Optional job id of an existing generated image to animate (image-to-video)"}},"required":["prompt"]}}}
 ]
 
 _SENSITIVE_KEY_FRAGMENTS = frozenset({
@@ -512,6 +513,7 @@ async def execute_tool(name, args):
         elif name == "log_anomaly": result = memory.log_anomaly(args["description"], args.get("source","camera"))
         elif name == "recall_memory": result = memory.recall(args["topic"])
         elif name == "occult_lookup": result = occult.lookup(args["query"], args.get("category","any"))
+        elif name == "generate_video": result = _tool_generate_video(args)
         elif name == "occult_random": result = occult.random_phenomenon()
         elif name == "tell_joke":
             joke = jokes.tell_joke(args.get("category","any"))
@@ -972,6 +974,7 @@ async def _run_chat_pipeline(body: dict, request: Request):
         messages.insert(1, device_note)   # after soul + id_anchor, before conversation turns
 
     response, updated = await chat_with_tools(messages)
+    _fire_pending_video()   # start any render queued by generate_video — AFTER the reply
 
     # Strip ephemeral notes before storing so they never accumulate in history
     if _dt_note in updated:
@@ -1105,6 +1108,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str = "default"):
             await websocket.send_json({"status":"thinking"})
             session.add("user", user_input)
             response, updated = await chat_with_tools(session.messages())
+            _fire_pending_video()   # start any render queued by generate_video — AFTER the reply
             session.history = updated
             session.add("assistant", response)
             t = response.lower()
@@ -1971,6 +1975,56 @@ def _morpheus_floor_gate(positive: str, negative: str, request: Request) -> None
             label = morpheus.ACTIVE_PROFILE + (" [forced strict by interlock]" if forced_denylist else "")
             log.warning("[safety] profile-blocked (%s) — profile: %s", which, label)
             raise HTTPException(403, detail="Content policy: prompt not permitted")
+
+
+# ── generate_video tool plumbing ─────────────────────────────────────────────
+# The render evicts Ollama, so a tool call must NOT start it inline (that would
+# kill Hermes' follow-up reply). The tool QUEUES params here; _fire_pending_video()
+# starts them after the chat turn is fully composed.
+_pending_video_params: dict = {}   # job_id -> params
+
+
+def _tool_generate_video(args: dict) -> str:
+    """Hermes tool handler: floor-gate + queue a video render, return a status line.
+    Floor is the same hardcoded check as the HTTP path (Hermes runs local on Nyx)."""
+    global _video_seq
+    prompt = (args.get("prompt") or args.get("positive") or "").strip()
+    if not prompt:
+        return "I need a description of the video you'd like me to make."
+    preset = args.get("preset", morpheus.DEFAULT_VIDEO_PRESET)
+    if preset not in morpheus.VIDEO_PRESETS:
+        preset = morpheus.DEFAULT_VIDEO_PRESET
+    if morpheus.floor_check(prompt) or not morpheus.profile_check(prompt):
+        log.warning("[safety] video(tool) blocked")
+        return "I can't make that one — it's outside what I'm allowed to generate."
+    params = {"positive": prompt, "negative": "", "preset": preset, "seed": -1}
+    src = (args.get("source_job_id") or "").strip()
+    if src:
+        if not (len(src) == 36 and all(c in "0123456789abcdef-" for c in src)):
+            return "That source-image id isn't valid."
+        sp = morpheus.IMAGE_DIR / f"{src}.png"
+        if sp.resolve().parent != morpheus.IMAGE_DIR.resolve() or not sp.exists():
+            return "I couldn't find that image to animate."
+        job_id = morpheus.create_job()
+        params["_comfy_image"] = morpheus.prepare_video_source(str(sp), job_id)
+    else:
+        job_id = morpheus.create_job()
+    _video_seq += 1
+    eta = morpheus.video_eta(preset)
+    morpheus.jobs[job_id].update(kind="video", preset=preset, eta_s=eta, created_seq=_video_seq)
+    _pending_video_params[job_id] = params
+    mins = max(1, round(eta / 60))
+    return (f"Rendering started (job {job_id[:8]}, {morpheus.VIDEO_PRESETS[preset]['label']}). "
+            f"About {mins} minute{'s' if mins != 1 else ''}; I'll be offline for chat on the GPU "
+            f"until it finishes.")
+
+
+def _fire_pending_video() -> None:
+    """Start renders queued by generate_video this turn — AFTER the reply is composed,
+    so the eviction never kills Hermes mid-response."""
+    for jid, params in list(_pending_video_params.items()):
+        del _pending_video_params[jid]
+        asyncio.create_task(morpheus.run_video(jid, params))
 
 # ── Morpheus image generation ─────────────────────────────────────────
 # ── Morpheus Edit Mode (img2img) — Phase 1: upload + validation ──────────────
