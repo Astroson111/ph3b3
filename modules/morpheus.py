@@ -443,6 +443,19 @@ async def comfy_queue(http: httpx.AsyncClient, workflow: dict) -> str:
         json={"prompt": workflow},
         timeout=30.0,
     )).json()
+    if "prompt_id" not in r:
+        # ComfyUI rejected the workflow (validation / missing node or model). Surface
+        # a readable reason instead of a bare KeyError('prompt_id') — that opaque
+        # failure is exactly what flipped a Wan clip to a blank Error badge.
+        parts = []
+        err = r.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            parts.append(err["message"])
+        for nid, ne in (r.get("node_errors") or {}).items():
+            ct = ne.get("class_type", "?")
+            for e in ne.get("errors", []):
+                parts.append(f"node {nid} ({ct}): {e.get('message', '')}")
+        raise RuntimeError("ComfyUI rejected the workflow: " + (" | ".join(parts) or str(r)[:300]))
     return r["prompt_id"]
 
 
@@ -733,8 +746,8 @@ _COMFY_INPUT = Path(os.getenv("COMFY_INPUT_DIR",  "/home/astroson/Desktop/comfyu
 # preset registry: name → {wf (i2v graph), t2v? (text-only graph), eta_s, label}
 VIDEO_PRESETS: dict = {
     "ltx-fast":    {"wf": "ltx_i2v.json", "t2v": "ltx_t2v.json", "eta_s": 90,   "label": "LTX fast (~1.5 min)"},
-    "wan-fast":    {"wf": "wan_i2v.json",                        "eta_s": 720,  "label": "Wan quality (~10 min)"},
-    "wan-quality": {"wf": "wan_i2v_quality.json",               "eta_s": 2400, "label": "Wan premium (~35 min)"},
+    "wan-fast":    {"wf": "wan_i2v.json", "t2v": "wan_t2v.json",         "eta_s": 720,  "label": "Wan quality (~10 min)"},
+    "wan-quality": {"wf": "wan_i2v_quality.json", "t2v": "wan_t2v_quality.json", "eta_s": 2400, "label": "Wan premium (~35 min)"},
 }
 DEFAULT_VIDEO_PRESET = "ltx-fast"
 

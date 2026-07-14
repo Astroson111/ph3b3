@@ -715,6 +715,9 @@
     .ari-out .dl-file { color: var(--dim); }
     .ari-dl { display: inline-block; margin-bottom: .55rem; color: var(--cyan); text-decoration: none;
               border: 1px solid var(--border); border-radius: 8px; padding: .4rem .7rem; }
+    .morph-error { margin-top: .5rem; color: var(--err); font-size: .8rem; line-height: 1.45;
+                   background: rgba(248, 113, 113, .10); border: 1px solid rgba(248, 113, 113, .35);
+                   border-radius: 8px; padding: .5rem .6rem; word-break: break-word; }
   </style>
 </head>
 <body>
@@ -993,6 +996,7 @@
         <span id="morphVidTimer" class="morph-vid-timer" style="display:none"></span>
         <button id="morphCancelBtn" class="morph-cancel-btn" style="display:none" type="button">Cancel</button>
       </div>
+      <div id="morphError" class="morph-error" style="display:none"></div>
     </div>
 
     <div class="card">
@@ -1975,7 +1979,25 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
   const outputVid    = document.getElementById('morphOutputVid');
   const vidTimer     = document.getElementById('morphVidTimer');
   const cancelBtn    = document.getElementById('morphCancelBtn');
+  const errEl        = document.getElementById('morphError');
   const advEl        = document.querySelector('.morph-adv');
+
+  // Surface the actual failure reason (from the job's `error` field / HTTP detail),
+  // not just a blank Error badge.
+  function showError(msg) {
+    errEl.textContent = msg || '';
+    errEl.style.display = msg ? 'block' : 'none';
+  }
+  // Starting a new job clears/dims the previous output so a stale result can't be
+  // mistaken for the new render.
+  function clearOutput() {
+    outputImg.style.display = 'none';
+    try { outputVid.pause(); } catch (e) {}
+    outputVid.removeAttribute('src'); outputVid.style.display = 'none';
+    dlRow.style.display = 'none';
+    outputEmpty.textContent = 'Working… (Wan clips can take ~10–35 min)';
+    outputEmpty.style.display = 'block';
+  }
 
   const VID_ETA = { 'ltx-fast': 90, 'wan-fast': 720, 'wan-quality': 2400 };
   let currentJobId = null;
@@ -2085,6 +2107,8 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
       } else if (data.state === 'error') {
         stopPoll();
         genBtn.disabled = false;
+        showError(data.error || 'Generation failed.');
+        outputEmpty.textContent = 'Nothing yet — hit Generate.';
       }
     } catch (e) {
       console.warn('[Morpheus] poll error:', e);
@@ -2097,6 +2121,9 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
     const negative_prompt = negativeEl.value.trim();
 
     genBtn.disabled = true;
+    stateCardEl.style.display = '';
+    showError('');
+    clearOutput();
     setStatePill('queued');
     if (isClip()) return generateClip(positive, negative_prompt);
 
@@ -2113,7 +2140,10 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
         body: JSON.stringify({positive, negative_prompt, steps, width, height, seed}),
       });
       if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
         setStatePill('error');
+        showError(err.detail || ('Request failed (' + res.status + ').'));
+        outputEmpty.textContent = 'Nothing yet — hit Generate.';
         genBtn.disabled = false;
         return;
       }
@@ -2140,7 +2170,11 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
       const body = {positive, negative_prompt, preset: modeSel.value};
       if (sourceJobId) body.source_job_id = sourceJobId;
       const res = await fetch('/morpheus/video', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-      if (!res.ok) { setStatePill('error'); genBtn.disabled = false; return; }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setStatePill('error'); showError(err.detail || ('Request failed (' + res.status + ').'));
+        outputEmpty.textContent = 'Nothing yet — hit Generate.'; genBtn.disabled = false; return;
+      }
       const data = await res.json();
       curVidJob = data.job_id;
       const eta = data.eta_s || VID_ETA[modeSel.value] || 120;
@@ -2164,6 +2198,8 @@ document.getElementById('scNetAddBtn').addEventListener('click', async () => {
       } else if (d.state === 'error' || d.state === 'cancelled') {
         stopPoll(); cancelBtn.style.display='none'; vidTimer.style.display='none';
         genBtn.disabled = false;
+        if (d.state === 'error') showError(d.error || 'Render failed.');
+        outputEmpty.textContent = 'Nothing yet — hit Generate.';
       }
     } catch (e) { /* transient — keep polling */ }
   }
