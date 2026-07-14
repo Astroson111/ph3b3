@@ -136,6 +136,14 @@ Built for the room it lives in — when it's not screening calls or generating i
 
 ---
 
+## Ariadne
+
+Ariadne is Ph3b3's résumé toolkit — a private ATS reader and builder for job-seekers. Paste your résumé (or drop a `.txt`, `.docx`, or `.pdf`; a scanned image-PDF is flagged rather than mis-read), and she scores how cleanly an applicant-tracking system can parse it — tables, multi-column layouts, non-standard headers, and content stranded in headers or footers are each called out with the line they're on, alongside a section-completeness check. Add the job description — pasted, or fetched from a URL (Greenhouse, Lever, Workday, most career pages; login-walled sites like LinkedIn simply ask you to paste the text) — and she maps the keyword gap in two honest buckets: the terms you already demonstrate under different words, and the ones you'd have to genuinely earn.
+
+Ask her to build and she rebuilds the résumé as a single-column, ATS-safe `.docx` — standard headers, plain bullets, no tables or text-boxes — and returns a before/after diff so you approve every change before using the file. She only ever inserts a keyword you already back up, tagged to the real line that justifies it; the rest are reported, never written in. That's the rule she runs on: **align truthful experience to ATS vocabulary, never fabricate qualifications.** Like everything else, it stays local — your résumé is analyzed on your machine and never leaves it; the only outbound call is fetching a job-post URL you hand her. Lives in the Control Panel's **Ariadne** tab.
+
+---
+
 ## Ph3b3-Chan
 
 Stack-chan runs **Ph3b3-Chan**, a custom firmware built on the M5Stack CoreS3.
@@ -235,19 +243,6 @@ On a phone, use your browser's **Add to Home Screen** or install prompt to add t
 Auth is the existing basic auth — the browser holds it once you've loaded the page, so the panel never stores credentials of its own.
 
 For Tailscale Serve setup, see `INSTALL.md`.
-
----
-
-<details>
-<summary><b>🌙 For fun — Ph3b3's résumé</b> (she applied to Ph3b3 Labs; self-scored 100/100 by Ariadne, her own ATS)</summary>
-
-<br>
-
-![Ph3b3's résumé — a local-first AI assistant applying to Ph3b3 Labs](docs/ph3b3-resume.png)
-
-Every line is real — reasoning on Hermes3, two bodies (Iris &amp; Dio), the Morpheus studio, the Ariadne ATS — and nothing fabricated (she built the tool that checks).
-
-</details>
 
 ---
 
