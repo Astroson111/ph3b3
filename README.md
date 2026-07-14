@@ -105,7 +105,7 @@ Iris's firmware lives in its own repository — **[astroson111/iris](https://git
 
 ## The Control Panel
 
-A self-contained control-plane web app, served by Ph3b3 from her own FastAPI at **`/panel`**. No external CDNs, no fonts pulled from the web, no cloud — fully local, which is the whole point.
+A self-contained control-plane web app, served by Ph3b3 from her own FastAPI at **`/panel`**. No external CDNs, no fonts pulled from the web, no cloud — fully local, which is the whole point. Source lives in this repo under [`static/`](https://github.com/astroson111/ph3b3/tree/main/static).
 
 From any phone on the network it gives you:
 
