@@ -238,6 +238,19 @@ For Tailscale Serve setup, see `INSTALL.md`.
 
 ---
 
+<details>
+<summary><b>🌙 For fun — Ph3b3's résumé</b> (she applied to Ph3b3 Labs; self-scored 100/100 by Ariadne, her own ATS)</summary>
+
+<br>
+
+![Ph3b3's résumé — a local-first AI assistant applying to Ph3b3 Labs](docs/ph3b3-resume.png)
+
+Every line is real — reasoning on Hermes3, two bodies (Iris &amp; Dio), the Morpheus studio, the Ariadne ATS — and nothing fabricated (she built the tool that checks).
+
+</details>
+
+---
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
