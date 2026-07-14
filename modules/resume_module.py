@@ -38,6 +38,35 @@ except ImportError:
     BS4_AVAILABLE = False
     log.warning("beautifulsoup4 not installed — URL scraping unavailable")
 
+try:
+    import trafilatura
+    TRAFILATURA_AVAILABLE = True
+except ImportError:
+    TRAFILATURA_AVAILABLE = False
+    log.warning("trafilatura not installed — JD URL extraction falls back to BS4")
+
+# --- Ariadne JD-URL validation gate ---------------------------------------
+# The fallback Ariadne returns whenever a URL can't be read/validated as a JD.
+_JD_FETCH_FALLBACK = "[couldn't read that URL — paste the listing text instead.]"
+# Hosts that wall content behind login / anti-bot; not worth a scraper arms race
+# in v1 — short-circuit straight to the fallback.
+_UNFETCHABLE_HOSTS = ("linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com")
+# A real JD names at least a couple of these sections.
+_JD_SECTION_MARKERS = (
+    "responsibilit", "requirement", "qualification", "what you'll do",
+    "what you will do", "who you are", "about the role", "about this role",
+    "what we're looking for", "what you bring", "duties", "you will",
+    "minimum qualification", "preferred qualification", "experience",
+)
+# Login / challenge / bot-wall fingerprints — if the extracted text reads like
+# one of these, do NOT analyze it.
+_BLOCK_MARKERS = (
+    "enable javascript", "verify you are human", "captcha", "just a moment",
+    "checking your browser", "access denied", "unusual traffic", "are you a robot",
+    "sign in to continue", "log in to continue", "please enable cookies",
+    "create a free account", "cloudflare",
+)
+
 _SCRAPE_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -98,32 +127,59 @@ class ResumeModule:
     def __init__(self):
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         self.model = os.getenv("PH3B3_HEAVY_MODEL", os.getenv("PH3B3_MODEL", "hermes3"))
-        log.info("Resume module ready.")
-        log.info("Resume ATS guardrail: aligns truthful experience to ATS vocabulary; "
+        log.info("Ariadne (resume module) ready.")
+        log.info("Ariadne ATS guardrail: aligns truthful experience to ATS vocabulary; "
                  "never fabricates qualifications.")
+        # Boundary (explicit): the ONLY network call Ariadne makes is a read-only
+        # outbound fetch of a public JD URL the user supplies (fetch_jd). Resume
+        # data is never sent anywhere — all resume reasoning is local Hermes3.
 
     def _is_url(self, source: str) -> bool:
         return source.strip().startswith(("http://", "https://"))
 
-    def _fetch_text(self, url: str) -> str:
-        if not BS4_AVAILABLE:
-            return "[URL scraping unavailable — beautifulsoup4 not installed. Paste the job text directly.]"
-
-        if "linkedin.com" in url:
-            return "[LinkedIn requires authentication to scrape. Paste the job description text directly.]"
-
+    def fetch_jd(self, url: str) -> str:
+        """Ariadne's ONLY network call: a read-only, outbound fetch of the public
+        JD page the user supplied. Returns extracted JD text, or _JD_FETCH_FALLBACK
+        on any fetch/extraction/validation miss. Resume data is NEVER transmitted —
+        this is strictly outbound to the user's URL. Best-effort on fetch-friendly
+        hosts (Greenhouse/Lever/Workday/generic career pages); no headless-browser
+        or anti-bot fight — login-walled sites just get the fallback."""
+        url = (url or "").strip()
+        if not self._is_url(url):
+            return _JD_FETCH_FALLBACK
+        if any(h in url.lower() for h in _UNFETCHABLE_HOSTS):
+            return _JD_FETCH_FALLBACK   # login-walled / anti-bot; no arms race in v1
         try:
+            log.info(f"Ariadne network call (outbound, read-only, JD fetch): {url[:90]}")
             resp = requests.get(url, headers=_SCRAPE_HEADERS, timeout=15, allow_redirects=True)
             resp.raise_for_status()
         except requests.RequestException as e:
-            return f"[Could not fetch URL: {e}]"
+            log.warning(f"Ariadne JD fetch failed: {e}")
+            return _JD_FETCH_FALLBACK
 
-        soup = BeautifulSoup(resp.text, "lxml")
+        # Extract from raw bytes so trafilatura/BS4 detect the true encoding —
+        # pages without a charset header would otherwise mojibake UTF-8 punctuation.
+        raw = resp.content
+        text = ""
+        if TRAFILATURA_AVAILABLE:
+            text = trafilatura.extract(raw, include_comments=False,
+                                       include_tables=False, favor_precision=True) or ""
+        if len(text) < 300 and BS4_AVAILABLE:
+            text = self._bs4_extract(raw) or text            # selector-based fallback
 
+        # validation gate: must read like a JD, must NOT read like a login/bot wall
+        lower = (text or "").lower()
+        if any(m in lower for m in _BLOCK_MARKERS) or not self._looks_like_jd(text):
+            log.info("Ariadne JD validation gate rejected the page — returning fallback")
+            return _JD_FETCH_FALLBACK
+        return text.strip()
+
+    def _bs4_extract(self, html: str) -> str:
+        if not BS4_AVAILABLE:
+            return ""
+        soup = BeautifulSoup(html, "lxml")
         for tag in soup(["script", "style", "nav", "header", "footer", "aside", "iframe", "noscript"]):
             tag.decompose()
-
-        # Try to find the main job content block before falling back to full page text
         for selector in [
             '[class*="job-description"]', '[class*="jobDescription"]',
             '[class*="job-details"]',    '[id*="job-description"]',
@@ -135,8 +191,17 @@ class ResumeModule:
                 text = target.get_text(separator="\n", strip=True)
                 if len(text) > 200:
                     return text
-
         return soup.get_text(separator="\n", strip=True)
+
+    @staticmethod
+    def _looks_like_jd(text: str) -> bool:
+        """Validation heuristic: long enough AND names at least two JD sections.
+        400 is a floor that clears snippets/login pages while still admitting
+        terse-but-real postings."""
+        if not text or len(text.strip()) < 400:
+            return False
+        lower = text.lower()
+        return sum(1 for m in _JD_SECTION_MARKERS if m in lower) >= 2
 
     def _auto_flags(self, text: str) -> list[str]:
         lower = text.lower()
@@ -201,10 +266,9 @@ class ResumeModule:
             return "No job posting provided."
 
         if self._is_url(source):
-            log.info(f"Fetching job URL: {source[:80]}")
-            text = self._fetch_text(source)
+            text = self.fetch_jd(source)
             if text.startswith("["):
-                return text
+                return text.strip("[]")   # user-facing fallback, brackets stripped
         else:
             text = source
 

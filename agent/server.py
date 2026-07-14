@@ -2360,16 +2360,34 @@ async def _resume_read_input(file, resume_text):
     return text, flags, None
 
 
+async def _resolve_jd(job_description, job_url):
+    """Return (jd_text, error). Pasted JD text wins; otherwise best-effort URL
+    fetch through Ariadne's validation gate (outbound-only to the public URL).
+    A failed/unreadable URL yields the paste-the-text fallback error."""
+    if job_description and job_description.strip():
+        return job_description, None
+    if job_url and job_url.strip():
+        jd = await asyncio.to_thread(resume.fetch_jd, job_url)
+        if jd.startswith("["):
+            return "", jd.strip("[]")
+        return jd, None
+    return "", None
+
+
 @app.post("/resume/analyze")
 async def resume_analyze_endpoint(
     file: UploadFile = File(None),
     resume_text: str = Form(""),
     job_description: str = Form(""),
+    job_url: str = Form(""),
 ):
     text, flags, err = await _resume_read_input(file, resume_text)
     if err:
         raise HTTPException(400, err)
-    analysis = await asyncio.to_thread(resume.analyze_resume, text, job_description, flags)
+    jd, jd_err = await _resolve_jd(job_description, job_url)
+    if jd_err:
+        raise HTTPException(400, jd_err)
+    analysis = await asyncio.to_thread(resume.analyze_resume, text, jd, flags)
     return {"analysis": analysis}
 
 
@@ -2378,11 +2396,15 @@ async def resume_build_endpoint(
     file: UploadFile = File(None),
     resume_text: str = Form(""),
     job_description: str = Form(""),
+    job_url: str = Form(""),
 ):
     text, flags, err = await _resume_read_input(file, resume_text)
     if err:
         raise HTTPException(400, err)
-    result = await asyncio.to_thread(resume.build_ats_resume, text, job_description)
+    jd, jd_err = await _resolve_jd(job_description, job_url)
+    if jd_err:
+        raise HTTPException(400, jd_err)
+    result = await asyncio.to_thread(resume.build_ats_resume, text, jd)
     return {"result": result}
 
 
