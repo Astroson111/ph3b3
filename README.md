@@ -189,6 +189,8 @@ Accessibility is the through-line for all of it — every addition is measured a
 - Whisper (CUDA build)
 - Python dependencies — install with `pip install -r requirements.txt`
 
+> **Lighter deployment — Ph3b3-Light (Windows/WSL2 solo):** the reference build assumes a CUDA GPU. A leaner "solo" port for machines without one — Morpheus-lite image generation plus a gallery web view, tuned for Windows/WSL2 — is in progress on the [`windows` branch](https://github.com/astroson111/ph3b3/tree/windows). Same local-only guarantee, smaller footprint.
+
 ### First-time setup
 
 ```bash
