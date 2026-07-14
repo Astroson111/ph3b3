@@ -692,6 +692,25 @@
     }
     .tab.active { color: var(--magenta); }
     .tab svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+
+    /* ── Ariadne (résumé ATS) ── */
+    .ari-note { font-size: .82rem; color: var(--dim); line-height: 1.5; }
+    .ari-note b { color: var(--text); }
+    .ari-ta { width: 100%; box-sizing: border-box; background: rgba(0,0,0,.28); color: var(--text);
+              border: 1px solid var(--border); border-radius: 8px; padding: .55rem; font: inherit; resize: vertical; }
+    .ari-file { display: inline-block; margin-top: .5rem; color: var(--cyan); cursor: pointer; font-size: .85rem; }
+    .ari-url { width: 100%; box-sizing: border-box; background: rgba(0,0,0,.28); color: var(--text);
+               border: 1px solid var(--border); border-radius: 8px; padding: .5rem; font: inherit; }
+    .ari-or { text-align: center; color: var(--dim); font-size: .8rem; margin: .45rem 0; }
+    .ari-opt, .ari-hint { color: var(--dim); font-size: .75rem; font-weight: 400; }
+    .ari-hint { margin-top: .35rem; }
+    .ari-actions { display: flex; gap: .6rem; }
+    .ari-btn { flex: 1; border-radius: 8px; padding: .6rem; }
+    .ari-out { white-space: pre-wrap; word-break: break-word; font: 12px/1.5 ui-monospace, monospace;
+               background: rgba(0,0,0,.32); border: 1px solid var(--border); border-radius: 8px;
+               padding: .6rem; max-height: 60vh; overflow: auto; margin: 0; color: var(--text); }
+    .ari-dl { display: inline-block; margin-bottom: .55rem; color: var(--cyan); text-decoration: none;
+              border: 1px solid var(--border); border-radius: 8px; padding: .4rem .7rem; }
   </style>
 </head>
 <body>
@@ -1087,6 +1106,41 @@
     <div class="ts" id="rosterTs"></div>
   </section>
 
+  <section id="paneAriadne" class="pane">
+    <div class="card">
+      <div class="card-title">Ariadne — résumé ATS</div>
+      <div class="ari-note">Aligns your <b>truthful</b> experience to ATS vocabulary — it <b>never invents qualifications</b>. Missing keywords you genuinely evidence get surfaced; ones you don't are flagged for you to earn, never added. Your résumé is analyzed <b>locally and never leaves this machine</b> — the only outbound call is fetching a job-post URL you paste.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Your résumé</div>
+      <textarea id="ariResume" class="ari-ta" rows="8" placeholder="Paste your résumé text…" autocomplete="off" spellcheck="false"></textarea>
+      <label class="ari-file">
+        <input type="file" id="ariResumeFile" accept=".txt,.docx,.pdf" hidden>
+        <span id="ariResumeFileLbl">📄&ensp;…or upload .txt / .docx / .pdf</span>
+      </label>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Job description <span class="ari-opt">— optional, enables the keyword gap</span></div>
+      <textarea id="ariJd" class="ari-ta" rows="5" placeholder="Paste the job description…" autocomplete="off" spellcheck="false"></textarea>
+      <div class="ari-or">— or —</div>
+      <input type="url" id="ariJdUrl" class="ari-url" placeholder="https://…  (Greenhouse / Lever / Workday / career page)" autocomplete="off">
+      <div class="ari-hint">LinkedIn &amp; Indeed are login-walled — paste their text instead.</div>
+    </div>
+
+    <div class="ari-actions">
+      <button class="btn-send ari-btn" id="ariAnalyze">Analyze</button>
+      <button class="btn-send ari-btn" id="ariBuild">Build ATS résumé</button>
+    </div>
+
+    <div class="card" id="ariOutCard" style="display:none">
+      <div class="card-title">Result</div>
+      <a id="ariDownload" class="ari-dl" style="display:none" download>⬇&ensp;Download ATS .docx</a>
+      <pre class="ari-out" id="ariOut"></pre>
+    </div>
+  </section>
+
 </main>
 
 <nav class="tabs">
@@ -1117,6 +1171,10 @@
   <button class="tab" data-pane="Morpheus">
     <svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
     Morpheus
+  </button>
+  <button class="tab" data-pane="Ariadne">
+    <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+    Ariadne
   </button>
 </nav>
 
@@ -2366,6 +2424,61 @@ document.querySelectorAll('.morph-mode-tab').forEach(t => t.addEventListener('cl
     window.visualViewport.addEventListener('scroll', update);
   }
   update();
+})();
+
+// ── Ariadne (résumé ATS) ──────────────────────────────────────────────────────
+(function () {
+  const $ = id => document.getElementById(id);
+  const resume = $('ariResume'), resumeFile = $('ariResumeFile'), resumeLbl = $('ariResumeFileLbl');
+  const jd = $('ariJd'), jdUrl = $('ariJdUrl');
+  const analyzeBtn = $('ariAnalyze'), buildBtn = $('ariBuild');
+  const outCard = $('ariOutCard'), out = $('ariOut'), dl = $('ariDownload');
+  if (!resume) return;
+
+  resumeFile.addEventListener('change', () => {
+    resumeLbl.textContent = resumeFile.files[0]
+      ? '📄  ' + resumeFile.files[0].name
+      : '📄  …or upload .txt / .docx / .pdf';
+  });
+
+  function buildForm() {
+    const fd = new FormData();
+    if (resumeFile.files[0]) fd.append('file', resumeFile.files[0]);
+    else if (resume.value.trim()) fd.append('resume_text', resume.value);
+    if (jd.value.trim()) fd.append('job_description', jd.value);
+    else if (jdUrl.value.trim()) fd.append('job_url', jdUrl.value.trim());
+    return fd;
+  }
+  const hasResume = () => resumeFile.files[0] || resume.value.trim();
+  function show(t) { outCard.style.display = 'block'; out.textContent = t; outCard.scrollIntoView({behavior:'smooth', block:'nearest'}); }
+
+  async function run(kind) {
+    if (!hasResume()) { show('Paste your résumé text, or upload a .txt / .docx / .pdf, first.'); return; }
+    const btn = kind === 'analyze' ? analyzeBtn : buildBtn;
+    const label = btn.textContent;
+    analyzeBtn.disabled = buildBtn.disabled = true;
+    btn.textContent = 'Working…';
+    dl.style.display = 'none';
+    try {
+      const r = await fetch('/resume/' + kind, {method: 'POST', body: buildForm()});
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { show(data.detail || ('Error ' + r.status)); return; }
+      const text = data.analysis || data.result || '(no output)';
+      show(text);
+      if (kind === 'build') {
+        const m = text.match(/\/resume\/file\/([0-9a-f]{12})/);
+        if (m) { dl.href = '/resume/file/' + m[1]; dl.style.display = 'inline-block'; }
+      }
+    } catch (e) {
+      show('Request failed: ' + e);
+    } finally {
+      analyzeBtn.disabled = buildBtn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
+  analyzeBtn.addEventListener('click', () => run('analyze'));
+  buildBtn.addEventListener('click', () => run('build'));
 })();
 
 // ── service worker ────────────────────────────────────────────────────────────
