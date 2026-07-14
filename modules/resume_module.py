@@ -1,10 +1,35 @@
+"""Resume module — job-posting analysis, candidate profile, and the ATS
+analyzer + builder.
+
+GUARDRAIL (same discipline as the Morpheus floor): this tool ALIGNS TRUTHFUL
+EXPERIENCE TO ATS VOCABULARY; IT NEVER FABRICATES QUALIFICATIONS. A missing
+keyword is only inserted into a resume when it is *grounded* — i.e. the resume
+already evidences that skill under different words, and the justifying line is
+recorded. Keywords with no evidence are REPORTED ("you'd need to add real
+experience for this"), never written into the document. It helps honest people
+get read; it does not help anyone lie.
+
+Privacy-first: a job-seeker's resume never leaves this host. All reasoning runs
+on the local Hermes3 model; there are no cloud calls in the ATS path.
+"""
+import difflib
 import json
 import os
 import logging
+import re
 import requests
 from pathlib import Path
 
 log = logging.getLogger("ph3b3.resume")
+
+try:
+    import docx  # python-docx — used only by the ATS builder's .docx output
+    from docx.shared import Pt, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+    log.warning("python-docx not installed — ATS resume builder unavailable (pip install python-docx)")
 
 try:
     from bs4 import BeautifulSoup
@@ -40,12 +65,42 @@ _RED_FLAG_TERMS = [
     "work hard play hard", "entrepreneurial spirit",
 ]
 
+# ---------------------------------------------------------------------------
+# ATS analyzer + builder
+# ---------------------------------------------------------------------------
+
+RESUME_DIR = Path.home() / "ph3b3_data" / "resumes"   # built .docx output lives here
+
+# Canonical ATS section -> header aliases an applicant might actually use.
+# ATS parsers key off standard headers; anything not here is a "non-standard
+# header" red flag (the parser may drop or misfile the section).
+_SECTION_ALIASES: dict[str, list[str]] = {
+    "SUMMARY":    ["summary", "professional summary", "profile", "objective",
+                   "about", "about me", "career summary"],
+    "EXPERIENCE": ["experience", "work experience", "professional experience",
+                   "employment", "employment history", "work history", "career history"],
+    "SKILLS":     ["skills", "technical skills", "core competencies", "competencies",
+                   "technologies", "tech stack", "areas of expertise"],
+    "EDUCATION":  ["education", "academic background", "academics"],
+    # secondary sections we recognize (kept, not required for completeness)
+    "PROJECTS":       ["projects", "personal projects", "selected projects", "portfolio"],
+    "CERTIFICATIONS": ["certifications", "certificates", "licenses", "licenses & certifications"],
+    "AWARDS":         ["awards", "honors", "achievements"],
+}
+# The five sections completeness is graded on:
+_REQUIRED_SECTIONS = ["CONTACT", "SUMMARY", "EXPERIENCE", "SKILLS", "EDUCATION"]
+
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+_PHONE_RE = re.compile(r"(?:\+?\d[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}")
+
 
 class ResumeModule:
     def __init__(self):
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         self.model = os.getenv("PH3B3_HEAVY_MODEL", os.getenv("PH3B3_MODEL", "hermes3"))
         log.info("Resume module ready.")
+        log.info("Resume ATS guardrail: aligns truthful experience to ATS vocabulary; "
+                 "never fabricates qualifications.")
 
     def _is_url(self, source: str) -> bool:
         return source.strip().startswith(("http://", "https://"))
@@ -366,3 +421,409 @@ class ResumeModule:
         except Exception as e:
             log.error(f"Bullet draft failed: {e}")
             return f"Draft error: {e}"
+
+    # ==================================================================
+    # ATS ANALYZER + BUILDER
+    #   GUARDRAIL: aligns truthful experience to ATS vocabulary; never
+    #   fabricates qualifications. Unsupported keywords are reported, not
+    #   inserted. See the module docstring.
+    # ==================================================================
+
+    def _llm(self, prompt: str, temperature: float = 0.2, num_ctx: int = 8192,
+             timeout: int = 150) -> str:
+        """Single local-Hermes3 generate call. No cloud, ever."""
+        resp = requests.post(
+            f"{self.ollama_host}/api/generate",
+            json={"model": self.model, "prompt": prompt, "stream": False,
+                  "options": {"temperature": temperature, "num_ctx": num_ctx}},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json().get("response", "").strip()
+
+    @staticmethod
+    def _extract_json(raw: str, default):
+        for opener, closer in (("[", "]"), ("{", "}")):
+            i, j = raw.find(opener), raw.rfind(closer)
+            if i != -1 and j > i:
+                try:
+                    return json.loads(raw[i:j + 1])
+                except Exception:
+                    continue
+        return default
+
+    # ---- section parsing (deterministic) -----------------------------
+
+    @staticmethod
+    def _norm_header(line: str) -> str:
+        return re.sub(r"\s+", " ", line.strip().rstrip(":").strip()).lower()
+
+    def _match_section(self, line: str) -> str | None:
+        s = line.strip()
+        if not s or len(s) > 40 or s.endswith((".", ",", ";")):
+            return None
+        norm = self._norm_header(s)
+        for canon, aliases in _SECTION_ALIASES.items():
+            if norm in aliases:
+                return canon
+        return None
+
+    @staticmethod
+    def _looks_like_header(line: str) -> bool:
+        """Header-shaped: short, 1-4 words, all-caps or Title Case, not a sentence."""
+        s = line.strip().rstrip(":")
+        words = s.split()
+        if not (1 <= len(words) <= 4) or len(s) > 40 or s.endswith((".", ",", ";")):
+            return False
+        letters = [c for c in s if c.isalpha()]
+        if len(letters) < 3:
+            return False
+        return all(c.isupper() for c in letters) or s == s.title()
+
+    def _split_sections(self, text: str):
+        """Return (contact_block, {canonical: body}, order). Everything before the
+        first recognized header is the contact/name block."""
+        sections: dict[str, list[str]] = {}
+        order: list[str] = []
+        contact: list[str] = []
+        current: str | None = None
+        for line in text.splitlines():
+            canon = self._match_section(line)
+            if canon:
+                current = canon
+                if canon not in sections:
+                    sections[canon] = []
+                    order.append(canon)
+                continue
+            (sections[current] if current else contact).append(line)
+        return ("\n".join(contact).strip(),
+                {k: "\n".join(v).strip() for k, v in sections.items()},
+                order)
+
+    # ---- parse-cleanliness (deterministic) ---------------------------
+
+    def _cleanliness(self, text: str) -> tuple[int, list[str]]:
+        flags: list[str] = []
+        lines = text.splitlines()
+
+        # tables / multi-column: tabs or 2+ wide-space runs signal columns; pipes
+        # only count as a table when they form a GRID (2+ pipe-heavy lines) — a
+        # single "email | phone | city" contact line is normal and ATS-fine.
+        pipe_lines = {i for i, ln in enumerate(lines, 1) if ln.count("|") >= 2}
+        grid_pipes = pipe_lines if len(pipe_lines) >= 2 else set()
+        for i, ln in enumerate(lines, 1):
+            if "\t" in ln or len(re.findall(r"\S {3,}\S", ln)) >= 2 or i in grid_pipes:
+                snippet = ln.strip()[:60]
+                flags.append(f"line {i}: table/multi-column layout — ATS may scramble this "
+                             f"(\"{snippet}\")")
+                if len([f for f in flags if 'table/multi-column' in f]) >= 5:
+                    flags.append("… (further table/column lines omitted)")
+                    break
+
+        # non-standard section headers
+        for i, ln in enumerate(lines, 1):
+            if i == 1:
+                continue  # first line is the name
+            if self._looks_like_header(ln) and not self._match_section(ln):
+                flags.append(f"line {i}: non-standard section header \"{ln.strip()}\" — "
+                             f"ATS keys off standard headers (EXPERIENCE / SKILLS / EDUCATION …)")
+
+        # repeated content = likely header/footer bleed
+        from collections import Counter
+        counts = Counter(l.strip() for l in lines if 3 <= len(l.strip()) <= 60)
+        for val, n in counts.items():
+            if n >= 3 and not val.startswith(("•", "-", "*")):
+                flags.append(f"repeated line ×{n}: \"{val}\" — looks like header/footer content "
+                             f"(ATS often drops headers/footers)")
+
+        # text-in-graphics can't be seen in plain text
+        note = "text-in-graphics not detectable in plain text (re-check on .docx/.pdf source)"
+
+        # score: start clean, penalize
+        score = 100
+        score -= 12 * len([f for f in flags if "table/multi-column" in f])
+        score -= 8 * len([f for f in flags if "non-standard section header" in f])
+        score -= 6 * len([f for f in flags if "header/footer" in f])
+        score = max(0, min(100, score))
+        flags.append(f"(note) {note}")
+        return score, flags
+
+    # ---- section completeness ----------------------------------------
+
+    def _completeness(self, contact: str, sections: dict) -> tuple[list[str], list[str], list[str]]:
+        present, missing, notes = [], [], []
+        # CONTACT: needs an email or phone in the top block
+        has_email = bool(_EMAIL_RE.search(contact))
+        has_phone = bool(_PHONE_RE.search(contact))
+        if has_email or has_phone:
+            present.append("CONTACT")
+            if not has_email:
+                notes.append("CONTACT: no email detected — ATS often keys on it")
+        else:
+            missing.append("CONTACT")
+        for sec in ("SUMMARY", "EXPERIENCE", "SKILLS", "EDUCATION"):
+            if sections.get(sec):
+                present.append(sec)
+            else:
+                missing.append(sec)
+        return present, missing, notes
+
+    # ---- keyword gap (LLM) -------------------------------------------
+
+    def _jd_keywords(self, jd: str) -> tuple[list[str], list[str]]:
+        if not jd.strip():
+            return [], []
+        prompt = (
+            "Extract the concrete, matchable keywords from this job description — the "
+            "specific tools, technologies, skills, certifications, and methodologies an "
+            "applicant-tracking system would scan for. Ignore fluff and soft phrases.\n\n"
+            f"JOB DESCRIPTION:\n{jd[:5000]}\n\n"
+            "Respond with ONLY a JSON object, nothing else:\n"
+            '{"required": ["term", ...], "preferred": ["term", ...]}\n'
+            "required = must-haves; preferred = nice-to-haves. Keep each term short "
+            "(a tool/skill name, not a sentence)."
+        )
+        try:
+            data = self._extract_json(self._llm(prompt, temperature=0.1), {})
+            req = [str(t).strip() for t in data.get("required", []) if str(t).strip()]
+            pref = [str(t).strip() for t in data.get("preferred", []) if str(t).strip()]
+            return req, pref
+        except Exception as e:
+            log.error(f"JD keyword extraction failed: {e}")
+            return [], []
+
+    def _classify_gaps(self, resume_text: str, missing: list[str]):
+        """For terms missing verbatim from the resume, decide GROUNDED (evidenced
+        under other words — with the justifying line) vs UNSUPPORTED (no evidence)."""
+        if not missing:
+            return [], []
+        prompt = (
+            "You align a resume to job keywords WITHOUT fabricating anything. For each "
+            "candidate keyword below, decide if the RESUME already demonstrates that skill "
+            "under different wording.\n"
+            "- GROUNDED: the resume genuinely shows this skill/experience under other words. "
+            "Quote the exact resume line that proves it.\n"
+            "- UNSUPPORTED: there is no real evidence for it in the resume. Do NOT stretch. "
+            "If unsure, mark UNSUPPORTED.\n\n"
+            f"RESUME:\n{resume_text[:5000]}\n\n"
+            f"KEYWORDS TO CLASSIFY: {', '.join(missing)}\n\n"
+            "Respond with ONLY a JSON object, nothing else:\n"
+            '{"grounded": [{"term": "...", "source": "<exact quoted resume line>"}], '
+            '"unsupported": ["term", ...]}'
+        )
+        try:
+            data = self._extract_json(self._llm(prompt, temperature=0.1), {})
+            grounded, unsupported = [], []
+            seen = set()
+            for g in data.get("grounded", []):
+                term = str(g.get("term", "")).strip()
+                src = str(g.get("source", "")).strip()
+                # trust-but-verify: only accept GROUNDED if the quoted source really
+                # appears in the resume. Otherwise treat as unsupported.
+                if term and src and self._loose_contains(resume_text, src):
+                    grounded.append({"term": term, "source": src})
+                    seen.add(term.lower())
+                elif term:
+                    unsupported.append(term)
+            for t in data.get("unsupported", []):
+                t = str(t).strip()
+                if t and t.lower() not in seen:
+                    unsupported.append(t)
+            # any missing term the model dropped entirely -> unsupported (safe default)
+            classified = {g["term"].lower() for g in grounded} | {u.lower() for u in unsupported}
+            for m in missing:
+                if m.lower() not in classified:
+                    unsupported.append(m)
+            return grounded, unsupported
+        except Exception as e:
+            log.error(f"Gap classification failed: {e}")
+            return [], list(missing)
+
+    @staticmethod
+    def _loose_contains(haystack: str, needle: str) -> bool:
+        norm = lambda s: re.sub(r"\s+", " ", s.lower()).strip()
+        h, n = norm(haystack), norm(needle.strip('"\'')).strip()
+        if len(n) < 6:
+            return False
+        return n in h or n[:60] in h
+
+    @staticmethod
+    def _term_in(text: str, term: str) -> bool:
+        return re.search(r"\b" + re.escape(term.lower()) + r"\b", text.lower()) is not None
+
+    # ---- public: analyzer --------------------------------------------
+
+    def analyze_resume(self, resume_text: str, job_description: str = "") -> str:
+        if not resume_text or len(resume_text.strip()) < 40:
+            return "Resume text too short to analyze — paste the full resume text."
+        text = resume_text.replace("\r\n", "\n")
+        contact, sections, _ = self._split_sections(text)
+        score, flags = self._cleanliness(text)
+        present, missing_sec, notes = self._completeness(contact, sections)
+
+        out = ["RESUME ANALYSIS",
+               "=" * 40,
+               f"\nPARSE-CLEANLINESS: {score}/100  ({'ATS-legible' if score >= 80 else 'needs work' if score >= 55 else 'high risk of misparse'})"]
+
+        out.append("\nFORMATTING RED FLAGS:")
+        real_flags = [f for f in flags if not f.startswith("(note)")]
+        out += [f"  - {f}" for f in real_flags] or ["  - none detected in the text"]
+        out += [f"  {f}" for f in flags if f.startswith("(note)")]
+
+        out.append("\nSECTION COMPLETENESS:")
+        out.append("  present : " + (", ".join(present) if present else "none"))
+        out.append("  missing : " + (", ".join(missing_sec) if missing_sec else "none — all core sections found"))
+        out += [f"  ! {n}" for n in notes]
+
+        if job_description.strip():
+            req, pref = self._jd_keywords(job_description)
+            all_terms = [(t, "required") for t in req] + [(t, "preferred") for t in pref]
+            matched = [(t, tier) for t, tier in all_terms if self._term_in(text, t)]
+            missing_terms = [t for t, _ in all_terms if not self._term_in(text, t)]
+            grounded, unsupported = self._classify_gaps(text, missing_terms)
+
+            out.append("\nKEYWORD GAP (vs job description):")
+            out.append(f"  matched verbatim ({len(matched)}): " +
+                       (", ".join(t for t, _ in matched) if matched else "none"))
+            out.append("\n  GROUNDED — you show this under other words (safe to align):")
+            out += [f"    • {g['term']}  ← your line: \"{g['source'][:90]}\"" for g in grounded] or ["    (none)"]
+            out.append("\n  UNSUPPORTED — no evidence in your resume; you'd need real experience to claim these:")
+            out += [f"    • {u}" for u in unsupported] or ["    (none)"]
+        else:
+            out.append("\nKEYWORD GAP: (paste a job description to get the keyword match)")
+
+        return "\n".join(out)
+
+    # ---- ATS builder (deterministic assembly, LLM only for grounding) --
+
+    def _assemble_blocks(self, contact: str, sections: dict, grounded: list[dict]):
+        """One structured representation rendered to BOTH .docx and plaintext, so
+        the before/after diff always matches the produced document."""
+        blocks: list[tuple[str, str]] = []
+        clines = [l.strip() for l in contact.splitlines() if l.strip()]
+        if clines:
+            blocks.append(("name", clines[0]))
+            if len(clines) > 1:
+                blocks.append(("contact", " | ".join(clines[1:])))
+        for canon in ("SUMMARY", "EXPERIENCE", "SKILLS", "EDUCATION",
+                      "PROJECTS", "CERTIFICATIONS", "AWARDS"):
+            body = sections.get(canon)
+            if not body:
+                continue
+            if canon == "SKILLS" and grounded:
+                body = self._merge_skills(body, [g["term"] for g in grounded])
+            blocks.append(("header", canon))
+            for ln in body.splitlines():
+                t = ln.strip()
+                if not t:
+                    continue
+                if t[0] in "•-*▪◦·":
+                    blocks.append(("bullet", t.lstrip("•-*▪◦· ").strip()))
+                else:
+                    blocks.append(("para", t))
+        return blocks
+
+    @staticmethod
+    def _merge_skills(body: str, add_terms: list[str]) -> str:
+        existing = [s.strip() for s in re.split(r"[,\n]", body) if s.strip()]
+        lower = {s.lower() for s in existing}
+        for t in add_terms:
+            if t.lower() not in lower:
+                existing.append(t)
+                lower.add(t.lower())
+        return ", ".join(existing)
+
+    @staticmethod
+    def _blocks_to_text(blocks) -> str:
+        lines = []
+        for kind, val in blocks:
+            if kind == "name":
+                lines.append(val)
+            elif kind == "contact":
+                lines.append(val)
+            elif kind == "header":
+                lines += ["", val]
+            elif kind == "bullet":
+                lines.append(f"• {val}")
+            else:
+                lines.append(val)
+        return "\n".join(lines).strip()
+
+    def _blocks_to_docx(self, blocks, out_path: Path):
+        d = docx.Document()
+        for s in d.sections:            # single column, sane margins, no header/footer content
+            s.top_margin = s.bottom_margin = Inches(0.6)
+            s.left_margin = s.right_margin = Inches(0.7)
+        normal = d.styles["Normal"]
+        normal.font.name = "Calibri"
+        normal.font.size = Pt(10.5)
+        for kind, val in blocks:
+            if kind == "name":
+                p = d.add_paragraph(); r = p.add_run(val); r.bold = True; r.font.size = Pt(16)
+            elif kind == "contact":
+                p = d.add_paragraph(); p.add_run(val).font.size = Pt(10)
+            elif kind == "header":
+                p = d.add_paragraph(); p.space_before = Pt(8)
+                r = p.add_run(val); r.bold = True; r.font.size = Pt(12)
+            elif kind == "bullet":
+                p = d.add_paragraph(f"• {val}")
+                p.paragraph_format.left_indent = Inches(0.25)
+            else:
+                d.add_paragraph(val)
+        RESUME_DIR.mkdir(parents=True, exist_ok=True)
+        d.save(str(out_path))
+
+    def build_ats_resume(self, resume_text: str, job_description: str = "") -> str:
+        if not DOCX_AVAILABLE:
+            return "ATS builder unavailable — python-docx is not installed."
+        if not resume_text or len(resume_text.strip()) < 40:
+            return "Resume text too short to build from — paste the full resume text."
+        text = resume_text.replace("\r\n", "\n")
+        contact, sections, _ = self._split_sections(text)
+
+        # grounding: only GROUNDED keywords may be inserted; unsupported are report-only
+        grounded, unsupported = [], []
+        if job_description.strip():
+            req, pref = self._jd_keywords(job_description)
+            all_terms = req + pref
+            missing_terms = [t for t in all_terms if not self._term_in(text, t)]
+            grounded, unsupported = self._classify_gaps(text, missing_terms)
+
+        blocks = self._assemble_blocks(contact, sections, grounded)
+        after_text = self._blocks_to_text(blocks)
+        before_text = "\n".join(l.rstrip() for l in text.splitlines()).strip()
+
+        # persist the .docx (deterministic id from content hash keeps re-runs stable)
+        import hashlib
+        rid = hashlib.sha1((before_text + after_text).encode("utf-8")).hexdigest()[:12]
+        out_path = RESUME_DIR / f"{rid}.docx"
+        self._blocks_to_docx(blocks, out_path)
+
+        diff = "\n".join(difflib.unified_diff(
+            before_text.splitlines(), after_text.splitlines(),
+            fromfile="original_resume.txt", tofile="ats_resume.docx", lineterm=""))
+        if not diff.strip():
+            diff = "(no textual changes — resume was already ATS-clean)"
+
+        out = ["ATS RESUME BUILT",
+               "=" * 40,
+               f"file: resumes/{rid}.docx   (download: GET /resume/file/{rid})",
+               "",
+               "GROUNDED KEYWORDS INSERTED (each tied to a real line in your resume):"]
+        out += [f"  • {g['term']}  ← justified by: \"{g['source'][:90]}\"" for g in grounded] \
+               or ["  (none — no grounded gaps to align)"]
+        out += ["",
+                "REPORTED, NOT INSERTED — you'd need real experience to claim these:"]
+        out += [f"  • {u}" for u in unsupported] or ["  (none)"]
+        out += ["",
+                "BEFORE / AFTER DIFF  (review this before using the file — it is the approval surface):",
+                diff]
+        return "\n".join(out)
+
+    def get_resume_path(self, rid: str) -> Path | None:
+        if not re.fullmatch(r"[0-9a-f]{12}", rid or ""):
+            return None
+        p = (RESUME_DIR / f"{rid}.docx").resolve()
+        if p.parent == RESUME_DIR.resolve() and p.exists():
+            return p
+        return None

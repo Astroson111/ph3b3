@@ -355,6 +355,8 @@ TOOLS = [
     {"type":"function","function":{"name":"profile_add_note","description":"Add a free-text note to the candidate profile — preferences, constraints, target role, salary floor, anything that should inform application strategy.","parameters":{"type":"object","properties":{"note":{"type":"string"}},"required":["note"]}}},
     {"type":"function","function":{"name":"match_candidate_to_job","description":"Match the stored candidate profile against a job analysis produced by extract_job_posting. Returns: match score (hard reqs met/total), gap analysis per requirement, application angle suggestion, tailored resume bullets, and a WORTH APPLYING/STRETCH/SKIP verdict. Always verify profile_get has data before calling.","parameters":{"type":"object","properties":{"job_analysis":{"type":"string","description":"The full structured text output from extract_job_posting"}},"required":["job_analysis"]}}},
     {"type":"function","function":{"name":"draft_resume_section","description":"Draft a single polished resume bullet in action-verb, achievement-framed format for a specific job requirement, drawing from a candidate profile entry. No fluff, no filler, no invented metrics.","parameters":{"type":"object","properties":{"requirement":{"type":"string","description":"The specific job requirement to address"},"profile_entry":{"type":"string","description":"The relevant candidate experience, project, or skill to draw from"}},"required":["requirement","profile_entry"]}}},
+    {"type":"function","function":{"name":"analyze_resume","description":"Analyze a pasted plain-text resume for ATS-readiness: parse-cleanliness score, formatting red flags, section completeness, and (if a job description is provided) the keyword gap split into GROUNDED (skill the resume shows under other words) vs UNSUPPORTED (no evidence — must be earned, never auto-added). Use when the user pastes their resume text and asks for a review/ATS check.","parameters":{"type":"object","properties":{"resume_text":{"type":"string","description":"The full plain-text resume the user pasted"},"job_description":{"type":"string","description":"Optional job description text to compute the keyword gap against"}},"required":["resume_text"]}}},
+    {"type":"function","function":{"name":"build_ats_resume","description":"Rebuild a pasted resume as an ATS-safe .docx (single column, standard headers, plain bullets, no tables). Auto-inserts ONLY grounded keywords (each tied to a real line in the resume); unsupported keywords are reported, never inserted. Returns a before/after diff (the approval surface) plus a download link. Use when the user wants the cleaned/aligned resume file, not just analysis.","parameters":{"type":"object","properties":{"resume_text":{"type":"string","description":"The full plain-text resume the user pasted"},"job_description":{"type":"string","description":"Optional job description text to align grounded keywords against"}},"required":["resume_text"]}}},
     {"type":"function","function":{"name":"network_my_ip","description":"Get the host machine's IP addresses","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"network_scan","description":"Scan the local network","parameters":{"type":"object","properties":{"target":{"type":"string","default":"192.168.0.0/24"}}}}},
     {"type":"function","function":{"name":"network_who_is_on","description":"Who is on the network right now","parameters":{"type":"object","properties":{}}}},
@@ -560,6 +562,8 @@ async def execute_tool(name, args):
         elif name == "profile_add_note": result = resume.profile_add_note(args["note"])
         elif name == "match_candidate_to_job": result = resume.match_candidate_to_job(args["job_analysis"])
         elif name == "draft_resume_section": result = resume.draft_resume_section(args["requirement"], args["profile_entry"])
+        elif name == "analyze_resume": result = resume.analyze_resume(args["resume_text"], args.get("job_description",""))
+        elif name == "build_ats_resume": result = resume.build_ats_resume(args["resume_text"], args.get("job_description",""))
         elif name == "network_my_ip": result = network.my_ip()
         elif name == "network_scan": result = network.scan_network(args.get("target","192.168.0.0/24"))
         elif name == "network_who_is_on": result = network.who_is_on_network()
@@ -2330,6 +2334,20 @@ async def morpheus_job_cancel(job_id: str):
             except Exception as e:
                 log.warning("video cancel interrupt/free failed: %s", e)
     return {"job_id": job_id, "state": "cancelled", "interrupted": bool(was_rendering)}
+
+
+@app.get("/resume/file/{rid}")
+async def resume_file(rid: str):
+    """Download a built ATS resume .docx. IDs are validated in the module
+    (12-hex, path-confined to the resumes dir)."""
+    path = resume.get_resume_path(rid)
+    if not path:
+        raise HTTPException(404, "Resume not found")
+    return FileResponse(
+        str(path),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="ats_resume_{rid}.docx"'},
+    )
 
 
 @app.get("/morpheus/video/file/{job_id}")
