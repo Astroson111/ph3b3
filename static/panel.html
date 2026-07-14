@@ -709,6 +709,10 @@
     .ari-out { white-space: pre-wrap; word-break: break-word; font: 12px/1.5 ui-monospace, monospace;
                background: rgba(0,0,0,.32); border: 1px solid var(--border); border-radius: 8px;
                padding: .6rem; max-height: 60vh; overflow: auto; margin: 0; color: var(--text); }
+    .ari-out .dl-add  { color: var(--ok);  background: rgba(74, 222, 128, .12); }   /* added line */
+    .ari-out .dl-del  { color: var(--err); background: rgba(248, 113, 113, .12); }  /* removed line */
+    .ari-out .dl-hunk { color: var(--cyan); }
+    .ari-out .dl-file { color: var(--dim); }
     .ari-dl { display: inline-block; margin-bottom: .55rem; color: var(--cyan); text-decoration: none;
               border: 1px solid var(--border); border-radius: 8px; padding: .4rem .7rem; }
   </style>
@@ -2450,7 +2454,23 @@ document.querySelectorAll('.morph-mode-tab').forEach(t => t.addEventListener('cl
     return fd;
   }
   const hasResume = () => resumeFile.files[0] || resume.value.trim();
-  function show(t) { outCard.style.display = 'block'; out.textContent = t; outCard.scrollIntoView({behavior:'smooth', block:'nearest'}); }
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Render text with unified-diff lines colorized (red = removed, green = added).
+  // Every line is HTML-escaped first, so résumé/JD/LLM content can't inject markup.
+  // Keyed on the column-0 char, so the report's indented "  - " / "  • " lines
+  // (which never start at column 0) are left uncolored.
+  function show(t) {
+    outCard.style.display = 'block';
+    out.innerHTML = t.split('\n').map(line => {
+      const e = esc(line);
+      if (line.startsWith('+++') || line.startsWith('---')) return '<span class="dl-file">' + e + '</span>';
+      if (line.startsWith('@@'))  return '<span class="dl-hunk">' + e + '</span>';
+      if (line.startsWith('+'))   return '<span class="dl-add">'  + e + '</span>';
+      if (line.startsWith('-'))   return '<span class="dl-del">'  + e + '</span>';
+      return e;
+    }).join('\n');
+    outCard.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
 
   async function run(kind) {
     if (!hasResume()) { show('Paste your résumé text, or upload a .txt / .docx / .pdf, first.'); return; }
