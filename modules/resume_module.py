@@ -475,6 +475,8 @@ class ResumeModule:
         words = s.split()
         if not (1 <= len(words) <= 4) or len(s) > 40 or s.endswith((".", ",", ";")):
             return False
+        if "," in s:            # a real section header never contains a comma
+            return False
         letters = [c for c in s if c.isalpha()]
         if len(letters) < 3:
             return False
@@ -653,7 +655,8 @@ class ResumeModule:
 
     # ---- public: analyzer --------------------------------------------
 
-    def analyze_resume(self, resume_text: str, job_description: str = "") -> str:
+    def analyze_resume(self, resume_text: str, job_description: str = "",
+                       source_flags: list[str] | None = None) -> str:
         if not resume_text or len(resume_text.strip()) < 40:
             return "Resume text too short to analyze — paste the full resume text."
         text = resume_text.replace("\r\n", "\n")
@@ -661,14 +664,26 @@ class ResumeModule:
         score, flags = self._cleanliness(text)
         present, missing_sec, notes = self._completeness(contact, sections)
 
+        # source_flags come from .docx/.pdf parsing (tables, text-boxes, columns,
+        # header/footer content) — things invisible in flattened plain text. Each
+        # knocks the cleanliness score down further.
+        src = source_flags or []
+        score = max(0, score - 12 * len(src))
+
         out = ["RESUME ANALYSIS",
                "=" * 40,
                f"\nPARSE-CLEANLINESS: {score}/100  ({'ATS-legible' if score >= 80 else 'needs work' if score >= 55 else 'high risk of misparse'})"]
 
         out.append("\nFORMATTING RED FLAGS:")
         real_flags = [f for f in flags if not f.startswith("(note)")]
-        out += [f"  - {f}" for f in real_flags] or ["  - none detected in the text"]
-        out += [f"  {f}" for f in flags if f.startswith("(note)")]
+        out += [f"  - [source] {f}" for f in src]
+        out += [f"  - {f}" for f in real_flags]
+        if not src and not real_flags:
+            out.append("  - none detected")
+        # the plain-text 'can't see graphics' caveat only applies when we had no
+        # real source file to inspect
+        if source_flags is None:
+            out += [f"  {f}" for f in flags if f.startswith("(note)")]
 
         out.append("\nSECTION COMPLETENESS:")
         out.append("  present : " + (", ".join(present) if present else "none"))
@@ -827,3 +842,93 @@ class ResumeModule:
         if p.parent == RESUME_DIR.resolve() and p.exists():
             return p
         return None
+
+    # ---- input parsing: .txt / .docx / .pdf --------------------------
+
+    def parse_resume_file(self, path) -> tuple[str | None, list[str]]:
+        """Flatten a resume file to text + collect source-level format flags.
+        Returns (text, source_flags); text is None when the file can't be parsed
+        (source_flags then holds the human-readable reason)."""
+        p = Path(path)
+        ext = p.suffix.lower()
+        if ext == ".txt":
+            return p.read_text(encoding="utf-8", errors="replace"), []
+        if ext == ".docx":
+            if not DOCX_AVAILABLE:
+                return None, ["python-docx not installed on the server"]
+            try:
+                return self._parse_docx(p)
+            except Exception as e:
+                log.error(f".docx parse failed: {e}")
+                return None, [f"could not read .docx: {e}"]
+        if ext == ".pdf":
+            return self._parse_pdf(p)
+        return None, [f"unsupported file type '{ext}' — upload .txt/.docx/.pdf or paste text"]
+
+    def _parse_docx(self, path: Path) -> tuple[str, list[str]]:
+        """Flatten in reading order (paragraphs + tables interleaved) so section
+        detection works, and collect format red flags only visible at the .docx
+        level (tables, columns, text-boxes/graphics, header/footer content)."""
+        from docx import Document
+        from docx.oxml.ns import qn
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+        d = Document(str(path))
+        parts: list[str] = []
+        for child in d.element.body.iterchildren():
+            if child.tag == qn("w:p"):
+                t = Paragraph(child, d).text.strip()
+                if t:
+                    parts.append(t)
+            elif child.tag == qn("w:tbl"):
+                for row in Table(child, d).rows:
+                    cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                    if cells:
+                        parts.append(", ".join(dict.fromkeys(cells)))  # dedupe merged-cell repeats
+        return "\n".join(parts), self._docx_flags(d)
+
+    def _docx_flags(self, d) -> list[str]:
+        from docx.oxml.ns import qn
+        flags: list[str] = []
+        if d.tables:
+            flags.append(f"{len(d.tables)} table(s) in the source — ATS often scrambles table "
+                         f"content; the rebuilt .docx flattens them to plain lines")
+        for sec in d.sections:
+            cols = sec._sectPr.find(qn("w:cols"))
+            num = cols.get(qn("w:num")) if cols is not None else None
+            if num and str(num).isdigit() and int(num) > 1:
+                flags.append(f"multi-column layout ({num} columns) — ATS reads columns out of order")
+                break
+        xml = d.element.xml
+        if "txbxContent" in xml or "<w:drawing" in xml or "<pic:pic" in xml:
+            flags.append("text boxes / drawings / images detected — any text inside graphics is "
+                         "invisible to most ATS")
+        for sec in d.sections:
+            for hf, label in ((sec.header, "header"), (sec.footer, "footer")):
+                txt = " ".join(p.text for p in hf.paragraphs).strip()
+                if txt:
+                    flags.append(f'{label} holds content ("{txt[:40]}") — ATS frequently drops '
+                                 f'headers/footers, taking that content with it')
+        return flags
+
+    def _parse_pdf(self, path: Path) -> tuple[str | None, list[str]]:
+        try:
+            import pdfplumber
+        except ImportError:
+            return None, ["pdfplumber not installed — paste text or upload .txt/.docx"]
+        parts: list[str] = []
+        chars = 0
+        try:
+            with pdfplumber.open(str(path)) as pdf:
+                for pg in pdf.pages:
+                    t = pg.extract_text() or ""
+                    if t.strip():
+                        parts.append(t)
+                        chars += len(t.strip())
+        except Exception as e:
+            log.error(f".pdf parse failed: {e}")
+            return None, [f"could not read PDF: {e}"]
+        if chars < 50:
+            return None, ["This looks like a scanned/image PDF — no selectable text to parse. "
+                          "Export a text-based PDF, or paste your resume text instead."]
+        return "\n".join(parts), []

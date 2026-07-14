@@ -2336,6 +2336,56 @@ async def morpheus_job_cancel(job_id: str):
     return {"job_id": job_id, "state": "cancelled", "interrupted": bool(was_rendering)}
 
 
+async def _resume_read_input(file, resume_text):
+    """Return (text, source_flags, error). Pasted text → source_flags None (pure
+    plain-text mode). A file → parsed text + its source-level format flags. On
+    failure → (None, None, message)."""
+    if resume_text and resume_text.strip():
+        return resume_text, None, None
+    if file is None or not getattr(file, "filename", ""):
+        return None, None, "Provide either resume_text or a .txt/.docx/.pdf file."
+    data = await file.read()
+    if len(data) > 5_000_000:
+        return None, None, "File too large (max 5 MB)."
+    suffix = Path(file.filename).suffix.lower() or ".txt"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = tmp.name
+    try:
+        text, flags = resume.parse_resume_file(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+    if text is None:
+        return None, None, "; ".join(flags) or "Could not parse the file."
+    return text, flags, None
+
+
+@app.post("/resume/analyze")
+async def resume_analyze_endpoint(
+    file: UploadFile = File(None),
+    resume_text: str = Form(""),
+    job_description: str = Form(""),
+):
+    text, flags, err = await _resume_read_input(file, resume_text)
+    if err:
+        raise HTTPException(400, err)
+    analysis = await asyncio.to_thread(resume.analyze_resume, text, job_description, flags)
+    return {"analysis": analysis}
+
+
+@app.post("/resume/build")
+async def resume_build_endpoint(
+    file: UploadFile = File(None),
+    resume_text: str = Form(""),
+    job_description: str = Form(""),
+):
+    text, flags, err = await _resume_read_input(file, resume_text)
+    if err:
+        raise HTTPException(400, err)
+    result = await asyncio.to_thread(resume.build_ats_resume, text, job_description)
+    return {"result": result}
+
+
 @app.get("/resume/file/{rid}")
 async def resume_file(rid: str):
     """Download a built ATS resume .docx. IDs are validated in the module
