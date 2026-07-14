@@ -192,6 +192,55 @@
         }
         #login-btn:hover { background: #a855f7; }
         #login-err { color: #ef4444; font-size: 12px; min-height: 16px; }
+
+        /* ── Gallery view ───────────────────────────────────────────────── */
+        #gallery-open {
+            background: #18182e; color: #a78bfa; border: 1px solid #2a1f4a;
+            border-radius: 4px; cursor: pointer; font-family: 'Courier New', monospace;
+            font-size: 12px; line-height: 1; padding: 4px 8px; margin-left: 10px; flex-shrink: 0;
+            transition: background .15s, border-color .15s;
+        }
+        #gallery-open:hover { background: #2a1f4a; border-color: #7c3aed; }
+        #gallery-overlay {
+            position: fixed; inset: 0; z-index: 8000; background: #0a0a14;
+            display: none; flex-direction: column;
+        }
+        #gallery-overlay.open { display: flex; }
+        #gallery-bar {
+            display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+            padding: 10px 14px; background: #13132c; border-bottom: 1px solid #2a1f4a;
+        }
+        #gallery-back {
+            background: #7c3aed; color: #fff; border: none; border-radius: 4px;
+            font-family: 'Courier New', monospace; font-weight: bold; letter-spacing: 1px;
+            padding: 6px 14px; cursor: pointer; transition: background .15s;
+        }
+        #gallery-back:hover { background: #a855f7; }
+        #gallery-title { color: #e2d9f3; letter-spacing: 2px; font-weight: bold; }
+        #gallery-count { color: #5b5280; font-size: 12px; }
+        #gallery-grid {
+            flex: 1; overflow-y: auto; padding: 14px; align-content: start;
+            display: grid; gap: 12px;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        }
+        .gallery-cell {
+            border: 1px solid #2a1f4a; border-radius: 6px; overflow: hidden; background: #0d0d1c;
+        }
+        .gallery-cell img {
+            display: block; width: 100%; height: 150px; object-fit: cover;
+            cursor: zoom-in; background: #0d0d1c;
+        }
+        .gallery-cell .gcap {
+            font-size: 10px; color: #5b5280; padding: 3px 6px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        #gallery-msg { color: #5b5280; padding: 20px; font-style: italic; }
+        #gallery-lightbox {
+            position: fixed; inset: 0; z-index: 8100; background: rgba(5, 5, 12, .94);
+            display: none; align-items: center; justify-content: center; cursor: zoom-out;
+        }
+        #gallery-lightbox.open { display: flex; }
+        #gallery-lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 6px; }
     </style>
 </head>
 <body>
@@ -210,6 +259,7 @@
         <span id="status-dot">●</span>
         <span id="status-text">Idle</span>
         <span id="title">PH3B3</span>
+        <button id="gallery-open" title="Browse the image gallery">🖼 GALLERY</button>
     </div>
 
     <div id="chat"></div>
@@ -233,6 +283,16 @@
             <div id="mic-label">hold to speak</div>
         </div>
     </div>
+
+    <div id="gallery-overlay">
+        <div id="gallery-bar">
+            <button id="gallery-back" title="Return to chat">← CHAT</button>
+            <span id="gallery-title">GALLERY</span>
+            <span id="gallery-count"></span>
+        </div>
+        <div id="gallery-grid"></div>
+    </div>
+    <div id="gallery-lightbox"><img id="gallery-lightbox-img" alt="" /></div>
 
     <script>
     // ── Auth (mobile-safe Basic auth) ─────────────────────────────────────────
@@ -832,6 +892,72 @@
     } else {
         drawMic('#1e1730', '#4a3880', '#5b5280');
     }
+
+    // ── Gallery view ──────────────────────────────────────────────────────────
+    const galleryOverlay     = document.getElementById('gallery-overlay');
+    const galleryGrid        = document.getElementById('gallery-grid');
+    const galleryCount       = document.getElementById('gallery-count');
+    const galleryLightbox    = document.getElementById('gallery-lightbox');
+    const galleryLightboxImg = document.getElementById('gallery-lightbox-img');
+    let galleryUrls = [];   // active blob URLs; revoked on close to free memory
+
+    function closeGallery() {
+        galleryOverlay.classList.remove('open');
+        galleryLightbox.classList.remove('open');
+        galleryUrls.forEach(u => URL.revokeObjectURL(u));
+        galleryUrls = [];
+        galleryGrid.innerHTML = '';
+    }
+
+    async function openGallery() {
+        galleryOverlay.classList.add('open');
+        galleryGrid.innerHTML = '<div id="gallery-msg">Loading gallery…</div>';
+        galleryCount.textContent = '';
+        let rows;
+        try {
+            const r = await fetch('/image/gallery?n=100', { headers: { 'Authorization': authHeader } });
+            if (r.status === 401) { closeGallery(); _clearAuth(); _showLogin('Session expired — please reconnect.'); return; }
+            if (!r.ok) { galleryGrid.innerHTML = '<div id="gallery-msg">Could not load gallery.</div>'; return; }
+            rows = (await r.json()).images || [];
+        } catch { galleryGrid.innerHTML = '<div id="gallery-msg">Cannot reach server.</div>'; return; }
+
+        if (!rows.length) {
+            galleryGrid.innerHTML = '<div id="gallery-msg">No renders yet — generate an image first.</div>';
+            return;
+        }
+        galleryGrid.innerHTML = '';
+        galleryCount.textContent = `${rows.length} render${rows.length === 1 ? '' : 's'}`;
+        // <img> can't send the auth header, so fetch each render (by job_id) with auth → blob URL.
+        for (const row of rows) {
+            try {
+                const ir = await fetch(`/image/file/${encodeURIComponent(row.job_id)}`, { headers: { 'Authorization': authHeader } });
+                if (!ir.ok) continue;   // e.g. a video render with no PNG frame — skip quietly
+                const url = URL.createObjectURL(await ir.blob());
+                galleryUrls.push(url);
+                const cell = document.createElement('div');
+                cell.className = 'gallery-cell';
+                const im = document.createElement('img');
+                im.src = url; im.alt = row.prompt || row.job_id; im.loading = 'lazy';
+                im.title = row.prompt || '';
+                im.addEventListener('click', () => { galleryLightboxImg.src = url; galleryLightbox.classList.add('open'); });
+                const cap = document.createElement('div');
+                cap.className = 'gcap';
+                cap.textContent = row.prompt || row.job_id;
+                cap.title = `${row.prompt || ''}${row.seed != null ? '  · seed ' + row.seed : ''}`;
+                cell.appendChild(im); cell.appendChild(cap);
+                galleryGrid.appendChild(cell);
+            } catch {}
+        }
+    }
+
+    document.getElementById('gallery-open').addEventListener('click', openGallery);
+    document.getElementById('gallery-back').addEventListener('click', closeGallery);
+    galleryLightbox.addEventListener('click', () => galleryLightbox.classList.remove('open'));
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (galleryLightbox.classList.contains('open'))      galleryLightbox.classList.remove('open');
+        else if (galleryOverlay.classList.contains('open'))  closeGallery();
+    });
 
     async function initApp() {
         try {
