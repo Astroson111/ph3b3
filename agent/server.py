@@ -512,7 +512,7 @@ def _format_recall(hits: list[dict]) -> str:
     return "Relevant memories:\n" + "\n".join(lines)
 
 
-async def execute_tool(name, args):
+async def execute_tool(name, args, device="nyx", session_id=""):
     log.info(f"Tool: {name}")
     result = None
     success = False
@@ -532,8 +532,12 @@ async def execute_tool(name, args):
         elif name == "log_anomaly": result = memory.log_anomaly(args["description"], args.get("source","camera"))
         elif name == "recall_memory": result = memory.recall(args["topic"])
         elif name == "remember":
-            _mid = mem_spine.remember(args["text"], source_device="nyx",
-                                      session_id=args.get("session_id", ""),
+            # Tag the memory with the device that's actually talking (from the
+            # /chat request), so a thread started on Iris is attributable to iris
+            # and cross-device recall works. Falls back to a model-supplied
+            # session_id if one was passed, else the request's session.
+            _mid = mem_spine.remember(args["text"], source_device=(device or "nyx"),
+                                      session_id=(args.get("session_id") or session_id),
                                       role="assistant", kind=args.get("kind", "conversation"))
             result = f"Saved to shared memory (id {_mid[:8]})."
         elif name == "recall":
@@ -741,7 +745,7 @@ def _parse_tool_call_text(text: str) -> tuple:
         return None, {}
 
 
-async def chat_with_tools(messages):
+async def chat_with_tools(messages, device="nyx", session_id=""):
     async with httpx.AsyncClient(timeout=120) as client:
         payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":TOOLS,"options":{"temperature":0.7,"num_ctx":8192}}
         try:
@@ -764,7 +768,7 @@ async def chat_with_tools(messages):
                 if fn in ONE_SHOT_TOOLS and fn in tool_cache:
                     result = tool_cache[fn]
                 else:
-                    result = await execute_tool(fn, args)
+                    result = await execute_tool(fn, args, device, session_id)
                     called_tools.add(fn)
                     if fn in ONE_SHOT_TOOLS:
                         tool_cache[fn] = result
@@ -789,7 +793,7 @@ async def chat_with_tools(messages):
             content = ""
             if _tc_name:
                 try:
-                    _tc_result = await execute_tool(_tc_name, _tc_args)
+                    _tc_result = await execute_tool(_tc_name, _tc_args, device, session_id)
                     _synth = [
                         messages[0],
                         {"role": "user", "content": f"Tool result: {str(_tc_result)[:600]}\n\nSummarise this for the user in one clear paragraph."},
@@ -1001,7 +1005,8 @@ async def _run_chat_pipeline(body: dict, request: Request):
         device_note = {"role": "system", "content": _DEVICE_NOTES[device]}
         messages.insert(1, device_note)   # after soul + id_anchor, before conversation turns
 
-    response, updated = await chat_with_tools(messages)
+    response, updated = await chat_with_tools(
+        messages, device=(device or "nyx"), session_id=body.get("session_id", "default"))
     _fire_pending_video()   # start any render queued by generate_video — AFTER the reply
 
     # Strip ephemeral notes before storing so they never accumulate in history
@@ -1125,6 +1130,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str = "default"):
         return
     await websocket.accept()
     session = get_session(session_id)
+    _ws_device = websocket.headers.get("X-Ph3b3-Device", "stackchan")
     log.info(f"Stack-chan connected: {session_id}")
     try:
         while True:
@@ -1135,7 +1141,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str = "default"):
                 tts.soul_line()
             await websocket.send_json({"status":"thinking"})
             session.add("user", user_input)
-            response, updated = await chat_with_tools(session.messages())
+            response, updated = await chat_with_tools(
+                session.messages(), device=_ws_device, session_id=session_id)
             _fire_pending_video()   # start any render queued by generate_video — AFTER the reply
             session.history = updated
             session.add("assistant", response)
