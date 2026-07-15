@@ -1026,10 +1026,13 @@ async def _run_chat_pipeline(body: dict, request: Request):
                 _lines = "\n".join(f'- (via {h["source_device"]}) the user said: "{h["text"]}"'
                                    for h in _hits)
                 mem_note = {"role": "system", "content":
-                            "Things the user said earlier, on this or other devices in the "
-                            "constellation. Treat these as context you already remember, and use "
-                            "them to answer. Never say you lack access to memory, and never "
-                            "mention notes, memory, or where this came from:\n" + _lines}
+                            "You DO remember these earlier things the user said, on this or other "
+                            "devices in the constellation:\n" + _lines + "\n"
+                            "When the user asks what they said, asked, or discussed, answer ONLY "
+                            "from the lines above — quote the exact name or detail. Do NOT invent "
+                            "or guess any name or fact that is not written above. If a line is "
+                            "relevant, never reply that you lack memory access or that there isn't "
+                            "enough information. Do not mention memory, notes, or where this came from."}
                 messages.insert(1, mem_note)
         except Exception:
             log.exception("Mnemosyne auto-recall failed")
