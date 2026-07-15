@@ -1023,11 +1023,13 @@ async def _run_chat_pipeline(body: dict, request: Request):
             _hits = [h for h in _hits
                      if h["score"] >= MNEMO_RECALL_THRESHOLD and h.get("session_id") != _sid]
             if _hits:
-                _lines = "\n".join(f"- ({h['source_device']}) {h['text']}" for h in _hits)
+                _lines = "\n".join(f'- (via {h["source_device"]}) the user said: "{h["text"]}"'
+                                   for h in _hits)
                 mem_note = {"role": "system", "content":
-                            "Relevant memories from the shared constellation memory "
-                            "(other devices/sessions). Use if helpful; do not mention this note:\n"
-                            + _lines}
+                            "Things the user said earlier, on this or other devices in the "
+                            "constellation. Treat these as context you already remember, and use "
+                            "them to answer. Never say you lack access to memory, and never "
+                            "mention notes, memory, or where this came from:\n" + _lines}
                 messages.insert(1, mem_note)
         except Exception:
             log.exception("Mnemosyne auto-recall failed")
@@ -1047,18 +1049,22 @@ async def _run_chat_pipeline(body: dict, request: Request):
     session.history = updated
     session.add("assistant", response)
 
-    # Cross-device continuity: deterministically persist the turn to Mnemosyne,
-    # tagged with the calling device, so a thread started on one device (e.g. Iris)
-    # is recall-visible from another (e.g. Dio) — independent of whether Hermes3
-    # chose to call the remember tool. kind=conversation → 30-day TTL, so this
-    # auto-capture bounds itself and never becomes a permanent record. Fire-and-
-    # forget: remember() returns before embedding, so the reply path never waits.
-    if user_msg and response:
+    # Cross-device continuity: deterministically persist the USER's turn to
+    # Mnemosyne, tagged with the calling device, so a thread started on one device
+    # (e.g. Iris) is recall-visible from another (e.g. Dio) — independent of whether
+    # Hermes3 chose to call the remember tool.
+    #
+    # ONLY the user's message is stored — never Ph3b3's reply. Storing her replies
+    # let a failure/refusal ("I don't have access to memory like Iris") become a
+    # memory that auto-recall then fed back as context, teaching her to repeat it.
+    # The durable, un-poisonable thread is what the USER said. kind=conversation →
+    # 30-day TTL. Fire-and-forget: remember() returns before embedding.
+    if user_msg:
         try:
-            mem_spine.remember(f"User: {user_msg}\nPh3b3: {response}",
+            mem_spine.remember(user_msg,
                                source_device=(device or "nyx"),
                                session_id=body.get("session_id", "default"),
-                               role="assistant", kind="conversation")
+                               role="user", kind="conversation")
         except Exception:
             log.exception("Mnemosyne auto-capture failed")
 
