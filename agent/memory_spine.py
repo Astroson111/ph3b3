@@ -19,8 +19,11 @@ Hard constraints honoured:
     worker thread, so the caller never blocks on the model.
 
 v1 values-audit outcomes (Astro, signed off):
-  - No TTL. Every memory is permanent; `expires_at` stays NULL. The column is
-    kept so a forgetting policy can switch on post-v1 with no migration.
+  - Forgetting policy: `conversation` memories expire after 30 days (via
+    `expires_at`); `fact`, `state`, and `observation` are permanent unless
+    explicitly forgotten. Expired rows are excluded from reads and hard-deleted
+    by a background purge. This bounds the deterministic per-turn auto-capture so
+    Mnemosyne can't quietly grow into a permanent record of every conversation.
   - The content-safety floor gates *generation*, not storage. remember() stores
     what it is given. (If that reverses post-v1, the check attaches at the marked
     seam in remember().)
@@ -47,6 +50,16 @@ EMBED_DIM = 384  # all-MiniLM-L6-v2 output width; frozen — changing it changes
 VALID_ROLES = {"user", "assistant", "observation"}
 VALID_KINDS = {"conversation", "fact", "state", "observation"}
 
+# Forgetting policy (v1): only `conversation` memories expire.
+TTL_DAYS_BY_KIND = {"conversation": 30}
+
+
+def _utc_iso(epoch: float | None = None) -> str:
+    """ISO-8601 UTC (…Z). Lexical order == chronological order, so expiry can be
+    compared as a plain string in SQL."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                         time.gmtime(epoch if epoch is not None else time.time()))
+
 
 class MemorySpine:
     def __init__(self, db_path: Path = DB_PATH):
@@ -62,6 +75,7 @@ class MemorySpine:
         sqlite_vec.load(self._db)
         self._db.enable_load_extension(False)
         self._init_schema()
+        self.purge_expired()   # drop anything already past its TTL on boot
 
         # The model loads lazily on a background thread so boot is not blocked by
         # the ~4s load. Embed jobs and recall() wait on _model_ready.
@@ -72,6 +86,9 @@ class MemorySpine:
         # Single worker => embeds are serialised and CPU load stays bounded even
         # if a burst of writes lands during a Morpheus render.
         self._embed_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mnemo-embed")
+
+        # Periodic TTL purge (conversation memories expire after 30 days).
+        threading.Thread(target=self._purge_loop, daemon=True).start()
 
         n = self._db.execute("SELECT count(*) FROM memories").fetchone()[0]
         log.info("Mnemosyne store open at %s (%d memories)", self.db_path, n)
@@ -149,13 +166,16 @@ class MemorySpine:
         # --------------------------------------------------------------------
 
         mid = str(uuid.uuid4())
-        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        now = time.time()
+        ts = _utc_iso(now)
+        ttl_days = TTL_DAYS_BY_KIND.get(kind)
+        expires_at = _utc_iso(now + ttl_days * 86400) if ttl_days else None
         with self._lock:
             cur = self._db.execute(
                 "INSERT INTO memories (id, timestamp, source_device, session_id, "
-                "role, kind, text, metadata, expires_at) VALUES (?,?,?,?,?,?,?,?,NULL)",
+                "role, kind, text, metadata, expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 (mid, ts, source_device, session_id, role, kind, text,
-                 json.dumps(metadata or {})),
+                 json.dumps(metadata or {}), expires_at),
             )
             rowid = cur.lastrowid
             self._db.commit()
@@ -192,8 +212,9 @@ class MemorySpine:
         session = filters.get("session")
 
         emb = self._embed(query)
-        # Over-fetch so post-filtering still yields up to top_k.
-        fetch_k = top_k * 5 if (device or kind or session) else top_k
+        now = _utc_iso()
+        # Over-fetch so post-filtering (incl. expiry) still yields up to top_k.
+        fetch_k = top_k * 5 if (device or kind or session) else top_k * 2
         with self._lock:
             rows = self._db.execute(
                 "SELECT rowid, distance FROM vec_memories "
@@ -204,10 +225,12 @@ class MemorySpine:
             for rowid, distance in rows:
                 m = self._db.execute(
                     "SELECT id, text, timestamp, source_device, session_id, kind, "
-                    "metadata FROM memories WHERE rowid = ?", (rowid,)).fetchone()
+                    "metadata, expires_at FROM memories WHERE rowid = ?", (rowid,)).fetchone()
                 if not m:
                     continue
-                mid, text, ts, dev, sess, k, meta = m
+                mid, text, ts, dev, sess, k, meta, exp = m
+                if exp is not None and exp <= now:
+                    continue  # expired — excluded from recall (purge will delete it)
                 if device and dev != device:
                     continue
                 if kind and k != kind:
@@ -236,14 +259,14 @@ class MemorySpine:
         filter. This is a keyed SQL read — no embedding — so it's cheap enough for
         a device to call on boot (e.g. recent(device='dio', kind='state', limit=1)
         to reload the latest story state)."""
-        clauses, params = [], []
+        clauses, params = ["(expires_at IS NULL OR expires_at > ?)"], [_utc_iso()]
         if session_id:
             clauses.append("session_id = ?"); params.append(session_id)
         if device:
             clauses.append("source_device = ?"); params.append(device)
         if kind:
             clauses.append("kind = ?"); params.append(kind)
-        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        where = "WHERE " + " AND ".join(clauses)
         params.append(max(1, min(limit, 500)))
         with self._lock:
             rows = self._db.execute(
@@ -288,6 +311,34 @@ class MemorySpine:
             self._db.commit()
         log.info("Mnemosyne forgot %d memory(ies) [%s]", len(rowids), clause)
         return len(rowids)
+
+    # ── TTL purge ───────────────────────────────────────────────────────────────
+
+    def purge_expired(self) -> int:
+        """Hard-delete memories whose expires_at has passed, from both the
+        metadata and vector tables. Runs on boot and every 6h thereafter. Reads
+        already exclude expired rows, so this just reclaims space."""
+        now = _utc_iso()
+        with self._lock:
+            rowids = [r[0] for r in self._db.execute(
+                "SELECT rowid FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?",
+                (now,)).fetchall()]
+            if not rowids:
+                return 0
+            qmarks = ",".join("?" * len(rowids))
+            self._db.execute(f"DELETE FROM vec_memories WHERE rowid IN ({qmarks})", rowids)
+            self._db.execute(f"DELETE FROM memories WHERE rowid IN ({qmarks})", rowids)
+            self._db.commit()
+        log.info("Mnemosyne purged %d expired memory(ies)", len(rowids))
+        return len(rowids)
+
+    def _purge_loop(self) -> None:
+        while True:
+            time.sleep(6 * 3600)
+            try:
+                self.purge_expired()
+            except Exception:
+                log.exception("Mnemosyne purge loop error")
 
     # ── lifecycle ───────────────────────────────────────────────────────────────
 

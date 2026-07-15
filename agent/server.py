@@ -1017,6 +1017,22 @@ async def _run_chat_pipeline(body: dict, request: Request):
 
     session.history = updated
     session.add("assistant", response)
+
+    # Cross-device continuity: deterministically persist the turn to Mnemosyne,
+    # tagged with the calling device, so a thread started on one device (e.g. Iris)
+    # is recall-visible from another (e.g. Dio) — independent of whether Hermes3
+    # chose to call the remember tool. kind=conversation → 30-day TTL, so this
+    # auto-capture bounds itself and never becomes a permanent record. Fire-and-
+    # forget: remember() returns before embedding, so the reply path never waits.
+    if user_msg and response:
+        try:
+            mem_spine.remember(f"User: {user_msg}\nPh3b3: {response}",
+                               source_device=(device or "nyx"),
+                               session_id=body.get("session_id", "default"),
+                               role="assistant", kind="conversation")
+        except Exception:
+            log.exception("Mnemosyne auto-capture failed")
+
     return response
 
 
