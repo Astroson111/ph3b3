@@ -269,6 +269,10 @@ film = FilmModule(ROOT / "config" / "film_db.json")
 translation = TranslationModule()
 memory = MemoryModule()
 mem_spine = MemorySpine()   # Mnemosyne — shared cross-device semantic memory (served at /mnemosyne/*)
+# Read-side auto-recall: how many memories to pull per turn, and the cosine floor
+# below which a hit is treated as noise (in testing, relevant≈0.34 vs noise≈0.09).
+MNEMO_RECALL_K = 3
+MNEMO_RECALL_THRESHOLD = 0.30
 occult = OccultModule()
 jokes = JokesModule()
 vision = VisionModule(memory_module=memory, camera_device=0)
@@ -1005,6 +1009,29 @@ async def _run_chat_pipeline(body: dict, request: Request):
         device_note = {"role": "system", "content": _DEVICE_NOTES[device]}
         messages.insert(1, device_note)   # after soul + id_anchor, before conversation turns
 
+    # ── Read-side auto-recall (the mirror of auto-capture) ────────────────────
+    # Pull relevant shared memories (cross-device) and inject them so the model
+    # can actually USE what other devices remembered — e.g. Dio answering what you
+    # told Iris. Deterministic: does NOT depend on Hermes3 calling the recall tool.
+    # Ephemeral (stripped below); threshold keeps noise out; same-session hits are
+    # skipped since the rolling history already carries them.
+    mem_note = None
+    if user_msg:
+        try:
+            _sid = body.get("session_id", "default")
+            _hits = await asyncio.to_thread(mem_spine.recall, user_msg, MNEMO_RECALL_K)
+            _hits = [h for h in _hits
+                     if h["score"] >= MNEMO_RECALL_THRESHOLD and h.get("session_id") != _sid]
+            if _hits:
+                _lines = "\n".join(f"- ({h['source_device']}) {h['text']}" for h in _hits)
+                mem_note = {"role": "system", "content":
+                            "Relevant memories from the shared constellation memory "
+                            "(other devices/sessions). Use if helpful; do not mention this note:\n"
+                            + _lines}
+                messages.insert(1, mem_note)
+        except Exception:
+            log.exception("Mnemosyne auto-recall failed")
+
     response, updated = await chat_with_tools(
         messages, device=(device or "nyx"), session_id=body.get("session_id", "default"))
     _fire_pending_video()   # start any render queued by generate_video — AFTER the reply
@@ -1014,6 +1041,8 @@ async def _run_chat_pipeline(body: dict, request: Request):
         updated.remove(_dt_note)
     if device_note and device_note in updated:
         updated.remove(device_note)
+    if mem_note and mem_note in updated:
+        updated.remove(mem_note)
 
     session.history = updated
     session.add("assistant", response)

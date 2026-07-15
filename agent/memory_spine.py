@@ -243,6 +243,7 @@ class MemorySpine:
                     "score": round(1.0 - distance, 6),  # cosine similarity
                     "timestamp": ts,
                     "source_device": dev,
+                    "session_id": sess,
                     "kind": k,
                     "metadata": json.loads(meta or "{}"),
                 })
