@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 from dotenv import load_dotenv, set_key
 import mnemosyne
+from memory_spine import MemorySpine
 
 load_dotenv()
 
@@ -168,6 +169,7 @@ async def lifespan(app):
             tts.speak(reminder_msg, blocking=False)
     threading.Thread(target=_greet, daemon=True).start()
     mnemosyne.init(os.getenv("JAMENDO_CLIENT_ID", ""))
+    log.info("Mnemosyne online")
 
     async def _edit_scratch_janitor():
         # Bound edit-mode scratch to the TTL even when no new uploads arrive.
@@ -266,6 +268,7 @@ dnd = DnDModule(ROOT / "config" / "dnd_db.json")
 film = FilmModule(ROOT / "config" / "film_db.json")
 translation = TranslationModule()
 memory = MemoryModule()
+mem_spine = MemorySpine()   # Mnemosyne — shared cross-device semantic memory (served at /mnemosyne/*)
 occult = OccultModule()
 jokes = JokesModule()
 vision = VisionModule(memory_module=memory, camera_device=0)
@@ -320,6 +323,8 @@ TOOLS = [
     {"type":"function","function":{"name":"remember_fact","description":"Remember a fact permanently","parameters":{"type":"object","properties":{"key":{"type":"string"},"value":{"type":"string"}},"required":["key","value"]}}},
     {"type":"function","function":{"name":"log_anomaly","description":"Log a detected anomaly","parameters":{"type":"object","properties":{"description":{"type":"string"},"source":{"type":"string","default":"camera"}},"required":["description"]}}},
     {"type":"function","function":{"name":"recall_memory","description":"Search long-term memory","parameters":{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"]}}},
+    {"type":"function","function":{"name":"remember","description":"Save a memory to Mnemosyne — Ph3b3's shared long-term memory that is visible across ALL devices (Iris, Dio, Nyx) and survives restarts. Use for anything worth recalling later: facts about the user, ongoing state, observations, or notable moments in conversation. Prefer this over remember_fact for free-form memories.","parameters":{"type":"object","properties":{"text":{"type":"string","description":"The memory to store, in natural language"},"kind":{"type":"string","enum":["conversation","fact","state","observation"],"default":"conversation","description":"conversation=dialogue, fact=stable truth, state=progress/status, observation=noticed event"}},"required":["text"]}}},
+    {"type":"function","function":{"name":"recall","description":"Semantic search across Mnemosyne — Ph3b3's shared cross-device long-term memory. Returns the most relevant memories from ANY device by meaning, not keywords. Use when the user refers to something from earlier, asks what you remember, or you need prior context to answer well.","parameters":{"type":"object","properties":{"query":{"type":"string"},"top_k":{"type":"integer","default":5}},"required":["query"]}}},
     {"type":"function","function":{"name":"occult_lookup","description":"Look up paranormal phenomena or folklore","parameters":{"type":"object","properties":{"query":{"type":"string"},"category":{"type":"string","default":"any"}},"required":["query"]}}},
     {"type":"function","function":{"name":"occult_random","description":"Random paranormal fact for stream","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"tell_joke","description":"Tell a joke","parameters":{"type":"object","properties":{"category":{"type":"string","default":"any"}}}}},
@@ -495,6 +500,18 @@ def _format_recipes(
     return "\n".join(parts)
 
 
+def _format_recall(hits: list[dict]) -> str:
+    """Render Mnemosyne recall hits as text for Hermes3 to read back."""
+    if not hits:
+        return "No relevant memories found."
+    lines = []
+    for h in hits:
+        dev = h.get("source_device") or "?"
+        when = (h.get("timestamp") or "")[:10]
+        lines.append(f"- [{dev}/{h.get('kind','?')}, {when}] {h['text']}")
+    return "Relevant memories:\n" + "\n".join(lines)
+
+
 async def execute_tool(name, args):
     log.info(f"Tool: {name}")
     result = None
@@ -514,6 +531,13 @@ async def execute_tool(name, args):
         elif name == "remember_fact": result = memory.remember_fact(args["key"], args["value"])
         elif name == "log_anomaly": result = memory.log_anomaly(args["description"], args.get("source","camera"))
         elif name == "recall_memory": result = memory.recall(args["topic"])
+        elif name == "remember":
+            _mid = mem_spine.remember(args["text"], source_device="nyx",
+                                      session_id=args.get("session_id", ""),
+                                      role="assistant", kind=args.get("kind", "conversation"))
+            result = f"Saved to shared memory (id {_mid[:8]})."
+        elif name == "recall":
+            result = _format_recall(mem_spine.recall(args["query"], top_k=int(args.get("top_k", 5))))
         elif name == "occult_lookup": result = occult.lookup(args["query"], args.get("category","any"))
         elif name == "generate_video": result = _tool_generate_video(args)
         elif name == "occult_random": result = occult.random_phenomenon()
@@ -1266,6 +1290,56 @@ async def sc_remove_network(ssid: str):
     nets = [n for n in _load_sc_networks() if n["ssid"] != ssid]
     _save_sc_networks(nets)
     return {"ok": True}
+
+# ── Mnemosyne — shared cross-device persistent memory ───────────────────────────
+# Remember / Recall / Recent / Forget. Semantic store on sqlite-vec + CPU
+# embeddings; recall is deliberately NOT scoped to the calling device.
+
+@app.post("/mnemosyne/remember")
+async def mnemosyne_remember(body: dict):
+    text = str(body.get("text", "")).strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text required")
+    try:
+        mid = mem_spine.remember(
+            text,
+            source_device=str(body.get("source_device", "")),
+            session_id=str(body.get("session_id", "")),
+            role=str(body.get("role", "user")),
+            kind=str(body.get("kind", "conversation")),
+            metadata=body.get("metadata"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"id": mid}
+
+
+@app.post("/mnemosyne/recall")
+async def mnemosyne_recall(body: dict):
+    query = str(body.get("query", "")).strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query required")
+    hits = await asyncio.to_thread(
+        mem_spine.recall, query, int(body.get("top_k", 5)), body.get("filters"))
+    return hits
+
+
+@app.get("/mnemosyne/recent")
+async def mnemosyne_recent(session_id: str | None = None, device: str | None = None,
+                           limit: int = 20, kind: str | None = None):
+    # e.g. Dio reads its latest story state on boot:
+    #   GET /mnemosyne/recent?device=dio&kind=state&limit=1
+    return await asyncio.to_thread(mem_spine.recent, session_id, device, limit, kind)
+
+
+@app.post("/mnemosyne/forget")
+async def mnemosyne_forget(body: dict):
+    if not any(body.get(k) for k in ("id", "session_id", "tag")):
+        raise HTTPException(status_code=400, detail="one of id, session_id, tag required")
+    deleted = await asyncio.to_thread(
+        mem_spine.forget, body.get("id"), body.get("session_id"), body.get("tag"))
+    return {"deleted_count": deleted}
+
 
 # ── Karaoke ───────────────────────────────────────────────────────────────────
 

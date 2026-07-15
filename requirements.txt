@@ -27,3 +27,6 @@ Pillow>=10.0.0
 python-docx
 pdfplumber
 trafilatura
+# Mnemosyne — shared persistent memory spine (in-process, CPU-only, no GPU)
+sqlite-vec>=0.1.9
+sentence-transformers>=5.0.0
