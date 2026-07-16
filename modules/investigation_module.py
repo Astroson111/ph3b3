@@ -39,6 +39,12 @@ class InvestigationModule:
         self._cemetery_tribute_fired = False  # reset on each new session
         log.info("Investigation module ready.")
 
+    def is_active(self) -> bool:
+        """True while a ghost-hunting session is open. Gates the camera-monitoring
+        tools (set_baseline / check_anomaly / start_monitoring) so vision only runs
+        continuously during an investigation — otherwise vision is prompt-only."""
+        return self._active is not None
+
     def _is_cemetery(self, location: str) -> bool:
         return bool(_CEMETERY_RE.search(location))
         # TODO: when GPS support is added (USB dongle, roadmap), also trigger on
