@@ -1,195 +1,156 @@
-import cv2
+"""
+vision_module.py — Stack-Chan-only vision.
+
+Phase 2: frames come from Dio's built-in CoreS3 GC0308 camera, never a local
+webcam. Flow: the server asks Dio to capture (HTTP to her LAN IP); Dio pauses
+her face, grabs a JPEG, and POSTs it to /vision/frame; the server analyses it
+with LLaVA. There is NO OBSBOT / /dev/video fallback — if Dio is offline, vision
+reports offline. "Stack-Chan only" means only.
+
+Every captured frame lands in ~/ph3b3_data/captures — the one and only photo
+store. Prompt-only rule (Phase 1) holds: `look` is on-demand; the ghost-hunt
+monitoring path (set_baseline / check_anomaly / start_monitoring) is gated to an
+active investigation by the server dispatch.
+"""
 import base64
-import os
-import subprocess
-import time
 import logging
+import os
 import threading
-import numpy as np
+import time
 from datetime import datetime
 from pathlib import Path
+
+import requests
 
 log = logging.getLogger("ph3b3.vision")
 
 OLLAMA_API_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434") + "/api/generate"
 VISION_MODEL   = os.getenv("PH3B3_VISION_MODEL", "llava")
-CAPTURE_DIR    = Path.home() / "ph3b3_data" / "captures"
-ANOMALY_DIR    = Path.home() / "ph3b3_data" / "anomalies"
+CAPTURE_DIR    = Path.home() / "ph3b3_data" / "captures"   # the ONLY photo store, ever
+
+# Dio's on-device HTTP camera control (served by the CoreS3 firmware, Phase-2 fw).
+DIO_CAM_PORT    = int(os.getenv("PH3B3_DIO_CAM_PORT", "8080"))
+CAPTURE_TIMEOUT = float(os.getenv("PH3B3_CAPTURE_TIMEOUT", "12"))  # s to await a frame
 
 ANALYSIS_PROMPT = (
-    "You are Ph3b3. This is what your camera sees right now. "
+    "You are Ph3b3, seeing through Dio's camera right now. "
     "Describe what you observe — people, objects, hardware, anything unusual. "
-    "Be direct and precise. Note anything that seems out of place. "
-    "This is your environment. You are watching it."
+    "Be direct and precise. Note anything that seems out of place."
 )
 
-# ── UVC PTZ constants (OBSBOT Tiny 4K via v4l2) ──────────────────────────────
-PAN_MIN,  PAN_MAX  = -36000, 36000
-TILT_MIN, TILT_MAX = -36000, 36000
-ZOOM_MIN, ZOOM_MAX = 10, 19
-PAN_STEP  = 3600   # one click ≈ 18°
-TILT_STEP = 3600
+OFFLINE_MSG = ("[Dio's camera is offline — Stack-Chan is not reachable, so I can't see right "
+               "now. I don't fall back to any other camera.]")
 
 
 class VisionModule:
-    def __init__(self, memory_module=None, camera_device: int = 0):
-        """
-        camera_device: v4l2 device index.
-            0 = primary camera (/dev/video0)
-            1+ = secondary cameras as they are added
-        """
-        self.memory        = memory_module
-        self.camera_device = camera_device
-        self.device_path   = f"/dev/video{camera_device}"
-        self.baseline      = None
-        self.monitoring    = False
-        self._monitor_thread = None
+    def __init__(self, memory_module=None):
+        self.memory       = memory_module
+        self.dio_host     = None          # Dio's LAN IP, learned from her inbound requests
+        self._latest_jpeg = None          # bytes of the most recent frame Dio POSTed
+        self._latest_ts   = 0.0
+        self._frame_event = threading.Event()
+        self.baseline_jpeg = None         # baseline frame for ghost-hunt anomaly checks
         CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
-        ANOMALY_DIR.mkdir(parents=True, exist_ok=True)
-        log.info(f"Vision module ready — device {self.device_path} — vision model: {VISION_MODEL}")
+        log.info("Vision module ready — Stack-Chan only (Dio CoreS3 GC0308 camera)")
 
-    # ── Core capture / analysis ───────────────────────────────────────────────
+    # ── device address (set by the server when Dio calls in) ──────────────────
+    def set_dio_host(self, host: str) -> None:
+        if host and host != self.dio_host:
+            self.dio_host = host
+            log.info(f"Dio camera host → {host}")
 
+    # ── inbound frame from Dio (POST /vision/frame) ───────────────────────────
+    def receive_frame(self, jpeg: bytes) -> str:
+        """Persist + hold a JPEG Dio POSTed. Every capture lands in CAPTURE_DIR."""
+        if not jpeg:
+            return "empty frame"
+        self._latest_jpeg = jpeg
+        self._latest_ts   = time.time()
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        path = CAPTURE_DIR / f"capture_{ts}.jpg"
+        path.write_bytes(jpeg)
+        self._frame_event.set()
+        return path.name
+
+    # ── ask Dio to capture, then wait for the frame to arrive ─────────────────
+    def _request_and_wait(self):
+        """Trigger a capture on Dio and block until a NEW frame lands (or timeout).
+        Returns the JPEG bytes, or None if Dio is unreachable / no frame arrives."""
+        if not self.dio_host:
+            return None
+        self._frame_event.clear()
+        prev_ts = self._latest_ts
+        try:
+            requests.post(f"http://{self.dio_host}:{DIO_CAM_PORT}/snapshot", timeout=5)
+        except Exception as e:
+            log.warning(f"Dio capture request failed ({self.dio_host}): {e}")
+            return None
+        deadline = time.time() + CAPTURE_TIMEOUT
+        while time.time() < deadline:
+            if self._frame_event.wait(0.25) and self._latest_ts > prev_ts:
+                return self._latest_jpeg
+        log.warning("Dio capture: no frame arrived before timeout")
+        return None
+
+    # ── prompt-only look ──────────────────────────────────────────────────────
     def look(self, prompt=None):
-        frame = self._capture_frame()
-        if frame is None:
-            return f"[hardware error: could not read a frame from {self.device_path} — device may be busy or disconnected. Try again.]"
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filepath = CAPTURE_DIR / f"capture_{ts}.jpg"
-        cv2.imwrite(str(filepath), frame)
-        return self._analyze_frame(frame, prompt or ANALYSIS_PROMPT)
+        jpeg = self._request_and_wait()
+        if jpeg is None:
+            return OFFLINE_MSG
+        return self._analyze(jpeg, prompt or ANALYSIS_PROMPT)
 
+    # ── ghost-hunt: baseline / anomaly (gated to an investigation in dispatch) ─
     def set_baseline(self):
-        frame = self._capture_frame()
-        if frame is None:
-            return "Cannot set baseline — camera unavailable."
-        self.baseline = frame
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return f"Baseline set at {ts}. I know what normal looks like now."
+        jpeg = self._request_and_wait()
+        if jpeg is None:
+            return OFFLINE_MSG
+        self.baseline_jpeg = jpeg
+        return f"Baseline set at {datetime.now():%H:%M:%S}. I know what normal looks like now."
 
     def check_anomaly(self):
-        if self.baseline is None:
+        if self.baseline_jpeg is None:
             return "No baseline set. Tell me to set a baseline first."
-        current = self._capture_frame()
-        if current is None:
-            return "Camera unavailable."
-        score = self._motion_score(self.baseline, current)
-        if score < 15.0:
-            return "Room is unchanged. Nothing to report."
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        savepath = ANOMALY_DIR / f"anomaly_{ts}.jpg"
-        cv2.imwrite(str(savepath), current)
-        analysis = self._analyze_frame(current, ANALYSIS_PROMPT)
-        if self.memory:
-            self.memory.log_anomaly(
-                description=f"Motion score {score:.0f}: {analysis[:200]}",
-                source="camera"
-            )
-        return f"I see something. Motion score: {score:.0f}\n\n{analysis}"
-
-    def start_monitoring(self, interval_seconds=30):
-        if self.monitoring:
-            return "Already monitoring."
-        if self.baseline is None:
-            self.set_baseline()
-        self.monitoring = True
-        self._monitor_thread = threading.Thread(
-            target=self._monitor_loop,
-            args=(interval_seconds,),
-            daemon=True
+        jpeg = self._request_and_wait()
+        if jpeg is None:
+            return OFFLINE_MSG
+        analysis = self._analyze(
+            jpeg,
+            "This is a live frame from a ghost-hunt camera whose scene was empty/normal at "
+            "baseline. Report ONLY what is new, moved, or unusual — if nothing stands out, "
+            "say so plainly."
         )
-        self._monitor_thread.start()
-        return f"Monitoring started. Checking every {interval_seconds} seconds."
+        if self.memory:
+            self.memory.log_anomaly(description=analysis[:200], source="camera")
+        return analysis
+
+    # ── monitor mode: Dio detects on-device and posts on motion ───────────────
+    def start_monitoring(self, interval_seconds=30):
+        # interval kept for signature compatibility; detection is on-device (motion),
+        # not a fixed timer. Server just flips Dio into monitor mode.
+        if not self.dio_host:
+            return OFFLINE_MSG
+        try:
+            requests.post(f"http://{self.dio_host}:{DIO_CAM_PORT}/monitor/start", timeout=5)
+            return "Monitor mode on — Dio will capture on motion for this investigation."
+        except Exception as e:
+            return f"Could not start Dio monitor mode: {e}"
 
     def stop_monitoring(self):
-        self.monitoring = False
+        if self.dio_host:
+            try:
+                requests.post(f"http://{self.dio_host}:{DIO_CAM_PORT}/monitor/stop", timeout=5)
+            except Exception:
+                pass
         return "Monitoring stopped."
 
-    # ── UVC PTZ (OBSBOT Tiny 4K — only valid on camera_device=0) ─────────────
-
-    def look_left(self, steps: int = 1) -> str:
-        cur = self._get_ctrl("pan_absolute")
-        new = max(PAN_MIN, cur - PAN_STEP * steps)
-        return self._set_ctrl("pan_absolute", new, f"Pan left → {new}")
-
-    def look_right(self, steps: int = 1) -> str:
-        cur = self._get_ctrl("pan_absolute")
-        new = min(PAN_MAX, cur + PAN_STEP * steps)
-        return self._set_ctrl("pan_absolute", new, f"Pan right → {new}")
-
-    def look_up(self, steps: int = 1) -> str:
-        cur = self._get_ctrl("tilt_absolute")
-        new = min(TILT_MAX, cur + TILT_STEP * steps)
-        return self._set_ctrl("tilt_absolute", new, f"Tilt up → {new}")
-
-    def look_down(self, steps: int = 1) -> str:
-        cur = self._get_ctrl("tilt_absolute")
-        new = max(TILT_MIN, cur - TILT_STEP * steps)
-        return self._set_ctrl("tilt_absolute", new, f"Tilt down → {new}")
-
-    def zoom_in(self, steps: int = 1) -> str:
-        cur = self._get_ctrl("zoom_absolute")
-        new = min(ZOOM_MAX, cur + steps)
-        return self._set_ctrl("zoom_absolute", new, f"Zoom in → {new}/{ZOOM_MAX}")
-
-    def zoom_out(self, steps: int = 1) -> str:
-        cur = self._get_ctrl("zoom_absolute")
-        new = max(ZOOM_MIN, cur - steps)
-        return self._set_ctrl("zoom_absolute", new, f"Zoom out → {new}/{ZOOM_MAX}")
-
-    def center(self) -> str:
-        results = []
-        for ctrl, val in [("pan_absolute", 0), ("tilt_absolute", 0), ("zoom_absolute", ZOOM_MIN)]:
-            ok = self._run_v4l2("--set-ctrl", f"{ctrl}={val}")
-            results.append("✓" if ok else "✗")
-        return f"Camera centered — pan 0, tilt 0, zoom reset [{' '.join(results)}]"
-
-    def ptz_status(self) -> str:
-        pan  = self._get_ctrl("pan_absolute")
-        tilt = self._get_ctrl("tilt_absolute")
-        zoom = self._get_ctrl("zoom_absolute")
-        return (f"OBSBOT PTZ — pan {pan} ({pan//3600:+d} steps), "
-                f"tilt {tilt} ({tilt//3600:+d} steps), "
-                f"zoom {zoom}/{ZOOM_MAX}")
-
-    # ── Internal helpers ──────────────────────────────────────────────────────
-
-    def _capture_frame(self):
+    # ── LLaVA ─────────────────────────────────────────────────────────────────
+    def _analyze(self, jpeg: bytes, prompt: str) -> str:
         try:
-            cam = cv2.VideoCapture(self.camera_device, cv2.CAP_V4L2)
-            cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-            cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            if not cam.isOpened():
-                log.warning(f"Cannot open {self.device_path}")
-                return None
-            for _ in range(5):
-                cam.read()
-            ret, frame = cam.read()
-            cam.release()
-            return frame if ret else None
-        except Exception as e:
-            log.error(f"Camera error ({self.device_path}): {e}")
-            return None
-
-    def _frame_to_base64(self, frame):
-        _, buffer = cv2.imencode('.jpg', frame)
-        return base64.b64encode(buffer).decode('utf-8')
-
-    def _motion_score(self, baseline, current):
-        b_gray = cv2.cvtColor(baseline, cv2.COLOR_BGR2GRAY)
-        c_gray = cv2.cvtColor(current,  cv2.COLOR_BGR2GRAY)
-        diff   = cv2.absdiff(b_gray, c_gray)
-        return float(np.mean(diff))
-
-    def _analyze_frame(self, frame, prompt):
-        try:
-            import requests
             payload = {
                 "model":  VISION_MODEL,
                 "prompt": prompt,
-                "images": [self._frame_to_base64(frame)],
-                "stream": False
+                "images": [base64.b64encode(jpeg).decode("ascii")],
+                "stream": False,
             }
             r = requests.post(OLLAMA_API_URL, json=payload, timeout=60)
             if r.status_code == 200:
@@ -197,39 +158,3 @@ class VisionModule:
             return f"Vision model error: {r.status_code}"
         except Exception as e:
             return f"Vision error: {e}"
-
-    def _monitor_loop(self, interval):
-        while self.monitoring:
-            try:
-                result = self.check_anomaly()
-                if "Nothing to report" not in result:
-                    log.info(f"Anomaly: {result[:100]}")
-            except Exception as e:
-                log.error(f"Monitor error: {e}")
-            time.sleep(interval)
-
-    def _run_v4l2(self, *args) -> bool:
-        """Run v4l2-ctl on self.device_path. Returns True on success."""
-        try:
-            subprocess.run(
-                ["v4l2-ctl", "-d", self.device_path, *args],
-                capture_output=True, timeout=4, check=True
-            )
-            return True
-        except Exception as e:
-            log.error(f"v4l2-ctl error: {e}")
-            return False
-
-    def _get_ctrl(self, ctrl: str) -> int:
-        try:
-            r = subprocess.run(
-                ["v4l2-ctl", "-d", self.device_path, "--get-ctrl", ctrl],
-                capture_output=True, text=True, timeout=4
-            )
-            return int(r.stdout.strip().split(":")[-1].strip())
-        except Exception:
-            return 0
-
-    def _set_ctrl(self, ctrl: str, value: int, msg: str) -> str:
-        ok = self._run_v4l2("--set-ctrl", f"{ctrl}={value}")
-        return msg if ok else f"PTZ error — could not set {ctrl}={value}"
