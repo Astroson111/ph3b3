@@ -69,8 +69,6 @@ _raw_origins = os.getenv(
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 RECIPE_DB_PATH          = os.getenv("RECIPE_DB_PATH", str(Path.home() / "ph3b3_data" / "recipes.db"))
-IRIS_NETWORKS_FILE      = Path.home() / "ph3b3_data" / "iris_networks.json"
-STACKCHAN_NETWORKS_FILE = Path.home() / "ph3b3_data" / "stackchan_networks.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Ph3b3] %(message)s")
 log = logging.getLogger("ph3b3")
@@ -1275,82 +1273,9 @@ async def iris_tunnel_toggle(body: dict):
         raise HTTPException(500, (r.stderr or r.stdout)[:200] or "wg-quick failed")
     return {"up": _wg_tunnel_up()}
 
-def _load_iris_networks() -> list:
-    if not IRIS_NETWORKS_FILE.exists():
-        return []
-    try:
-        return json.loads(IRIS_NETWORKS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-
-def _save_iris_networks(networks: list) -> None:
-    IRIS_NETWORKS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    IRIS_NETWORKS_FILE.write_text(json.dumps(networks, indent=2), encoding="utf-8")
-
-@app.get("/iris/networks")
-async def iris_get_networks():
-    return {"networks": _load_iris_networks()}
-
-@app.post("/iris/networks")
-async def iris_add_network(body: dict):
-    ssid = (body.get("ssid") or "").strip()
-    password = body.get("pass", "")
-    if not ssid:
-        raise HTTPException(400, "ssid required")
-    nets = _load_iris_networks()
-    for n in nets:
-        if n["ssid"] == ssid:
-            n["pass"] = password
-            _save_iris_networks(nets)
-            return {"ok": True, "updated": True}
-    nets.append({"ssid": ssid, "pass": password})
-    _save_iris_networks(nets)
-    return {"ok": True, "updated": False}
-
-@app.delete("/iris/networks/{ssid}")
-async def iris_remove_network(ssid: str):
-    nets = [n for n in _load_iris_networks() if n["ssid"] != ssid]
-    _save_iris_networks(nets)
-    return {"ok": True}
-
-# ── Stack-Chan network provisioning (mirrors Iris exactly) ────────────────────
-def _load_sc_networks() -> list:
-    if not STACKCHAN_NETWORKS_FILE.exists():
-        return []
-    try:
-        return json.loads(STACKCHAN_NETWORKS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-
-def _save_sc_networks(networks: list) -> None:
-    STACKCHAN_NETWORKS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STACKCHAN_NETWORKS_FILE.write_text(json.dumps(networks, indent=2), encoding="utf-8")
-
-@app.get("/stackchan/networks")
-async def sc_get_networks():
-    return {"networks": _load_sc_networks()}
-
-@app.post("/stackchan/networks")
-async def sc_add_network(body: dict):
-    ssid = (body.get("ssid") or "").strip()
-    password = body.get("pass", "")
-    if not ssid:
-        raise HTTPException(400, "ssid required")
-    nets = _load_sc_networks()
-    for n in nets:
-        if n["ssid"] == ssid:
-            n["pass"] = password
-            _save_sc_networks(nets)
-            return {"ok": True, "updated": True}
-    nets.append({"ssid": ssid, "pass": password})
-    _save_sc_networks(nets)
-    return {"ok": True, "updated": False}
-
-@app.delete("/stackchan/networks/{ssid}")
-async def sc_remove_network(ssid: str):
-    nets = [n for n in _load_sc_networks() if n["ssid"] != ssid]
-    _save_sc_networks(nets)
-    return {"ok": True}
+# Device WiFi network provisioning endpoints removed 2026-07-16 — Iris & Dio
+# now provision on-device via their own setup portals; the server no longer
+# stores or serves per-device network lists.
 
 # ── Mnemosyne — shared cross-device persistent memory ───────────────────────────
 # Remember / Recall / Recent / Forget. Semantic store on sqlite-vec + CPU

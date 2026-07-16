@@ -121,3 +121,51 @@ def test_expired_excluded_from_reads_and_purged(spine, wait_vec):
         assert spine._db.execute("SELECT count(*) FROM memories").fetchone()[0] == 1
         assert spine._db.execute("SELECT count(*) FROM vec_memories").fetchone()[0] == 1
     assert spine.recall("festival", top_k=3)[0]["id"] == fresh
+
+
+# ── device-name aliasing (dio ⇄ stackchan) ──────────────────────────────────
+# Dio's firmware tags memories "stackchan" (X-Ph3b3-Device), but the Phase-2
+# boot-state read uses "dio". These prove a write under either name and a read
+# by either name agree — so recent(device="dio", kind="state") finds Dio's rows.
+
+def test_device_alias_helpers():
+    import memory_spine as ms
+    assert ms.canon_device("stackchan") == "dio"
+    assert ms.canon_device("STACKCHAN") == "dio"   # case-insensitive
+    assert ms.canon_device("dio") == "dio"
+    assert ms.canon_device("iris") == "iris"       # unaliased passes through
+    assert ms.canon_device("") == ""
+    assert set(ms.device_group("dio")) == {"dio", "stackchan"}
+    assert set(ms.device_group("stackchan")) == {"dio", "stackchan"}
+    assert ms.device_group("iris") == ["iris"]
+
+
+def test_stackchan_write_is_readable_as_dio(spine):
+    # Firmware writes under "stackchan"; the boot-state read asks for "dio".
+    mid = spine.remember("Mid-story: the moon-dish, chapter 2.", "stackchan",
+                         "sc-1", kind="state")
+    stored = [m for m in spine.recent(limit=10) if m["id"] == mid][0]
+    assert stored["source_device"] == "dio"                     # canonicalised on write
+    assert spine.recent(device="dio", kind="state")[0]["id"] == mid   # the reported bug
+    assert spine.recent(device="stackchan", kind="state")[0]["id"] == mid  # either name
+
+
+def test_alias_read_finds_both_legacy_and_new_tags(spine):
+    # A legacy row tagged "stackchan" AND a new row tagged "dio" must both be
+    # visible under either device name.
+    spine.remember("legacy row", "stackchan", "s1", kind="conversation")
+    spine.remember("new row",    "dio",       "s2", kind="conversation")
+    assert len(spine.recent(device="dio")) == 2
+    assert len(spine.recent(device="stackchan")) == 2
+    # An unrelated device is unaffected.
+    spine.remember("iris row", "iris", "s3", kind="conversation")
+    assert len(spine.recent(device="iris")) == 1
+
+
+def test_recall_device_filter_honours_alias(spine, wait_vec):
+    spine.remember("The constellation villain schemes.", "stackchan", "s1", kind="conversation")
+    spine.remember("Iris logged an anomaly.",            "iris",      "s2", kind="observation")
+    assert wait_vec(spine, 2)
+    hits = spine.recall("who is the villain?", top_k=5, filters={"device": "dio"})
+    assert hits and all(h["source_device"] == "dio" for h in hits)   # stackchan row surfaces as dio
+    assert all("iris" not in h["text"].lower() for h in hits)
