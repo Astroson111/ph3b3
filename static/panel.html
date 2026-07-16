@@ -273,45 +273,6 @@
       cursor: pointer; font-family: inherit;
     }
 
-    /* ── Iris network management ── */
-    .net-list { display: flex; flex-direction: column; gap: .35rem; }
-    .net-row {
-      display: flex; align-items: center; gap: .5rem;
-      padding: .42rem .6rem;
-      background: rgba(15,6,36,.55);
-      border: 1px solid rgba(124,58,237,.2);
-      border-radius: 8px; font-size: .82rem;
-    }
-    .net-ssid { flex: 1; font-family: 'SF Mono','Cascadia Code','Consolas',monospace; color: var(--cyan); }
-    .btn-del {
-      background: none; border: 1px solid rgba(248,113,113,.35);
-      border-radius: 6px; color: var(--err);
-      padding: .18rem .52rem; font-size: .7rem;
-      cursor: pointer; font-family: inherit; flex-shrink: 0;
-    }
-    .btn-del:hover { background: rgba(248,113,113,.12); }
-    .iris-form { display: flex; flex-direction: column; gap: .5rem; }
-    .iris-form input {
-      background: rgba(43,15,95,.6);
-      border: 1px solid var(--border);
-      border-radius: 8px; padding: .55rem .75rem;
-      color: var(--text); font-size: .85rem;
-      outline: none; font-family: inherit;
-    }
-    .iris-form input:focus { border-color: var(--purple); }
-    .btn-add {
-      background: linear-gradient(135deg, var(--purple), #4c1d95);
-      border: none; border-radius: 8px;
-      color: #fff; padding: .55rem;
-      font-size: .85rem; font-weight: 700;
-      cursor: pointer; font-family: inherit;
-      transition: opacity .15s;
-    }
-    .btn-add:active { opacity: .75; }
-    .net-empty { text-align: center; color: var(--dim); font-size: .84rem; padding: 1rem 0; }
-    .net-msg { font-size: .75rem; min-height: 1.1em; }
-    .net-msg.ok  { color: var(--ok); }
-    .net-msg.err { color: var(--err); }
 
     /* ── WireGuard tunnel toggle ── */
     .wg-badge { font-size:.65rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
@@ -809,20 +770,6 @@
   <section id="paneIris" class="pane">
     <div class="card">
       <div class="card-title">
-        Iris Networks
-        <button class="btn-sm" id="netRefreshBtn">Refresh</button>
-      </div>
-      <div class="net-list" id="netList"><div class="net-empty">Loading…</div></div>
-    </div>
-    <div class="card">
-      <div class="card-title">Add Network</div>
-      <div class="net-msg" style="opacity:.85">
-        WiFi is managed on-device via the Iris-Setup portal (config sync coming).
-      </div>
-    </div>
-    <div class="ts" id="netTs"></div>
-    <div class="card">
-      <div class="card-title">
         Remote Tunnel (WireGuard)
         <span id="wgBadge" class="wg-badge wg-off">Offline</span>
       </div>
@@ -833,26 +780,6 @@
     </div>
   </section>
 
-  <!-- STACK-CHAN -->
-  <section id="paneStackchan" class="pane">
-    <div class="card">
-      <div class="card-title">
-        Dio Networks
-        <button class="btn-sm" id="scNetRefreshBtn">Refresh</button>
-      </div>
-      <div class="net-list" id="scNetList"><div class="net-empty">Loading…</div></div>
-    </div>
-    <div class="card">
-      <div class="card-title">Add Network</div>
-      <div class="iris-form">
-        <input id="scNetSsid" type="text" placeholder="SSID" autocomplete="off" autocorrect="off" autocapitalize="none">
-        <input id="scNetPass" type="password" placeholder="Password" autocomplete="off">
-        <button class="btn-add" id="scNetAddBtn">Add / Update</button>
-        <div class="net-msg" id="scNetMsg"></div>
-      </div>
-    </div>
-    <div class="ts" id="scNetTs"></div>
-  </section>
 
   <!-- KARAOKE -->
   <section id="paneKaraoke" class="pane">
@@ -1164,10 +1091,6 @@
     <svg viewBox="0 0 24 24"><path d="M12 2a5 5 0 1 0 0 10A5 5 0 0 0 12 2z"/><path d="M2 20c0-4 4.5-7 10-7s10 3 10 7"/></svg>
     Iris
   </button>
-  <button class="tab" data-pane="Stackchan">
-    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="10" r="2"/><circle cx="15" cy="10" r="2"/><path d="M8 16s1 2 4 2 4-2 4-2"/></svg>
-    Dio
-  </button>
   <button class="tab" data-pane="Karaoke">
     <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
     Karaoke
@@ -1214,8 +1137,7 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
   document.getElementById('pane' + t.dataset.pane).classList.add('active');
-  if (t.dataset.pane === 'Iris') { wgRefresh(); refreshNetworks(); }
-  if (t.dataset.pane === 'Stackchan') refreshScNetworks();   // fix: list stuck on "Loading…"
+  if (t.dataset.pane === 'Iris') wgRefresh();
 }));
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -1467,39 +1389,6 @@ if (!MIC_OK) {
   micBtn.addEventListener('touchend',   e => { e.preventDefault(); stopHold();  }, {passive:false});
 }
 
-// ── Iris network management ───────────────────────────────────────────────────
-const netList = document.getElementById('netList');
-const netMsg  = document.getElementById('netMsg');
-
-async function refreshNetworks() {
-  try {
-    const data = await fetch('/iris/networks').then(r => r.json());
-    const nets = data.networks || [];
-    if (!nets.length) {
-      netList.innerHTML = '<div class="net-empty">No networks stored.</div>';
-    } else {
-      netList.innerHTML = nets.map(n =>
-        `<div class="net-row">
-          <span class="net-ssid">${n.ssid}</span>
-          <button class="btn-del" data-ssid="${encodeURIComponent(n.ssid)}">Remove</button>
-        </div>`
-      ).join('');
-      netList.querySelectorAll('.btn-del').forEach(b => b.addEventListener('click', async () => {
-        const ssid = decodeURIComponent(b.dataset.ssid);
-        await fetch('/iris/networks/' + encodeURIComponent(ssid), {method:'DELETE'});
-        refreshNetworks();
-      }));
-    }
-    document.getElementById('netTs').textContent = 'Updated ' + now();
-  } catch {
-    netList.innerHTML = '<div class="net-empty">Error loading networks.</div>';
-  }
-}
-
-document.getElementById('netRefreshBtn').addEventListener('click', refreshNetworks);
-// Add/Update removed — Iris WiFi is configured on-device via the Iris-Setup
-// portal. The /iris/networks endpoint + read-only list stay for the Phase B
-// config-sync design (see docs/iris_config_sync_design.md).
 
 // ── WireGuard tunnel toggle ───────────────────────────────────────────────────
 async function wgRefresh() {
@@ -1535,57 +1424,6 @@ async function wgToggle() {
 }
 document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
 
-// ── Dio network management ────────────────────────────────────────────
-const scNetList = document.getElementById('scNetList');
-const scNetMsg  = document.getElementById('scNetMsg');
-
-async function refreshScNetworks() {
-  try {
-    const data = await fetch('/stackchan/networks').then(r => r.json());
-    const nets = data.networks || [];
-    if (!nets.length) {
-      scNetList.innerHTML = '<div class="net-empty">No networks stored.</div>';
-    } else {
-      scNetList.innerHTML = nets.map(n =>
-        `<div class="net-row">
-          <span class="net-ssid">${n.ssid}</span>
-          <button class="btn-del" data-ssid="${encodeURIComponent(n.ssid)}">Remove</button>
-        </div>`
-      ).join('');
-      scNetList.querySelectorAll('.btn-del').forEach(b => b.addEventListener('click', async () => {
-        const ssid = decodeURIComponent(b.dataset.ssid);
-        await fetch('/stackchan/networks/' + encodeURIComponent(ssid), {method:'DELETE'});
-        refreshScNetworks();
-      }));
-    }
-    document.getElementById('scNetTs').textContent = 'Updated ' + now();
-  } catch {
-    scNetList.innerHTML = '<div class="net-empty">Error loading networks.</div>';
-  }
-}
-
-document.getElementById('scNetRefreshBtn').addEventListener('click', refreshScNetworks);
-document.getElementById('scNetAddBtn').addEventListener('click', async () => {
-  const ssid = document.getElementById('scNetSsid').value.trim();
-  const pass = document.getElementById('scNetPass').value;
-  if (!ssid) { scNetMsg.textContent = 'SSID required'; scNetMsg.className = 'net-msg err'; return; }
-  try {
-    const res  = await fetch('/stackchan/networks', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ssid, pass}),
-    });
-    const data = await res.json();
-    scNetMsg.textContent = data.updated ? 'Updated.' : 'Added. Dio will sync on next boot.';
-    scNetMsg.className = 'net-msg ok';
-    document.getElementById('scNetSsid').value = '';
-    document.getElementById('scNetPass').value = '';
-    refreshScNetworks();
-  } catch(e) {
-    scNetMsg.textContent = 'Error: ' + e.message;
-    scNetMsg.className = 'net-msg err';
-  }
-});
 
 // ── Karaoke ───────────────────────────────────────────────────────────────────
 (function () {
