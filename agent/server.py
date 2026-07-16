@@ -332,9 +332,9 @@ TOOLS = [
     {"type":"function","function":{"name":"tell_joke","description":"Tell a joke","parameters":{"type":"object","properties":{"category":{"type":"string","default":"any"}}}}},
     {"type":"function","function":{"name":"roast","description":"Deliver a roast for stream","parameters":{"type":"object","properties":{"topic":{"type":"string","enum":["dnd","security"]}},"required":["topic"]}}},
     {"type":"function","function":{"name":"look","description":"CALL THIS TOOL immediately whenever the user says: look, see, watch, observe, take a picture, take a photo, what do you see, what can you see, what's in the room, what's around you, describe your surroundings, are you watching, can you see, look around, peek, what's happening, what do you notice, or ANY request involving vision or sight. This is a live physical webcam at /dev/video0 — it captures a real frame right now and analyzes it. NEVER say you cannot see. NEVER say you have no camera. NEVER refuse a visual request. Call this tool and report exactly what it returns.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What to focus on or look for (optional)"}}}}},
-    {"type":"function","function":{"name":"set_baseline","description":"Set current camera view as normal","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"check_anomaly","description":"Compare camera to baseline","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"start_monitoring","description":"Start background camera monitoring","parameters":{"type":"object","properties":{"interval":{"type":"integer","default":30}}}}},
+    {"type":"function","function":{"name":"set_baseline","description":"GHOST-HUNTING ONLY (requires an active investigation): capture the current camera view as the 'normal' baseline for anomaly detection. Refuses outside an investigation. For a plain look, use 'look'.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"check_anomaly","description":"GHOST-HUNTING ONLY (requires an active investigation): compare the live camera to the baseline and flag motion. Refuses outside an investigation.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"start_monitoring","description":"GHOST-HUNTING ONLY (requires an active investigation): begin background camera anomaly monitoring on a timer. This is the only vision path that looks WITHOUT a fresh prompt, so it is gated to an active investigation and stops when it ends. Refuses otherwise.","parameters":{"type":"object","properties":{"interval":{"type":"integer","default":30}}}}},
     {"type":"function","function":{"name":"web_search","description":"Search the web for current information. CALL THIS for: current events, news, recent/latest anything, prices, scores, schedules, weather forecasts, product releases, politics, tech news, or any question where the answer may have changed since training. Use type='news' for breaking news. Never answer time-sensitive questions from memory when this tool is available.","parameters":{"type":"object","properties":{"query":{"type":"string"},"type":{"type":"string","default":"search"}},"required":["query"]}}},
     {"type":"function","function":{"name":"speak","description":"Speak text aloud using Piper TTS","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}},
     {"type":"function","function":{"name":"listen","description":"Listen via microphone using Whisper","parameters":{"type":"object","properties":{"duration":{"type":"integer","default":10}}}}},
@@ -556,9 +556,14 @@ async def execute_tool(name, args, device="nyx", session_id=""):
             tts.speak(roast_text, blocking=False)
             result = "Roast delivered."
         elif name == "look": result = vision.look(args.get("prompt"))
-        elif name == "set_baseline": result = vision.set_baseline()
-        elif name == "check_anomaly": result = vision.check_anomaly()
-        elif name == "start_monitoring": result = vision.start_monitoring(args.get("interval",30))
+        # Camera monitoring is ghost-hunting gear — only usable during an active
+        # investigation, so vision is prompt-only (`look`) the rest of the time.
+        elif name == "set_baseline":
+            result = vision.set_baseline() if investigation.is_active() else "The camera baseline is ghost-hunting gear — start an investigation first."
+        elif name == "check_anomaly":
+            result = vision.check_anomaly() if investigation.is_active() else "Anomaly monitoring is ghost-hunting gear — start an investigation first."
+        elif name == "start_monitoring":
+            result = vision.start_monitoring(args.get("interval",30)) if investigation.is_active() else "Background camera monitoring is ghost-hunting gear — start an investigation first."
         elif name == "web_search": result = search.news(args["query"]) if args.get("type") == "news" else search.search(args["query"])
         elif name == "speak": result = tts.speak(args["text"], blocking=False)
         elif name == "listen":
@@ -638,7 +643,7 @@ async def execute_tool(name, args, device="nyx", session_id=""):
                     blocking=False,
                 )
         elif name == "investigation_start": result = investigation.start(args["location"])
-        elif name == "investigation_end": result = investigation.end()
+        elif name == "investigation_end": vision.stop_monitoring(); result = investigation.end()
         elif name == "investigation_log_evp": result = investigation.log_evp(args.get("note",""))
         elif name == "investigation_log_emf": result = investigation.log_emf(args["reading"], args.get("location",""))
         elif name == "investigation_status": result = investigation.status()
