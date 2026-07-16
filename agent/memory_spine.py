@@ -50,6 +50,35 @@ EMBED_DIM = 384  # all-MiniLM-L6-v2 output width; frozen — changing it changes
 VALID_ROLES = {"user", "assistant", "observation"}
 VALID_KINDS = {"conversation", "fact", "state", "observation"}
 
+# Device-name aliases. The same physical device has been tagged under more than
+# one name over time: Dio's firmware sends "stackchan" (X-Ph3b3-Device), while
+# the Phase-2 boot-state design refers to it as "dio". Without this, a read like
+# recent(device="dio", kind="state") never matches Dio's "stackchan"-tagged
+# rows. We canonicalise on write and match the whole alias group on read, so a
+# write under either name and a read by either name agree. Extend as devices
+# are renamed. Canonical form is lowercased.
+DEVICE_ALIASES = {
+    "stackchan": "dio",
+    "dio":       "dio",
+}
+
+
+def canon_device(name: str) -> str:
+    """Map a raw device tag to its canonical name (unchanged if not aliased)."""
+    n = (name or "").strip()
+    return DEVICE_ALIASES.get(n.lower(), n)
+
+
+def device_group(name: str) -> list[str]:
+    """Every raw tag that shares `name`'s canonical device, for read filters.
+    e.g. device_group("dio") == device_group("stackchan") == ["dio", "stackchan"]."""
+    canon = canon_device(name)
+    group = {raw for raw, c in DEVICE_ALIASES.items() if c == canon}
+    group.add(canon)
+    if (name or "").strip():
+        group.add(name.strip())
+    return sorted(group)
+
 # Forgetting policy (v1): only `conversation` memories expire.
 TTL_DAYS_BY_KIND = {"conversation": 30}
 
@@ -158,6 +187,7 @@ class MemorySpine:
             role = "observation"
         if kind not in VALID_KINDS:
             kind = "observation"
+        source_device = canon_device(source_device)   # unify dio/stackchan et al.
 
         # --- storage-floor seam ---------------------------------------------
         # v1: the content-safety floor gates generation, not storage (Astro's
@@ -208,6 +238,7 @@ class MemorySpine:
             return []
         filters = filters or {}
         device = filters.get("device")
+        device_grp = set(device_group(device)) if device else None  # dio+stackchan
         kind = filters.get("kind")
         session = filters.get("session")
 
@@ -231,7 +262,7 @@ class MemorySpine:
                 mid, text, ts, dev, sess, k, meta, exp = m
                 if exp is not None and exp <= now:
                     continue  # expired — excluded from recall (purge will delete it)
-                if device and dev != device:
+                if device_grp and dev not in device_grp:
                     continue
                 if kind and k != kind:
                     continue
@@ -264,7 +295,9 @@ class MemorySpine:
         if session_id:
             clauses.append("session_id = ?"); params.append(session_id)
         if device:
-            clauses.append("source_device = ?"); params.append(device)
+            grp = device_group(device)   # match dio + stackchan together
+            clauses.append(f"source_device IN ({','.join('?' * len(grp))})")
+            params.extend(grp)
         if kind:
             clauses.append("kind = ?"); params.append(kind)
         where = "WHERE " + " AND ".join(clauses)
