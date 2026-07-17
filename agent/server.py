@@ -129,8 +129,8 @@ from system_module import SystemModule
 from cybersec_module import CybersecModule
 from scam_detector import ScamDetector
 from investigation_module import InvestigationModule
-from camera_module import CameraModule
-from vision_stream_module import VisionStreamModule
+# VisionStreamModule retired 2026-07-16 — it used a local OBSBOT (/dev/video0);
+# vision is Stack-Chan-only now (frames come from Dio via /vision/frame).
 from screenshot_module import ScreenshotModule
 from recipes import RecipeStore
 import morpheus
@@ -259,6 +259,12 @@ async def basic_auth(request: Request, call_next):
 
     device = request.headers.get("X-Ph3b3-Device", "unidentified")
     _device_roster[device] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    # Learn Dio's LAN IP from her calls so vision can reach her camera (Phase 2).
+    # Part C: only adopt a NEW IP after verifying it actually runs Dio's camera
+    # server — a spoofed X-Ph3b3-Device header from any authed LAN client must
+    # not be able to hijack dio_host. Verify off the loop; skip when unchanged.
+    if device == "stackchan" and request.client and request.client.host != vision.dio_host:
+        await asyncio.to_thread(vision.try_set_dio_host, request.client.host)
     return await call_next(request)
 
 spotify = SpotifyModule()
@@ -273,7 +279,7 @@ MNEMO_RECALL_K = 3
 MNEMO_RECALL_THRESHOLD = 0.30
 occult = OccultModule()
 jokes = JokesModule()
-vision = VisionModule(memory_module=memory, camera_device=0)
+vision = VisionModule(memory_module=memory)   # Stack-Chan only — frames come from Dio
 search = SearchModule()
 tts = TTSModule()
 stt = STTModule()
@@ -291,8 +297,6 @@ system = SystemModule()
 cybersec = CybersecModule()
 scam_detector = ScamDetector()
 investigation = InvestigationModule()
-camera = CameraModule()
-vision_stream = VisionStreamModule()
 screenshot = ScreenshotModule()
 recipe_store = RecipeStore(RECIPE_DB_PATH)
 import evening_capture as _ec_mod
@@ -331,7 +335,7 @@ TOOLS = [
     {"type":"function","function":{"name":"occult_random","description":"Random paranormal fact for stream","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"tell_joke","description":"Tell a joke","parameters":{"type":"object","properties":{"category":{"type":"string","default":"any"}}}}},
     {"type":"function","function":{"name":"roast","description":"Deliver a roast for stream","parameters":{"type":"object","properties":{"topic":{"type":"string","enum":["dnd","security"]}},"required":["topic"]}}},
-    {"type":"function","function":{"name":"look","description":"CALL THIS TOOL immediately whenever the user says: look, see, watch, observe, take a picture, take a photo, what do you see, what can you see, what's in the room, what's around you, describe your surroundings, are you watching, can you see, look around, peek, what's happening, what do you notice, or ANY request involving vision or sight. This is a live physical webcam at /dev/video0 — it captures a real frame right now and analyzes it. NEVER say you cannot see. NEVER say you have no camera. NEVER refuse a visual request. Call this tool and report exactly what it returns.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What to focus on or look for (optional)"}}}}},
+    {"type":"function","function":{"name":"look","description":"CALL THIS TOOL immediately whenever the user says: look, see, watch, observe, take a picture, take a photo, what do you see, what can you see, what's in the room, what's around you, describe your surroundings, are you watching, can you see, look around, peek, what's happening, what do you notice, or ANY request involving vision or sight. This captures a live frame from Dio's (Stack-Chan's) own camera right now and analyzes it. NEVER refuse a visual request — call this tool and report exactly what it returns. If Dio is offline the tool says so; relay that, don't invent a reason you can't see.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What to focus on or look for (optional)"}}}}},
     {"type":"function","function":{"name":"set_baseline","description":"GHOST-HUNTING ONLY (requires an active investigation): capture the current camera view as the 'normal' baseline for anomaly detection. Refuses outside an investigation. For a plain look, use 'look'.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"check_anomaly","description":"GHOST-HUNTING ONLY (requires an active investigation): compare the live camera to the baseline and flag motion. Refuses outside an investigation.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"start_monitoring","description":"GHOST-HUNTING ONLY (requires an active investigation): begin background camera anomaly monitoring on a timer. This is the only vision path that looks WITHOUT a fresh prompt, so it is gated to an active investigation and stops when it ends. Refuses otherwise.","parameters":{"type":"object","properties":{"interval":{"type":"integer","default":30}}}}},
@@ -393,19 +397,10 @@ TOOLS = [
     {"type":"function","function":{"name":"investigation_log_evp","description":"Log an EVP timestamp","parameters":{"type":"object","properties":{"note":{"type":"string"}}}}},
     {"type":"function","function":{"name":"investigation_log_emf","description":"Log an EMF reading","parameters":{"type":"object","properties":{"reading":{"type":"string"},"location":{"type":"string"}},"required":["reading"]}}},
     {"type":"function","function":{"name":"investigation_status","description":"Current investigation session status","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"take_photo","description":"Take a photo with the webcam and save it to disk","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"record_video","description":"Record video with the webcam for a given number of seconds and save to disk","parameters":{"type":"object","properties":{"seconds":{"type":"integer","default":10,"description":"Duration in seconds (1-300)"}}}}},
-    {"type":"function","function":{"name":"analyze_camera","description":"Capture one camera frame and analyze it with LLaVA using a custom prompt","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What to look for or ask about the image"}},"required":["prompt"]}}},
-    {"type":"function","function":{"name":"obsbot_look_left","description":"Pan the OBSBOT camera left one step","parameters":{"type":"object","properties":{"steps":{"type":"integer","default":1}}}}},
-    {"type":"function","function":{"name":"obsbot_look_right","description":"Pan the OBSBOT camera right one step","parameters":{"type":"object","properties":{"steps":{"type":"integer","default":1}}}}},
-    {"type":"function","function":{"name":"obsbot_look_up","description":"Tilt the OBSBOT camera up one step","parameters":{"type":"object","properties":{"steps":{"type":"integer","default":1}}}}},
-    {"type":"function","function":{"name":"obsbot_look_down","description":"Tilt the OBSBOT camera down one step","parameters":{"type":"object","properties":{"steps":{"type":"integer","default":1}}}}},
-    {"type":"function","function":{"name":"obsbot_zoom_in","description":"Zoom the OBSBOT camera in","parameters":{"type":"object","properties":{"steps":{"type":"integer","default":1}}}}},
-    {"type":"function","function":{"name":"obsbot_zoom_out","description":"Zoom the OBSBOT camera out","parameters":{"type":"object","properties":{"steps":{"type":"integer","default":1}}}}},
-    {"type":"function","function":{"name":"obsbot_center","description":"Reset OBSBOT pan, tilt, and zoom to center/default","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"analyze_camera","description":"Capture one frame from Dio's camera and analyze it with LLaVA using a custom prompt","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What to look for or ask about the image"}},"required":["prompt"]}}},
     {"type":"function","function":{"name":"analyze_screenshot","description":"Analyze a screenshot or image file from disk. Pass the path to a PNG or JPG and an optional question. Uses LLaVA to describe the image, then Hermes3 to reason over that description and answer the question.","parameters":{"type":"object","properties":{"image_path":{"type":"string","description":"Absolute or relative path to the image file (PNG, JPG, JPEG, WEBP, BMP)"},"question":{"type":"string","description":"What to ask or focus on (optional — defaults to a general description and analysis)"}},"required":["image_path"]}}},
-    {"type":"function","function":{"name":"start_evening_capture","description":"Start capturing photos of the evening to the Desktop at a timed interval using the 4K AI webcam. Say 'start capturing the evening' or 'start evening capture' to trigger this.","parameters":{"type":"object","properties":{"label":{"type":"string","default":"evening","description":"Folder label — becomes part of the directory name on the Desktop"},"interval":{"type":"number","default":120,"description":"Seconds between shots"},"source":{"type":"string","default":"opencv:0@3840x2160","description":"Camera source spec — leave as default for the 4K webcam"}}}}},
-    {"type":"function","function":{"name":"stop_evening_capture","description":"Stop the evening photo capture session and report how many photos were saved to the Desktop.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"start_evening_capture","description":"Capture photos of the evening at a timed interval through Stack-Chan's (Dio's) own camera. Frames are saved to Ph3b3's captures folder (~/ph3b3_data/captures) — the only photo store. Say 'start capturing the evening' or 'start evening capture' to trigger this.","parameters":{"type":"object","properties":{"label":{"type":"string","default":"evening","description":"A short label for this capture session, for your own reference"},"interval":{"type":"number","default":120,"description":"Seconds between shots"}}}}},
+    {"type":"function","function":{"name":"stop_evening_capture","description":"Stop the evening photo capture session and report how many photos were saved to Ph3b3's captures folder.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"find_recipe","description":"Search 2+ million local recipes from the RecipeNLG corpus — fully offline, zero network, zero GPU. Three modes: 'text' for free-text search (e.g. 'carbonara', 'Thai noodles'), 'strict' to find recipes that use ALL listed ingredients, 'pantry' (default) to find the best matches from what you have on hand — results are ranked by fewest missing ingredients. You will receive structured recipe rows: narrate them to the user (title, key ingredients, directions summary, what they're missing in pantry mode). Do NOT fabricate or invent recipe details — report exactly what the tool returns.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Free-text search term — used in 'text' mode (e.g. 'carbonara', 'banana bread')"},"ingredients":{"type":"array","items":{"type":"string"},"description":"List of ingredient names — used in 'strict' and 'pantry' modes (e.g. ['chicken', 'rice', 'lime'])"},"mode":{"type":"string","enum":["text","strict","pantry"],"default":"pantry","description":"'text': free-text FTS search. 'strict': recipes using ALL listed ingredients. 'pantry': best matches from what you have, ranked by fewest missing."},"limit":{"type":"integer","default":5,"description":"Number of results to return (1–20)"}},"required":[]}}},
     {"type":"function","function":{"name":"generate_video","description":"Generate a short AI video clip from a text description, or animate an EXISTING generated image into a video. Use when the user asks to make/create/render a video, or to animate/bring an image to life. Presets: ltx-fast (~1.5 min, quick default), wan-fast (~10 min, higher quality), wan-quality (~35 min, best). The render runs in the background and holds the GPU — tell the user the ETA from the tool's reply. Report the status line the tool returns; never fabricate progress.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What the video should show and how it should move"},"preset":{"type":"string","enum":["ltx-fast","wan-fast","wan-quality"],"description":"Speed/quality preset; default ltx-fast"},"source_job_id":{"type":"string","description":"Optional job id of an existing generated image to animate (image-to-video)"}},"required":["prompt"]}}}
 ]
@@ -555,15 +550,18 @@ async def execute_tool(name, args, device="nyx", session_id=""):
             roast_text = jokes.roast_security() if args.get("topic") == "security" else jokes.roast_dnd()
             tts.speak(roast_text, blocking=False)
             result = "Roast delivered."
-        elif name == "look": result = vision.look(args.get("prompt"))
+        # vision.look/set_baseline/check_anomaly BLOCK waiting for a frame to
+        # arrive at the async /vision/frame handler — they MUST run off the event
+        # loop or the loop can't service the frame and the capture deadlocks.
+        elif name == "look": result = await asyncio.to_thread(vision.look, args.get("prompt"))
         # Camera monitoring is ghost-hunting gear — only usable during an active
         # investigation, so vision is prompt-only (`look`) the rest of the time.
         elif name == "set_baseline":
-            result = vision.set_baseline() if investigation.is_active() else "The camera baseline is ghost-hunting gear — start an investigation first."
+            result = (await asyncio.to_thread(vision.set_baseline)) if investigation.is_active() else "The camera baseline is ghost-hunting gear — start an investigation first."
         elif name == "check_anomaly":
-            result = vision.check_anomaly() if investigation.is_active() else "Anomaly monitoring is ghost-hunting gear — start an investigation first."
+            result = (await asyncio.to_thread(vision.check_anomaly)) if investigation.is_active() else "Anomaly monitoring is ghost-hunting gear — start an investigation first."
         elif name == "start_monitoring":
-            result = vision.start_monitoring(args.get("interval",30)) if investigation.is_active() else "Background camera monitoring is ghost-hunting gear — start an investigation first."
+            result = (await asyncio.to_thread(vision.start_monitoring, args.get("interval",30))) if investigation.is_active() else "Background camera monitoring is ghost-hunting gear — start an investigation first."
         elif name == "web_search": result = search.news(args["query"]) if args.get("type") == "news" else search.search(args["query"])
         elif name == "speak": result = tts.speak(args["text"], blocking=False)
         elif name == "listen":
@@ -643,20 +641,11 @@ async def execute_tool(name, args, device="nyx", session_id=""):
                     blocking=False,
                 )
         elif name == "investigation_start": result = investigation.start(args["location"])
-        elif name == "investigation_end": vision.stop_monitoring(); result = investigation.end()
+        elif name == "investigation_end": await asyncio.to_thread(vision.stop_monitoring); result = investigation.end()
         elif name == "investigation_log_evp": result = investigation.log_evp(args.get("note",""))
         elif name == "investigation_log_emf": result = investigation.log_emf(args["reading"], args.get("location",""))
         elif name == "investigation_status": result = investigation.status()
-        elif name == "take_photo": result = camera.take_photo()
-        elif name == "record_video": result = camera.record_video(args.get("seconds", 10))
-        elif name == "analyze_camera": result = vision_stream.analyze(args["prompt"])
-        elif name == "obsbot_look_left":  result = vision.look_left(args.get("steps", 1))
-        elif name == "obsbot_look_right": result = vision.look_right(args.get("steps", 1))
-        elif name == "obsbot_look_up":    result = vision.look_up(args.get("steps", 1))
-        elif name == "obsbot_look_down":  result = vision.look_down(args.get("steps", 1))
-        elif name == "obsbot_zoom_in":    result = vision.zoom_in(args.get("steps", 1))
-        elif name == "obsbot_zoom_out":   result = vision.zoom_out(args.get("steps", 1))
-        elif name == "obsbot_center":     result = vision.center()
+        elif name == "analyze_camera": result = await asyncio.to_thread(vision.look, args["prompt"])
         elif name == "analyze_screenshot":
             _img_path = args["image_path"]
             _analysis = screenshot.analyze(_img_path, args.get("question", ""))
@@ -668,13 +657,10 @@ async def execute_tool(name, args, device="nyx", session_id=""):
                     pass
             result = "Screenshot analysis delivered."
         elif name == "start_evening_capture":
-            _ec_source = args.get("source", "opencv:0@3840x2160")
-            if not (_ec_source.startswith("opencv:") or _ec_source.startswith("http")):
-                _ec_source = "opencv:0@3840x2160"
             result = _ec_mod.tool_start_evening_capture(
                 args.get("label", "evening"),
                 args.get("interval", 120),
-                _ec_source,
+                vision.capture,          # Stack-Chan only — pull each frame from Dio
             )
         elif name == "stop_evening_capture":
             result = _ec_mod.tool_stop_evening_capture()
@@ -1075,6 +1061,18 @@ async def _run_chat_pipeline(body: dict, request: Request):
             log.exception("Mnemosyne auto-capture failed")
 
     return response
+
+
+@app.post("/vision/frame")
+async def vision_frame(request: Request):
+    """Dio POSTs a JPEG here after a capture request, or on motion during a hunt.
+    Body is the raw JPEG. Saved to ~/ph3b3_data/captures and held as the latest
+    frame for look()/check_anomaly to consume."""
+    jpeg = await request.body()
+    if not jpeg:
+        raise HTTPException(400, "empty frame")
+    saved = await asyncio.to_thread(vision.receive_frame, jpeg)
+    return {"ok": True, "saved": saved, "bytes": len(jpeg)}
 
 
 @app.post("/chat")
