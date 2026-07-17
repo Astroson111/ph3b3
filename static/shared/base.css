@@ -265,3 +265,19 @@
         }
         #gallery-lightbox.open { display: flex; }
         #gallery-lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 6px; }
+
+        /* ── Portal switch button (light ⇄ main) ─────────────────────────── */
+        #portal-switch {
+            display: inline-flex; align-items: center; gap: 5px;
+            background: #18182e; color: #cbb8ff; text-decoration: none;
+            border: 1px solid #3d3660; border-radius: 999px;
+            padding: 3px 12px; margin-left: 10px; flex-shrink: 0;
+            font: inherit; font-size: 12px; letter-spacing: 1px;
+            cursor: pointer; transition: background .15s, border-color .15s, color .15s;
+        }
+        #portal-switch:hover { background: #221b3d; color: #e2d9f3; }
+        #portal-switch .moon { font-size: 14px; line-height: 1; }
+        #portal-switch.to-main  .moon { color: #a855f7; }   /* destination: purple main */
+        #portal-switch.to-main:hover  { border-color: #a855f7; }
+        #portal-switch.to-light .moon { color: #5ddff2; }   /* destination: cyan light */
+        #portal-switch.to-light:hover { border-color: #5ddff2; }
