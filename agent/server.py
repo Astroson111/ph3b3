@@ -209,6 +209,7 @@ TOOLS = [
     {"type":"function","function":{"name":"add_note","description":"Save a quick note","parameters":{"type":"object","properties":{"content":{"type":"string"},"tag":{"type":"string","default":"general"}},"required":["content"]}}},
     {"type":"function","function":{"name":"read_last_note","description":"Read the most recent note","parameters":{"type":"object","properties":{"tag":{"type":"string"}}}}},
     {"type":"function","function":{"name":"search_notes","description":"Search notes","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}},
+    {"type":"function","function":{"name":"get_current_time","description":"Get the current local date and time. Call this whenever the user asks what time it is, what day it is, or the date.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"start_timer","description":"Set a named timer","parameters":{"type":"object","properties":{"name":{"type":"string"},"seconds":{"type":"integer"}},"required":["name","seconds"]}}},
     {"type":"function","function":{"name":"pomodoro","description":"Start a Pomodoro timer","parameters":{"type":"object","properties":{"minutes":{"type":"integer","default":25}}}}},
     {"type":"function","function":{"name":"add_reminder","description":"Add a persistent reminder","parameters":{"type":"object","properties":{"text":{"type":"string"},"when":{"type":"string"},"tag":{"type":"string","default":"general"}},"required":["text"]}}},
@@ -364,6 +365,7 @@ async def execute_tool(name, args):
         elif name == "add_note": result = notes.add(args["content"], args.get("tag","general"))
         elif name == "read_last_note": result = notes.read_last(args.get("tag"))
         elif name == "search_notes": result = notes.search(args["query"])
+        elif name == "get_current_time": result = time.strftime("%-I:%M %p on %A, %B %-d, %Y")
         elif name == "start_timer": result = timer.set_timer(args["name"], args["seconds"], callback=tts.speak)
         elif name == "pomodoro": result = timer.pomodoro(args.get("minutes",25), callback=tts.speak)
         elif name == "add_reminder": result = reminders.add(args["text"], args.get("when"), args.get("tag","general"))
@@ -451,6 +453,19 @@ async def execute_tool(name, args):
     return result
 
 ONE_SHOT_TOOLS = frozenset({"tell_joke", "roast"})
+
+def _time_intercept(user_msg: str):
+    """Answer time/date questions DETERMINISTICALLY from THIS device's system clock,
+    before the LLM ever sees them. hermes3-8B ignores tool results AND injected
+    context for dates (strong ~2023 training prior), so it can't be trusted for the
+    current date. Returns the answer string for a time/date question, else None."""
+    ul = (user_msg or "").lower()
+    if any(k in ul for k in ("what time", "what's the time", "whats the time", "time is it",
+                             "current time", "what day is it", "what's the date", "whats the date",
+                             "date is it", "current date", "what year")):
+        return time.strftime("Right now it's %-I:%M %p on %A, %B %-d, %Y.")
+    return None
+
 
 async def chat_with_tools(messages):
     async with httpx.AsyncClient(timeout=120) as client:
@@ -552,6 +567,11 @@ async def chat_endpoint(body: dict):
     if "soul" in user_msg.lower():
         tts.soul_line()
     session.add("user", user_msg)
+    _det = _time_intercept(user_msg)
+    if _det is not None:
+        session.add("assistant", _det)
+        audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, _det)
+        return {"response": _det, "audio": audio_b64}
     response, updated = await chat_with_tools(session.messages())
     session.history = updated
     session.add("assistant", response)
@@ -593,6 +613,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str = "default"):
                 tts.soul_line()
             await websocket.send_json({"status":"thinking"})
             session.add("user", user_input)
+            _det = _time_intercept(user_input)
+            if _det is not None:
+                session.add("assistant", _det)
+                await websocket.send_json({"response": _det, "emotion": "neutral"})
+                continue
             response, updated = await chat_with_tools(session.messages())
             session.history = updated
             session.add("assistant", response)

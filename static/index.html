@@ -243,11 +243,16 @@
             padding: 10px 14px; background: #13132c; border-bottom: 1px solid #2a1f4a;
         }
         #gallery-back {
-            background: #7c3aed; color: #fff; border: none; border-radius: 4px;
-            font: inherit; font-weight: bold; letter-spacing: 1px;
-            padding: 6px 14px; cursor: pointer; transition: background .15s;
+            background: #7c3aed; color: #fff; border: none; border-radius: 6px;
+            font: inherit; font-size: 15px; font-weight: bold; letter-spacing: 1px;
+            padding: 10px 20px; cursor: pointer;
+            transition: background .15s, box-shadow .15s;
+            box-shadow: 0 0 0 1px #a855f7, 0 2px 10px rgba(124,58,237,.5);
         }
-        #gallery-back:hover { background: #a855f7; }
+        #gallery-back:hover {
+            background: #a855f7;
+            box-shadow: 0 0 0 1px #c084fc, 0 2px 14px rgba(168,85,247,.7);
+        }
         #gallery-title { color: #cbb8ff; letter-spacing: 2px; font-weight: bold; }
         #gallery-count { color: #5b5280; font-size: 12px; }
         #gallery-grid {
@@ -326,7 +331,7 @@
 
     <div id="gallery-overlay">
         <div id="gallery-bar">
-            <button id="gallery-back" title="Return to chat">← CHAT</button>
+            <button id="gallery-back" title="Return to chat">← BACK TO CHAT</button>
             <span id="gallery-title">GALLERY</span>
             <span id="gallery-count"></span>
         </div>
