@@ -99,6 +99,13 @@ class VisionModule:
             return OFFLINE_MSG
         return self._analyze(jpeg, prompt or ANALYSIS_PROMPT)
 
+    # ── timed capture (evening capture): pull + persist a frame, no analysis ──
+    def capture(self) -> bool:
+        """Pull one frame from Dio and persist it to CAPTURE_DIR (no LLaVA).
+        Returns True if a frame landed, False if Dio is offline / timed out.
+        _request_and_wait already saves the frame via receive_frame."""
+        return self._request_and_wait() is not None
+
     # ── ghost-hunt: baseline / anomaly (gated to an investigation in dispatch) ─
     def set_baseline(self):
         jpeg = self._request_and_wait()
