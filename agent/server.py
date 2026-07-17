@@ -260,8 +260,11 @@ async def basic_auth(request: Request, call_next):
     device = request.headers.get("X-Ph3b3-Device", "unidentified")
     _device_roster[device] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     # Learn Dio's LAN IP from her calls so vision can reach her camera (Phase 2).
-    if device == "stackchan" and request.client:
-        vision.set_dio_host(request.client.host)
+    # Part C: only adopt a NEW IP after verifying it actually runs Dio's camera
+    # server — a spoofed X-Ph3b3-Device header from any authed LAN client must
+    # not be able to hijack dio_host. Verify off the loop; skip when unchanged.
+    if device == "stackchan" and request.client and request.client.host != vision.dio_host:
+        await asyncio.to_thread(vision.try_set_dio_host, request.client.host)
     return await call_next(request)
 
 spotify = SpotifyModule()
@@ -547,15 +550,18 @@ async def execute_tool(name, args, device="nyx", session_id=""):
             roast_text = jokes.roast_security() if args.get("topic") == "security" else jokes.roast_dnd()
             tts.speak(roast_text, blocking=False)
             result = "Roast delivered."
-        elif name == "look": result = vision.look(args.get("prompt"))
+        # vision.look/set_baseline/check_anomaly BLOCK waiting for a frame to
+        # arrive at the async /vision/frame handler — they MUST run off the event
+        # loop or the loop can't service the frame and the capture deadlocks.
+        elif name == "look": result = await asyncio.to_thread(vision.look, args.get("prompt"))
         # Camera monitoring is ghost-hunting gear — only usable during an active
         # investigation, so vision is prompt-only (`look`) the rest of the time.
         elif name == "set_baseline":
-            result = vision.set_baseline() if investigation.is_active() else "The camera baseline is ghost-hunting gear — start an investigation first."
+            result = (await asyncio.to_thread(vision.set_baseline)) if investigation.is_active() else "The camera baseline is ghost-hunting gear — start an investigation first."
         elif name == "check_anomaly":
-            result = vision.check_anomaly() if investigation.is_active() else "Anomaly monitoring is ghost-hunting gear — start an investigation first."
+            result = (await asyncio.to_thread(vision.check_anomaly)) if investigation.is_active() else "Anomaly monitoring is ghost-hunting gear — start an investigation first."
         elif name == "start_monitoring":
-            result = vision.start_monitoring(args.get("interval",30)) if investigation.is_active() else "Background camera monitoring is ghost-hunting gear — start an investigation first."
+            result = (await asyncio.to_thread(vision.start_monitoring, args.get("interval",30))) if investigation.is_active() else "Background camera monitoring is ghost-hunting gear — start an investigation first."
         elif name == "web_search": result = search.news(args["query"]) if args.get("type") == "news" else search.search(args["query"])
         elif name == "speak": result = tts.speak(args["text"], blocking=False)
         elif name == "listen":
@@ -635,11 +641,11 @@ async def execute_tool(name, args, device="nyx", session_id=""):
                     blocking=False,
                 )
         elif name == "investigation_start": result = investigation.start(args["location"])
-        elif name == "investigation_end": vision.stop_monitoring(); result = investigation.end()
+        elif name == "investigation_end": await asyncio.to_thread(vision.stop_monitoring); result = investigation.end()
         elif name == "investigation_log_evp": result = investigation.log_evp(args.get("note",""))
         elif name == "investigation_log_emf": result = investigation.log_emf(args["reading"], args.get("location",""))
         elif name == "investigation_status": result = investigation.status()
-        elif name == "analyze_camera": result = vision.look(args["prompt"])
+        elif name == "analyze_camera": result = await asyncio.to_thread(vision.look, args["prompt"])
         elif name == "analyze_screenshot":
             _img_path = args["image_path"]
             _analysis = screenshot.analyze(_img_path, args.get("question", ""))
