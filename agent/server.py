@@ -14,7 +14,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 from dotenv import load_dotenv
@@ -721,6 +721,23 @@ async def index():
         media_type="text/html",
         headers={"Cache-Control": "no-store, must-revalidate"},
     )
+
+@app.get("/light")
+async def light_noslash():
+    # Canonicalize to the trailing-slash form so the PWA scope "/light/" matches.
+    return RedirectResponse(url="/light/", status_code=307)
+
+
+@app.get("/light/")
+async def light_index():
+    # Light portal: thin shell over /static/shared/* (same origin, same Basic
+    # auth realm as "/"). The basic_auth middleware gates this like every route.
+    return Response(
+        content=(ROOT / "static" / "light" / "index.html").read_text(encoding="utf-8"),
+        media_type="text/html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
+
 
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 
