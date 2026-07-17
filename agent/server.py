@@ -756,6 +756,25 @@ async def chat_portal_index():
     )
 
 
+@app.get("/light/sw.js")
+async def light_sw():
+    # Served from within /light/ so the service worker may claim that scope.
+    return Response(
+        content=(ROOT / "static" / "light" / "sw.js").read_text(encoding="utf-8"),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store, must-revalidate", "Service-Worker-Allowed": "/light/"},
+    )
+
+
+@app.get("/chat/sw.js")
+async def chat_sw():
+    return Response(
+        content=(ROOT / "static" / "chat" / "sw.js").read_text(encoding="utf-8"),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store, must-revalidate", "Service-Worker-Allowed": "/chat/"},
+    )
+
+
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 
 if __name__ == "__main__":

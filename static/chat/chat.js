@@ -22,3 +22,10 @@ async function initApp() {
 }
 
 if (authHeader) initApp();
+
+// ── PWA service worker (installability; no-op on insecure/HTTP contexts) ─────
+// navigator.serviceWorker is undefined on non-secure origins, so this silently
+// does nothing over plain HTTP and activates once on HTTPS.
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/chat/sw.js', { scope: '/chat/' }).catch(() => {});
+}
