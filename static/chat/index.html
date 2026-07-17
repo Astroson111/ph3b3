@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ph3b3</title>
+    <link rel="icon" href="/static/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+    <link rel="manifest" href="/static/site.webmanifest">
+    <meta name="theme-color" content="#A855F7">
+    <link rel="stylesheet" href="/static/shared/base.css">
+</head>
+<body>
+    <div id="login-overlay">
+        <div id="login-box">
+            <div id="login-title">PH3B3</div>
+            <div id="login-sub">Enter access code</div>
+            <input id="login-pass" type="password" placeholder="password…" autocomplete="current-password" />
+            <button id="login-btn">CONNECT</button>
+            <div id="login-err"></div>
+        </div>
+    </div>
+
+    <div id="topbar">
+        <span id="status-dot">●</span>
+        <span id="status-text">Idle</span>
+        <span id="img-mode" title="image generation mode">
+            <span id="img-mode-label">IMG</span>
+            <button class="img-mode-btn" data-mode="gallery">GALLERY</button>
+            <button class="img-mode-btn" data-mode="live">LIVE</button>
+            <button class="img-mode-btn" data-mode="auto">AUTO</button>
+        </span>
+        <button id="gallery-open" title="Browse the image gallery">🖼 GALLERY</button>
+        <select id="server-select" title="Ph3b3 server" style="background:#1a1530;color:#cbb8ff;border:1px solid #3d3660;border-radius:4px;font:inherit;font-size:11px;padding:2px 4px;margin:0 4px;"></select>
+        <button id="server-edit" title="Edit servers (Iris / Dio / Nyx / local)" style="background:none;border:none;color:#8b7fb8;cursor:pointer;font-size:13px;padding:0 4px;">⚙</button>
+        <span id="title">PH3B3</span>
+        <button id="power-off" title="Shut down Ph3b3 (stops the server)">⏻ OFF</button>
+    </div>
+
+    <div id="chat"></div>
+    <div id="sep"></div>
+
+    <div id="inputbar">
+        <div id="left-col">
+            <div id="input-wrap">
+                <input id="msg-input" type="text" placeholder="type a message…" autocomplete="off" />
+            </div>
+            <div id="ctrl-row">
+                <button id="send-btn">SEND</button>
+                <div id="mode-box">
+                    <button id="btn-auto">AUTO</button>
+                    <button id="btn-hold">HOLD</button>
+                </div>
+            </div>
+        </div>
+        <div id="right-col">
+            <canvas id="mic-canvas" width="120" height="120"></canvas>
+            <div id="mic-label">hold to speak</div>
+        </div>
+    </div>
+
+    <div id="gallery-overlay">
+        <div id="gallery-bar">
+            <button id="gallery-back" title="Return to chat">← BACK TO CHAT</button>
+            <span id="gallery-title">GALLERY</span>
+            <span id="gallery-count"></span>
+        </div>
+        <div id="gallery-grid"></div>
+    </div>
+    <div id="gallery-lightbox"><img id="gallery-lightbox-img" alt="" /></div>
+
+    <!-- Shared core (classic scripts, one global scope, run in document order) -->
+    <script src="/static/shared/api.js"></script>
+    <script src="/static/shared/chat.js"></script>
+    <script src="/static/shared/mic.js"></script>
+    <script src="/static/shared/gallery.js"></script>
+    <!-- Main-portal bootstrap -->
+    <script src="/static/chat/chat.js"></script>
+</body>
+</html>

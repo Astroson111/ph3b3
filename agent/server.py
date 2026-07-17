@@ -739,6 +739,23 @@ async def light_index():
     )
 
 
+@app.get("/chat")
+async def chat_portal_noslash():
+    # GET /chat -> /chat/ (POST /chat remains the chat API endpoint, unaffected).
+    return RedirectResponse(url="/chat/", status_code=307)
+
+
+@app.get("/chat/")
+async def chat_portal_index():
+    # Main portal: fresh shell over the same /static/shared/* core, same origin
+    # and Basic-auth realm as "/" and "/light/".
+    return Response(
+        content=(ROOT / "static" / "chat" / "index.html").read_text(encoding="utf-8"),
+        media_type="text/html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
+
+
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 
 if __name__ == "__main__":
