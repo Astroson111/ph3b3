@@ -716,9 +716,13 @@ async def power_off():
 
 @app.get("/")
 async def index():
-    return Response(
-        content=(ROOT / "static" / "index.html").read_text(encoding="utf-8"),
-        media_type="text/html",
+    # Option B: the root is the light portal's front door (this is the Light node).
+    # static/index.html is retained on disk as a fallback but is no longer served
+    # here — the /light/ shell + shared core replace it. Temporary (307) redirect
+    # so it stays revertible and isn't permanently cached by browsers/PWAs.
+    return RedirectResponse(
+        url="/light/",
+        status_code=307,
         headers={"Cache-Control": "no-store, must-revalidate"},
     )
 
