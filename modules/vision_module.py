@@ -260,7 +260,12 @@ class VisionModule:
         jpeg = self._local_capture()
         if jpeg is None:
             return "The webcam isn't available right now, so I can't see anything to describe."
-        return self._analyze(jpeg, ANALYSIS_PROMPT)
+        desc = self._analyze(jpeg, ANALYSIS_PROMPT)
+        # Relay hint (same pattern as look's _SRC_TAG) — without it the weak model
+        # summarises the result away ("I received the analysis") instead of telling
+        # the user what's in view.
+        return (f"{desc}\n\n[This is what the computer's webcam sees right now. You DID "
+                f"see this — relay this description to the user as what you see.]")
 
     # ── timed capture (evening capture): pull + persist a frame, no analysis ──
     def capture(self) -> bool:

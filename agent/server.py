@@ -327,10 +327,12 @@ _SEARCH_NUDGE = (
     "Do not answer from training memory when real-time data is available via a tool."
 )
 _CAPTURE_NUDGE = (
-    "\n\nCamera boundary: only take a photo or look through the webcam when the user "
-    "EXPLICITLY asks (the take_photo / describe_view tools). Never capture proactively, "
-    "ambiently, on a timer, or to illustrate or double-check something — a capture only "
-    "ever happens on a direct request, and it always happens out loud."
+    "\n\nCamera: when the user asks to take a photo, or asks what you see / what's in "
+    "view / to look through the webcam, CALL the tool right away (take_photo or "
+    "describe_view) — actually capture the frame; do NOT deflect, ask for permission, "
+    "say the camera is off, or answer from memory. That is a direct request and you act "
+    "on it. The ONLY limit: never capture proactively, ambiently, on a timer, or to "
+    "double-check something the user didn't ask you to see. Every capture happens out loud."
 )
 SYSTEM_PROMPT = load_soul() + _SEARCH_NUDGE + _CAPTURE_NUDGE + memory.as_context()
 
@@ -350,9 +352,9 @@ TOOLS = [
     {"type":"function","function":{"name":"occult_random","description":"Random paranormal fact for stream","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"tell_joke","description":"Tell a joke","parameters":{"type":"object","properties":{"category":{"type":"string","default":"any"}}}}},
     {"type":"function","function":{"name":"roast","description":"Deliver a roast for stream","parameters":{"type":"object","properties":{"topic":{"type":"string","enum":["dnd","security"]}},"required":["topic"]}}},
-    {"type":"function","function":{"name":"look","description":"Capture and analyze a live frame from DIO's (Stack-Chan's) OWN camera specifically. Use this ONLY when the user asks about what DIO sees / to look through Stack-Chan's eyes / what's in front of Dio. For a plain photo with the computer's webcam use take_photo; for 'what do you see' through the computer's webcam use describe_view. If Dio is offline the tool says so; relay it, don't invent a reason you can't see.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What to focus on or look for (optional)"}}}}},
+    {"type":"function","function":{"name":"look","description":"Capture from DIO's (Stack-Chan's) OWN camera. Use this ONLY when the user's message explicitly names DIO or STACK-CHAN (e.g. 'what does Dio see', 'look through Stack-Chan's camera', 'what is Dio looking at'). For EVERY other vision request — 'what do you see', 'what do you see right now', 'look', 'describe what you see', or taking a photo — do NOT use this; use describe_view (to describe) or take_photo (to snap a photo), which use the computer's webcam. If Dio is offline the tool says so; relay it.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What to focus on or look for (optional)"}}}}},
     {"type":"function","function":{"name":"take_photo","description":"Take a single photo with the computer's webcam. CALL THIS ONLY when the user EXPLICITLY asks to take a picture or photo — e.g. 'take a picture', 'take a photo', 'snap a photo', 'grab a photo', 'get a picture'. NEVER call it on your own initiative, never proactively, never to check or illustrate something, never on a timer, never repeatedly — ONLY on a direct, explicit request. Saves the photo (it appears in the captures feed) and confirms out loud.","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"describe_view","description":"Take ONE photo with the computer's webcam and describe what is in view. CALL THIS ONLY when the user EXPLICITLY asks what you see / to look through the computer's webcam — e.g. 'what do you see', 'describe what you see', 'what's in front of the webcam', 'look through the camera'. NEVER call proactively or on your own initiative. Exactly one frame, saved to the captures feed and then described.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"describe_view","description":"Take ONE photo with the computer's webcam and describe what is in view. CALL THIS whenever the user asks what you see / what's in view / to look through the webcam — e.g. 'what do you see', 'what do you see right now', 'describe what you see', 'look through the camera'. Take the frame and describe it directly — do NOT deflect, ask for confirmation, say the camera is off, or answer from memory. Do NOT call it proactively or on your own initiative. Exactly one frame, saved to the captures feed and then described.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"set_baseline","description":"GHOST-HUNTING ONLY (requires an active investigation): capture the current camera view as the 'normal' baseline for anomaly detection. Refuses outside an investigation. For a plain look, use 'look'.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"check_anomaly","description":"GHOST-HUNTING ONLY (requires an active investigation): compare the live camera to the baseline and flag motion. Refuses outside an investigation.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"start_monitoring","description":"GHOST-HUNTING ONLY (requires an active investigation): begin background camera anomaly monitoring on a timer. This is the only vision path that looks WITHOUT a fresh prompt, so it is gated to an active investigation and stops when it ends. Refuses otherwise.","parameters":{"type":"object","properties":{"interval":{"type":"integer","default":30}}}}},
@@ -785,6 +787,15 @@ async def chat_with_tools(messages, device="nyx", session_id=""):
                 fn = tc["function"]["name"]
                 args = tc["function"]["arguments"]
                 if isinstance(args, str): args = json.loads(args)
+                # Deterministic vision routing: `look` (Dio's camera) fires ONLY when
+                # the user named Dio/Stack-Chan; every other vision request goes to
+                # describe_view (the webcam). The 8B model otherwise sends
+                # "what do you see" to look ~75% of the time (→ Dio-offline deflection).
+                if fn in ("look", "describe_view"):
+                    _lu = next((str(m.get("content", "")) for m in reversed(messages)
+                                if m.get("role") == "user"), "").lower()
+                    fn = "look" if ("dio" in _lu or "stackchan" in _lu
+                                    or "stack-chan" in _lu or "stack chan" in _lu) else "describe_view"
                 if fn in ONE_SHOT_TOOLS and fn in tool_cache:
                     result = tool_cache[fn]
                 else:
@@ -941,6 +952,26 @@ def _looks_like_self_echo(session_id, text):
     return sum(1 for w in tw if w in pw) / len(tw) >= 0.6
 
 
+def _vision_intercept(msg: str):
+    """Detect an EXPLICIT vision request and return which tool to force — routed
+    BEFORE the LLM so the weak 8B model can't deflect or mis-route it (deterministic
+    per Captain decision). Tight patterns ONLY, so a capture never fires except on a
+    direct ask (the explicit-only rule). `look` (Dio's camera) only when Dio is named;
+    every other vision request → describe_view (the webcam)."""
+    m = (msg or "").lower()
+    if any(p in m for p in ("take a photo", "take a picture", "take photo", "take pic",
+                            "snap a photo", "snap a picture", "grab a photo",
+                            "get a photo", "get a picture")):
+        return "take_photo"
+    if any(p in m for p in ("what do you see", "what can you see", "what you see",
+                            "what are you seeing", "describe what you see", "what's in view",
+                            "whats in view", "look through the webcam", "look through the camera",
+                            "look through your camera")):
+        dio = ("dio" in m or "stackchan" in m or "stack-chan" in m or "stack chan" in m)
+        return "look" if dio else "describe_view"
+    return None
+
+
 async def _run_chat_pipeline(body: dict, request: Request):
     """Shared /chat brain: wake-gate → recitation → triage → inference.
 
@@ -1053,8 +1084,25 @@ async def _run_chat_pipeline(body: dict, request: Request):
         except Exception:
             log.exception("Mnemosyne auto-recall failed")
 
-    response, updated = await chat_with_tools(
-        messages, device=(device or "nyx"), session_id=body.get("session_id", "default"))
+    _vt = _vision_intercept(user_msg)
+    if _vt:
+        # Forced vision path — guarantee the right tool fires (skip the LLM's choice).
+        if _vt == "take_photo":
+            response = await asyncio.to_thread(vision.take_photo)
+        elif _vt == "look":
+            response = await asyncio.to_thread(vision.look, None)
+        else:
+            response = await asyncio.to_thread(vision.describe_view)
+        # Spoken directly, so strip the LLM-relay tag and unwrap a fully-bracketed
+        # status message (brackets must not be read aloud).
+        if "\n\n[" in response:
+            response = response.split("\n\n[")[0].strip()
+        if response.startswith("[") and response.endswith("]"):
+            response = response[1:-1].strip()
+        updated = messages
+    else:
+        response, updated = await chat_with_tools(
+            messages, device=(device or "nyx"), session_id=body.get("session_id", "default"))
     _fire_pending_video()   # start any render queued by generate_video — AFTER the reply
 
     # Strip ephemeral notes before storing so they never accumulate in history
