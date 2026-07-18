@@ -47,6 +47,12 @@ DIO_WAIT     = float(os.getenv("PH3B3_DIO_WAIT", "3"))   # s to wait for Dio bef
 # window, _grab_frame uses it directly and never pulls :8080 — the pull path is
 # retired as the primary route (kept only as a fallback for the legacy flow).
 PUSH_FRESH_S = float(os.getenv("PH3B3_PUSH_FRESH_S", "8"))
+# dio_host verification backoff: every Dio POST (heartbeat/transcribe/frame) whose
+# source IP isn't yet the adopted dio_host triggers a :8080/cam/status probe. When
+# that probe keeps failing (e.g. her :8080 server is down but she's pushing frames
+# fine), it re-probes AND re-logs on every request — a flood. After a failed verify
+# for a host, skip re-probing/re-logging it for this window.
+DIO_VERIFY_COOLDOWN = float(os.getenv("PH3B3_DIO_VERIFY_COOLDOWN", "300"))
 
 
 def _truthy(v) -> bool:
@@ -86,6 +92,7 @@ class VisionModule:
         self._latest_jpeg = None          # bytes of the most recent frame Dio POSTed
         self._latest_ts   = 0.0
         self._latest_src  = None          # 'stackchan' | 'webcam' — origin of _latest_jpeg
+        self._dio_verify_fail = {}        # host -> last failed-verify ts (dio_host probe backoff)
         self._frame_event = threading.Event()
         self._cam_lock    = threading.Lock()   # serialize webcam grabs (V4L2 is single-open)
         self.baseline_jpeg = None         # baseline frame for ghost-hunt anomaly checks
@@ -106,6 +113,11 @@ class VisionModule:
         firmware change (a per-device token would be the stronger future fix)."""
         if not host or host == self.dio_host:
             return False
+        # Backoff: a host that recently failed verification isn't re-probed or
+        # re-logged until the cooldown passes — this is what silences the flood.
+        now = time.time()
+        if now - self._dio_verify_fail.get(host, 0.0) < DIO_VERIFY_COOLDOWN:
+            return False
         try:
             r = requests.get(f"http://{host}:{DIO_CAM_PORT}/cam/status", timeout=2)
             ok = (r.status_code == 200 and "camera" in r.text)
@@ -113,10 +125,15 @@ class VisionModule:
             ok = False
         if ok:
             self.dio_host = host
+            self._dio_verify_fail.pop(host, None)
             log.info(f"Dio camera host → {host} (verified via /cam/status)")
             return True
-        log.warning(f"Rejected dio_host change to {host}: no camera server at "
-                    f":{DIO_CAM_PORT} (possible spoofed X-Ph3b3-Device header)")
+        self._dio_verify_fail[host] = now
+        # Logged at most once per cooldown window (not on every request). Not
+        # necessarily a spoof: her push path is authenticated and works without
+        # dio_host; this only gates the legacy :8080 pull/monitor fallback.
+        log.warning(f"dio_host {host} unverified: no camera server at :{DIO_CAM_PORT} "
+                    f"(legacy pull disabled for it; push path unaffected)")
         return False
 
     # ── inbound frame from Dio (POST /vision/frame) ───────────────────────────
