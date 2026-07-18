@@ -21,8 +21,9 @@ from __future__ import annotations
 import threading
 from typing import Callable, Optional
 
-# A capture returns True if a frame was pulled from Dio and saved, else False.
-CaptureFn = Callable[[], bool]
+# A capture returns a spoken-ready description string when a frame was pulled +
+# analyzed, or None/False when Dio (and any allowed fallback) gave no frame.
+CaptureFn = Callable[[], Optional[str]]
 
 
 class EveningCapture:
@@ -47,8 +48,14 @@ class EveningCapture:
 
     def _tick(self) -> None:
         try:
-            if self._capture and self._capture():
+            result = self._capture() if self._capture else None
+            if result:
                 self.count += 1
+                # Narrate this frame aloud. capture_and_describe returns a spoken
+                # description string; if a plain bool source is wired instead,
+                # there's nothing to say — just count it.
+                if self.announce and isinstance(result, str):
+                    self.announce(result)
             else:
                 self.errors += 1          # Dio offline or no frame — skip, never fatal
         except Exception as e:

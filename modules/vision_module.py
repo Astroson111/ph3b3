@@ -54,6 +54,14 @@ ANALYSIS_PROMPT = (
     "Be direct and precise. Note anything that seems out of place."
 )
 
+# Shorter prompt for the evening-capture narration: each frame is spoken aloud
+# on a timer, so keep it to a sentence or two rather than a full report.
+NARRATION_PROMPT = (
+    "You are Ph3b3, glancing through your camera. In ONE or two short sentences, "
+    "say what you see right now — people, objects, what's happening. Plain and brief. "
+    "If the frame is dark or empty, say that plainly — do not invent detail."
+)
+
 # Every result names the source so the LLM tells the user which eyes it used.
 # NOTE: phrased as SUCCESS and appended AFTER the description — an earlier version
 # that led with "(... Stack-Chan offline)" made the weak local model latch onto
@@ -240,6 +248,19 @@ class VisionModule:
         The frame is named by source (dio_/webcam_); _grab_frame does the save."""
         jpeg, _src = self._grab_frame()
         return jpeg is not None
+
+    # ── timed capture WITH per-frame narration (evening capture) ──────────────
+    def capture_and_describe(self):
+        """Pull one frame AND analyze it with LLaVA. Returns a SPOKEN-READY
+        description (plain prose — no bracketed _SRC_TAG, since evening capture
+        speaks this straight through TTS), or None if no frame arrived. When the
+        webcam fallback is used, the source is said plainly so it never passes as
+        Dio's eyes."""
+        jpeg, src = self._grab_frame()
+        if jpeg is None:
+            return None
+        desc = self._analyze(jpeg, NARRATION_PROMPT)
+        return f"Through the backup PC camera, {desc}" if src == "webcam" else desc
 
     # ── ghost-hunt: baseline / anomaly (gated to an investigation in dispatch) ─
     def set_baseline(self):
