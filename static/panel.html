@@ -290,6 +290,23 @@
     .fleet-drift { grid-column: 2 / -1; justify-self: start; font-size: .6rem; font-weight: 700;
       color: var(--magenta); background: rgba(233,30,140,.15); border: 1px solid rgba(233,30,140,.3);
       padding: .05rem .35rem; border-radius: 4px; margin-top: .1rem; }
+
+    /* ── Captures feed (Argus tab, below Fleet) ── */
+    .cap-filters { margin-left: auto; display: flex; gap: .35rem; }
+    .cap-sel { background: rgba(43,15,95,.6); border: 1px solid var(--border); color: var(--dim);
+      font-size: .68rem; border-radius: 6px; padding: .12rem .4rem; font-family: inherit; }
+    .cap-feed { display: flex; flex-direction: column; gap: .5rem; }
+    .cap-card { border: 1px solid var(--border); border-radius: 9px;
+      background: rgba(15,6,36,.55); padding: .55rem .65rem; }
+    .cap-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .3rem; }
+    .cap-dev { font-size: .64rem; font-weight: 700; color: var(--cyan);
+      text-transform: uppercase; letter-spacing: .05em; }
+    .cap-ts { font-size: .64rem; color: var(--dim); margin-left: auto;
+      font-family: 'SF Mono','Consolas',monospace; }
+    .cap-transcript { font-size: .82rem; color: var(--text); line-height: 1.45; margin-bottom: .4rem; }
+    .cap-transcript.empty { color: var(--dim); font-style: italic; }
+    .cap-card audio { width: 100%; height: 34px; }
+    .cap-thumb { max-width: 100%; max-height: 180px; border-radius: 6px; display: block; cursor: pointer; }
     .btn-sm {
       margin-left: auto;
       background: rgba(124,58,237,.18); border: 1px solid var(--border);
@@ -1055,7 +1072,19 @@
       <div class="card-title">Fleet</div>
       <div class="fleet-list" id="fleetList"><div class="dev-empty">Loading…</div></div>
     </div>
-    <!-- Captures feed (Part 2) mounts below here -->
+    <div class="card">
+      <div class="card-title">Captures
+        <span class="cap-filters">
+          <select class="cap-sel" id="capDevice"><option value="">all devices</option></select>
+          <select class="cap-sel" id="capType">
+            <option value="">all types</option>
+            <option value="audio">audio</option>
+            <option value="image">images</option>
+          </select>
+        </span>
+      </div>
+      <div class="cap-feed" id="capFeed"><div class="dev-empty">Loading…</div></div>
+    </div>
     <div class="ts" id="argusTs"></div>
   </section>
 
@@ -1309,6 +1338,43 @@ async function refreshFleet() {
 }
 refreshFleet();
 setInterval(refreshFleet, 30_000);
+
+// ── Argus captures feed (below Fleet in the Argus tab) ────────────────────────
+const capFeed = document.getElementById('capFeed');
+const capDevice = document.getElementById('capDevice');
+const capType = document.getElementById('capType');
+function capEsc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+async function refreshCaptures() {
+  if (!capFeed) return;
+  try {
+    const q = new URLSearchParams();
+    if (capDevice.value) q.set('device', capDevice.value);
+    if (capType.value)   q.set('type', capType.value);
+    const data = await fetch('/captures/feed?' + q).then(r => r.json());
+    if (capDevice.options.length <= 1 && data.devices) {
+      data.devices.forEach(d => { const o = document.createElement('option'); o.value = d; o.textContent = d; capDevice.appendChild(o); });
+    }
+    const items = data.items || [];
+    if (!items.length) { capFeed.innerHTML = '<div class="dev-empty">No captures yet.</div>'; return; }
+    capFeed.innerHTML = items.map(it => {
+      const head = `<div class="cap-head"><span class="cap-dev">${capEsc(it.device)}</span><span class="cap-ts">${fleetAgo(it.ts)}</span></div>`;
+      const url = '/captures/file/' + encodeURIComponent(it.name);
+      if (it.type === 'audio') {
+        // transcript is PRIMARY content; player sits beneath it
+        const t = it.transcript ? `<div class="cap-transcript">${capEsc(it.transcript)}</div>`
+                                : `<div class="cap-transcript empty">(no transcript)</div>`;
+        return `<div class="cap-card">${head}${t}<audio controls preload="none" src="${url}"></audio></div>`;
+      }
+      return `<div class="cap-card">${head}<img class="cap-thumb" loading="lazy" src="${url}" onclick="window.open(this.src,'_blank')" alt="capture"></div>`;
+    }).join('');
+  } catch {
+    capFeed.innerHTML = '<div class="dev-empty">Captures unavailable.</div>';
+  }
+}
+if (capDevice) capDevice.addEventListener('change', refreshCaptures);
+if (capType)   capType.addEventListener('change', refreshCaptures);
+refreshCaptures();
+setInterval(refreshCaptures, 30_000);
 
 // ── WAV encoding ─────────────────────────────────────────────────────────────
 function encodeWAV(chunks, sampleRate) {

@@ -303,6 +303,8 @@ recipe_store = RecipeStore(RECIPE_DB_PATH)
 # (this endpoint records; the argus-daemon writes self-heartbeats + prunes).
 from argus import ArgusStore, load_contracts, iso as _argus_iso
 argus_store = ArgusStore()
+from captures import CapturesFeed, CAPTURES_DIR as _CAPTURES_DIR   # read-only artifact feed (Argus Part 2)
+captures_feed = CapturesFeed()
 import evening_capture as _ec_mod
 _ec_mod.alba_say = lambda t: _tts_announce(t)
 
@@ -406,6 +408,7 @@ TOOLS = [
     {"type":"function","function":{"name":"start_evening_capture","description":"Capture photos of the evening at a timed interval through Stack-Chan's (Dio's) own camera. Frames are saved to Ph3b3's captures folder (~/ph3b3_data/captures) — the only photo store. Say 'start capturing the evening' or 'start evening capture' to trigger this.","parameters":{"type":"object","properties":{"label":{"type":"string","default":"evening","description":"A short label for this capture session, for your own reference"},"interval":{"type":"number","default":120,"description":"Seconds between shots"}}}}},
     {"type":"function","function":{"name":"stop_evening_capture","description":"Stop the evening photo capture session and report how many photos were saved to Ph3b3's captures folder.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"fleet_status","description":"Get a READ-ONLY summary of the device fleet (Nyx, Iris, Dio/Stack-Chan, Argus): each device's health state — HEALTHY, SICK, or SILENT — plus last-seen, battery, and signal. CALL THIS when asked 'how's the fleet', 'are the devices online/breathing', 'is Iris/Dio awake', battery/device status, or anything about fleet health. Observability only — you cannot restart, reflash, or change any device.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"last_capture","description":"Get the most recent capture transcript from a device (read-only). CALL THIS when asked 'what did Iris last hear', 'what was the last thing recorded/captured', 'read me the last recording', or about a device's most recent recording.","parameters":{"type":"object","properties":{"device":{"type":"string","description":"Which device: 'iris' or 'stackchan' (optional — omit for the most recent across all devices)"}}}}},
     {"type":"function","function":{"name":"find_recipe","description":"Search 2+ million local recipes from the RecipeNLG corpus — fully offline, zero network, zero GPU. Three modes: 'text' for free-text search (e.g. 'carbonara', 'Thai noodles'), 'strict' to find recipes that use ALL listed ingredients, 'pantry' (default) to find the best matches from what you have on hand — results are ranked by fewest missing ingredients. You will receive structured recipe rows: narrate them to the user (title, key ingredients, directions summary, what they're missing in pantry mode). Do NOT fabricate or invent recipe details — report exactly what the tool returns.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Free-text search term — used in 'text' mode (e.g. 'carbonara', 'banana bread')"},"ingredients":{"type":"array","items":{"type":"string"},"description":"List of ingredient names — used in 'strict' and 'pantry' modes (e.g. ['chicken', 'rice', 'lime'])"},"mode":{"type":"string","enum":["text","strict","pantry"],"default":"pantry","description":"'text': free-text FTS search. 'strict': recipes using ALL listed ingredients. 'pantry': best matches from what you have, ranked by fewest missing."},"limit":{"type":"integer","default":5,"description":"Number of results to return (1–20)"}},"required":[]}}},
     {"type":"function","function":{"name":"generate_video","description":"Generate a short AI video clip from a text description, or animate an EXISTING generated image into a video. Use when the user asks to make/create/render a video, or to animate/bring an image to life. Presets: ltx-fast (~1.5 min, quick default), wan-fast (~10 min, higher quality), wan-quality (~35 min, best). The render runs in the background and holds the GPU — tell the user the ETA from the tool's reply. Report the status line the tool returns; never fabricate progress.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What the video should show and how it should move"},"preset":{"type":"string","enum":["ltx-fast","wan-fast","wan-quality"],"description":"Speed/quality preset; default ltx-fast"},"source_job_id":{"type":"string","description":"Optional job id of an existing generated image to animate (image-to-video)"}},"required":["prompt"]}}}
 ]
@@ -671,6 +674,10 @@ async def execute_tool(name, args, device="nyx", session_id=""):
             result = _ec_mod.tool_stop_evening_capture()
         elif name == "fleet_status":
             result = _fleet_status_summary()
+        elif name == "last_capture":
+            lc = captures_feed.last_transcript(args.get("device"))
+            result = (f"Last capture from {lc['device']}: \"{lc['transcript']}\"" if lc
+                      else "No captures with a transcript yet.")
         elif name == "find_recipe":
             _mode  = args.get("mode", "pantry")
             _limit = max(1, min(int(args.get("limit", 5)), 20))
@@ -2085,6 +2092,36 @@ async def argus_fleet():
                   "age_s": int(now - self_last) if self_last else None},
         "generated": _argus_iso(int(now)),
     }
+
+def _persist_capture(device: str, audio_bytes: bytes, text: str) -> None:
+    """Argus Part 2: persist a device voice recording + its transcript sidecar to
+    the captures store, so it shows in the read-only captures feed. The .wav and
+    .txt share a filename stem — pairing is by name, no DB. Only real device
+    recordings that produced a transcript are kept."""
+    if device not in ("iris", "stackchan") or not text:
+        return
+    try:
+        stem = _CAPTURES_DIR / f"{device}_{datetime.now():%Y%m%d_%H%M%S_%f}"
+        stem.with_suffix(".wav").write_bytes(audio_bytes)
+        stem.with_suffix(".txt").write_text(text, encoding="utf-8")
+    except Exception as e:
+        log.warning("[CAPTURES] persist failed: %s", e)
+
+@app.get("/captures/feed")
+async def captures_list(device: str = None, type: str = None):
+    """Read-only reverse-chron feed of device artifacts (audio/transcripts/images).
+    Behind the portal auth gate (the middleware). Filter by device and/or type."""
+    return {"items": captures_feed.feed(device=device, type=type),
+            "devices": captures_feed.devices()}
+
+@app.get("/captures/file/{name}")
+async def captures_file(name: str):
+    """Serve a capture from where it already lives — no copies. Auth-gated by the
+    middleware; path-traversal is refused (only files inside the store resolve)."""
+    p = captures_feed.resolve(name)
+    if p is None:
+        raise HTTPException(404, "capture not found")
+    return FileResponse(p)
 
 @app.get("/")
 async def index():
