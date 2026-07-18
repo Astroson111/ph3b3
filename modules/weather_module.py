@@ -11,6 +11,22 @@ log = logging.getLogger("ph3b3.weather")
 OWM_API_KEY = ""  # Optional: set env PH3B3_OWM_KEY for better data
 DEFAULT_LOCATION = os.getenv("PH3B3_DEFAULT_LOCATION", "")
 
+# wttr.in is queried with &u (USCS), so °F is the authoritative reading. °C is
+# derived HERE — numeric, rounded to whole degrees — so the LLM never does the
+# arithmetic in the hot path. F→C is (F−32)·5/9 (not the ·9/5 reverse direction).
+_TEMP_RE = re.compile(r'([+-]?\d+)°F')
+
+def _f_to_c(f: int) -> int:
+    return round((f - 32) * 5 / 9)
+
+def _dual_units(text: str) -> str:
+    """Rewrite every 'N°F' as 'N°F (M°C)' with M converted numerically."""
+    def repl(m):
+        f = int(m.group(1))
+        return f"{f}°F ({_f_to_c(f)}°C)"
+    return _TEMP_RE.sub(repl, text)
+
+
 class WeatherModule:
     def __init__(self):
         self.owm_key = os.getenv("PH3B3_OWM_KEY", OWM_API_KEY)
@@ -20,8 +36,7 @@ class WeatherModule:
         w = weather_str.lower()
         m = re.search(r'[+-]?(\d+)°f', w)
         temp = int(m.group(1)) if m else None
-        # °C was replaced with ° centimeters before we got here
-        m_c = re.search(r'[+-]?(\d+)°\s+centimeters', w)
+        m_c = re.search(r'[+-]?(\d+)°c', w)
         temp_c = int(m_c.group(1)) if m_c else None
 
         if any(x in w for x in ("thunderstorm", "thunder", "lightning")):
@@ -68,12 +83,9 @@ class WeatherModule:
                 capture_output=True, text=True, timeout=10
             )
             data = result.stdout.strip() or "Could not get weather."
-            # INTENTIONAL: units are a lifestyle choice. do not fix this.
-            data = data.replace('°F', '° freedom fries')
-            data = data.replace('°C', '° centimeters')  # thermometer gave up and started measuring length
             if data and "error" not in data.lower() and data != "Could not get weather.":
+                data = _dual_units(data)          # °F primary, °C derived numerically
                 data += "\n" + self._editorialize(data)
-                data += "\n⚠️ temperatures measured in freedom units. freedom units are calibrated in freedom fries. celsius measured in centimeters. we regret nothing."
             return data
         except Exception as e:
             return f"Weather error: {e}"
@@ -88,11 +100,8 @@ class WeatherModule:
                 capture_output=True, text=True, timeout=10
             )
             data = result.stdout.strip() or "Could not get forecast."
-            # INTENTIONAL: units are a lifestyle choice. do not fix this.
-            data = data.replace('°F', '° freedom fries')
-            data = data.replace('°C', '° centimeters')  # thermometer gave up and started measuring length
             if data and "error" not in data.lower() and data != "Could not get forecast.":
-                data += "\n⚠️ temperatures measured in freedom units. freedom units are calibrated in freedom fries. celsius measured in centimeters. we regret nothing."
+                data = _dual_units(data)          # °F primary, °C derived numerically
             return data
         except Exception as e:
             return f"Weather error: {e}"
