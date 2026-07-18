@@ -1,0 +1,18 @@
+[Unit]
+Description=Argus — Ph3b3 fleet observability daemon (self-heartbeat + retention)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=astroson
+WorkingDirectory=/home/astroson/Desktop/ph3b3_v2
+ExecStart=/home/astroson/Desktop/ph3b3_v2/.venv/bin/python agent/argus_daemon.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=argus
+
+[Install]
+WantedBy=multi-user.target
