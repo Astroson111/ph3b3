@@ -326,7 +326,13 @@ _SEARCH_NUDGE = (
     "weather, or anything that changes over time — use your tools first. "
     "Do not answer from training memory when real-time data is available via a tool."
 )
-SYSTEM_PROMPT = load_soul() + _SEARCH_NUDGE + memory.as_context()
+_CAPTURE_NUDGE = (
+    "\n\nCamera boundary: only take a photo or look through the webcam when the user "
+    "EXPLICITLY asks (the take_photo / describe_view tools). Never capture proactively, "
+    "ambiently, on a timer, or to illustrate or double-check something — a capture only "
+    "ever happens on a direct request, and it always happens out loud."
+)
+SYSTEM_PROMPT = load_soul() + _SEARCH_NUDGE + _CAPTURE_NUDGE + memory.as_context()
 
 TOOLS = [
     {"type":"function","function":{"name":"spotify_play","description":"Play music on Spotify","parameters":{"type":"object","properties":{"query":{"type":"string"},"type":{"type":"string","default":"track"}},"required":["query"]}}},
@@ -344,7 +350,9 @@ TOOLS = [
     {"type":"function","function":{"name":"occult_random","description":"Random paranormal fact for stream","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"tell_joke","description":"Tell a joke","parameters":{"type":"object","properties":{"category":{"type":"string","default":"any"}}}}},
     {"type":"function","function":{"name":"roast","description":"Deliver a roast for stream","parameters":{"type":"object","properties":{"topic":{"type":"string","enum":["dnd","security"]}},"required":["topic"]}}},
-    {"type":"function","function":{"name":"look","description":"CALL THIS TOOL immediately whenever the user says: look, see, watch, observe, take a picture, take a photo, what do you see, what can you see, what's in the room, what's around you, describe your surroundings, are you watching, can you see, look around, peek, what's happening, what do you notice, or ANY request involving vision or sight. This captures a live frame from Dio's (Stack-Chan's) own camera right now and analyzes it. NEVER refuse a visual request — call this tool and report exactly what it returns. If Dio is offline the tool says so; relay that, don't invent a reason you can't see.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What to focus on or look for (optional)"}}}}},
+    {"type":"function","function":{"name":"look","description":"Capture and analyze a live frame from DIO's (Stack-Chan's) OWN camera specifically. Use this ONLY when the user asks about what DIO sees / to look through Stack-Chan's eyes / what's in front of Dio. For a plain photo with the computer's webcam use take_photo; for 'what do you see' through the computer's webcam use describe_view. If Dio is offline the tool says so; relay it, don't invent a reason you can't see.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What to focus on or look for (optional)"}}}}},
+    {"type":"function","function":{"name":"take_photo","description":"Take a single photo with the computer's webcam. CALL THIS ONLY when the user EXPLICITLY asks to take a picture or photo — e.g. 'take a picture', 'take a photo', 'snap a photo', 'grab a photo', 'get a picture'. NEVER call it on your own initiative, never proactively, never to check or illustrate something, never on a timer, never repeatedly — ONLY on a direct, explicit request. Saves the photo (it appears in the captures feed) and confirms out loud.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"describe_view","description":"Take ONE photo with the computer's webcam and describe what is in view. CALL THIS ONLY when the user EXPLICITLY asks what you see / to look through the computer's webcam — e.g. 'what do you see', 'describe what you see', 'what's in front of the webcam', 'look through the camera'. NEVER call proactively or on your own initiative. Exactly one frame, saved to the captures feed and then described.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"set_baseline","description":"GHOST-HUNTING ONLY (requires an active investigation): capture the current camera view as the 'normal' baseline for anomaly detection. Refuses outside an investigation. For a plain look, use 'look'.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"check_anomaly","description":"GHOST-HUNTING ONLY (requires an active investigation): compare the live camera to the baseline and flag motion. Refuses outside an investigation.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"start_monitoring","description":"GHOST-HUNTING ONLY (requires an active investigation): begin background camera anomaly monitoring on a timer. This is the only vision path that looks WITHOUT a fresh prompt, so it is gated to an active investigation and stops when it ends. Refuses otherwise.","parameters":{"type":"object","properties":{"interval":{"type":"integer","default":30}}}}},
@@ -565,6 +573,8 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         # arrive at the async /vision/frame handler — they MUST run off the event
         # loop or the loop can't service the frame and the capture deadlocks.
         elif name == "look": result = await asyncio.to_thread(vision.look, args.get("prompt"))
+        elif name == "take_photo": result = await asyncio.to_thread(vision.take_photo)
+        elif name == "describe_view": result = await asyncio.to_thread(vision.describe_view)
         # Camera monitoring is ghost-hunting gear — only usable during an active
         # investigation, so vision is prompt-only (`look`) the rest of the time.
         elif name == "set_baseline":

@@ -241,6 +241,27 @@ class VisionModule:
         desc = self._analyze(jpeg, prompt or ANALYSIS_PROMPT)
         return f"{desc}{_SRC_TAG[src]}"
 
+    # ── explicit user-invoked webcam photo (take_photo / describe_view) ───────
+    # These use the LOCAL webcam directly (not Dio), fire ONLY on a direct user
+    # request, and always land the frame in CAPTURE_DIR so the Argus feed is the
+    # audit trail. Never call these proactively. One frame per call — no burst.
+    def take_photo(self):
+        """Grab ONE webcam frame and save it (webcam_*.jpg → captures/Argus feed).
+        Returns a spoken confirmation, or a plain failure if no camera. No retry."""
+        jpeg = self._local_capture()          # grabs + persists a webcam_*.jpg
+        if jpeg is None:
+            return "The webcam isn't available right now, so I couldn't take the photo."
+        return "Photo taken — saved to your captures."
+
+    def describe_view(self):
+        """Grab ONE webcam frame, save it (captures/Argus feed), then describe it
+        with LLaVA. Returns the description, or a plain failure if no camera. The
+        frame is always on record so the description has its source image."""
+        jpeg = self._local_capture()
+        if jpeg is None:
+            return "The webcam isn't available right now, so I can't see anything to describe."
+        return self._analyze(jpeg, ANALYSIS_PROMPT)
+
     # ── timed capture (evening capture): pull + persist a frame, no analysis ──
     def capture(self) -> bool:
         """Pull one frame (Dio, else webcam fallback) and persist it to
