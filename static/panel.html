@@ -265,6 +265,31 @@
       font-family: 'SF Mono','Cascadia Code','Consolas',monospace;
     }
     .dev-empty { text-align: center; color: var(--dim); font-size: .84rem; padding: 1.25rem 0; }
+
+    /* ── Argus fleet card (lives in the Status pane) ── */
+    .fleet-list { display: flex; flex-direction: column; gap: .4rem; }
+    .fleet-row {
+      display: grid; grid-template-columns: 9px auto 1fr auto; gap: .3rem .6rem;
+      align-items: center; padding: .45rem .65rem; border-radius: 8px;
+      background: rgba(15,6,36,.55); border: 1px solid rgba(124,58,237,.2);
+    }
+    .fleet-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .fleet-dot.ok   { background: var(--ok);   box-shadow: 0 0 6px var(--ok); }
+    .fleet-dot.warn { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+    .fleet-dot.err  { background: var(--err);  box-shadow: none; }
+    .fleet-name { font-size: .84rem; font-weight: 700; color: var(--text); }
+    .fleet-state { font-size: .62rem; font-weight: 700; letter-spacing: .04em;
+      padding: .1rem .4rem; border-radius: 5px; }
+    .fleet-state.ok   { color: var(--ok);   background: rgba(74,222,128,.14); }
+    .fleet-state.warn { color: var(--warn); background: rgba(251,191,36,.14); }
+    .fleet-state.err  { color: var(--err);  background: rgba(248,113,113,.14); }
+    .fleet-meta { grid-column: 4; justify-self: end; font-size: .72rem; color: var(--dim);
+      font-family: 'SF Mono','Consolas',monospace; font-variant-numeric: tabular-nums; }
+    .fleet-last { grid-column: 2 / 4; font-size: .68rem; color: var(--dim);
+      font-family: 'SF Mono','Consolas',monospace; }
+    .fleet-drift { grid-column: 2 / -1; justify-self: start; font-size: .6rem; font-weight: 700;
+      color: var(--magenta); background: rgba(233,30,140,.15); border: 1px solid rgba(233,30,140,.3);
+      padding: .05rem .35rem; border-radius: 4px; margin-top: .1rem; }
     .btn-sm {
       margin-left: auto;
       background: rgba(124,58,237,.18); border: 1px solid var(--border);
@@ -1024,16 +1049,14 @@
 
   </section>
 
-  <!-- DEVICES -->
-  <section id="paneDevices" class="pane">
+  <!-- ARGUS — fleet observability (this slot was the Devices tab) -->
+  <section id="paneArgus" class="pane">
     <div class="card">
-      <div class="card-title">
-        Device Roster
-        <button class="btn-sm" id="rosterBtn">Refresh</button>
-      </div>
-      <div class="dev-list" id="devList"><div class="dev-empty">Loading…</div></div>
+      <div class="card-title">Fleet</div>
+      <div class="fleet-list" id="fleetList"><div class="dev-empty">Loading…</div></div>
     </div>
-    <div class="ts" id="rosterTs"></div>
+    <!-- Captures feed (Part 2) mounts below here -->
+    <div class="ts" id="argusTs"></div>
   </section>
 
   <section id="paneAriadne" class="pane">
@@ -1086,9 +1109,9 @@
     <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
     Karaoke
   </button>
-  <button class="tab" data-pane="Devices">
-    <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-    Devices
+  <button class="tab" data-pane="Argus">
+    <svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+    Argus
   </button>
   <button class="tab" data-pane="Morpheus">
     <svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -1242,34 +1265,50 @@ async function send() {
 sendBtn.addEventListener('click', send);
 cin.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
 
-// ── device roster ─────────────────────────────────────────────────────────────
-const devList = document.getElementById('devList');
-
-async function refreshRoster() {
+// ── Argus fleet card (in the Status pane) ─────────────────────────────────────
+const fleetList = document.getElementById('fleetList');
+const FLEET_DOT = { HEALTHY: 'ok', SICK: 'warn', SILENT: 'err' };
+function fleetAgo(ts) {
+  if (!ts) return 'never';
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (s < 60)    return s + 's ago';
+  if (s < 3600)  return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+async function refreshFleet() {
+  if (!fleetList) return;
   try {
-    const data = await fetch('/devices').then(r => r.json());
-    const entries = Object.entries(data.devices || {});
-    if (!entries.length) {
-      devList.innerHTML = '<div class="dev-empty">No devices seen yet.</div>';
-    } else {
-      entries.sort(([a],[b]) => a === 'unidentified' ? 1 : b === 'unidentified' ? -1 : a.localeCompare(b));
-      devList.innerHTML = entries.map(([name, ts]) => {
-        const u = name === 'unidentified';
-        return `<div class="dev-row">
-          <span class="dev-dot${u?' unid':''}"></span>
-          <span class="dev-name${u?' unid':''}">${name}</span>
-          <span class="dev-ts">${ts}</span>
-        </div>`;
-      }).join('');
-    }
-    document.getElementById('rosterTs').textContent = 'Updated ' + now();
+    const data = await fetch('/argus/fleet').then(r => r.json());
+    const fleet = data.fleet || [];
+    if (!fleet.length) { fleetList.innerHTML = '<div class="dev-empty">No devices known yet.</div>'; return; }
+    fleetList.innerHTML = fleet.map(d => {
+      const dot = FLEET_DOT[d.state] || 'err';
+      const meta = [];
+      if (d.battery != null) meta.push(d.battery + '%');
+      if (d.rssi != null)    meta.push(d.rssi + ' dBm');
+      // SILENT shows "last seen …"; others show freshness of the last report.
+      const last = d.state === 'SILENT'
+        ? 'last seen ' + fleetAgo(d.last_seen) + ' — was ' + (d.reason || '')
+        : (d.last_seen ? fleetAgo(d.last_seen) : '');
+      const drift = d.firmware_drift ? '<span class="fleet-drift">firmware hash drift</span>' : '';
+      return `<div class="fleet-row">
+        <span class="fleet-dot ${dot}"></span>
+        <span class="fleet-name">${d.device_id}</span>
+        <span class="fleet-state ${dot}">${d.state}</span>
+        <span class="fleet-meta">${meta.join(' · ')}</span>
+        <span class="fleet-last">${last}</span>
+        ${drift}
+      </div>`;
+    }).join('');
+    const ats = document.getElementById('argusTs');
+    if (ats) ats.textContent = 'Updated ' + now();
   } catch {
-    devList.innerHTML = '<div class="dev-empty">Error loading roster.</div>';
+    fleetList.innerHTML = '<div class="dev-empty">Fleet status unavailable.</div>';
   }
 }
-refreshRoster();
-setInterval(refreshRoster, 30_000);
-document.getElementById('rosterBtn').addEventListener('click', refreshRoster);
+refreshFleet();
+setInterval(refreshFleet, 30_000);
 
 // ── WAV encoding ─────────────────────────────────────────────────────────────
 function encodeWAV(chunks, sampleRate) {

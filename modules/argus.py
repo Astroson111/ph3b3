@@ -172,7 +172,14 @@ class ArgusStore:
     def evaluate(self, device_id: str, contracts: dict, now: Optional[float] = None) -> dict:
         now = now if now is not None else time.time()
         contract = contract_for(contracts, device_id)
-        row = self.latest(device_id)
+        # Argus derives its own state from its dedicated self-heartbeat table (the
+        # "own table" the daemon writes to) — so the daemon's gap shows as SILENT.
+        if device_id == "argus":
+            ts = self.self_last()
+            row = {"ts": ts, "battery": None, "rssi": None, "free_heap": None,
+                   "uptime": None, "firmware_hash": None} if ts else None
+        else:
+            row = self.latest(device_id)
 
         drift = False
         expected = contract.get("expected_firmware_hash")

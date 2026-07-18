@@ -299,6 +299,10 @@ scam_detector = ScamDetector()
 investigation = InvestigationModule()
 screenshot = ScreenshotModule()
 recipe_store = RecipeStore(RECIPE_DB_PATH)
+# Argus — read-only fleet observability. Ingest rides the verified check-in path
+# (this endpoint records; the argus-daemon writes self-heartbeats + prunes).
+from argus import ArgusStore, load_contracts, iso as _argus_iso
+argus_store = ArgusStore()
 import evening_capture as _ec_mod
 _ec_mod.alba_say = lambda t: _tts_announce(t)
 
@@ -401,6 +405,7 @@ TOOLS = [
     {"type":"function","function":{"name":"analyze_screenshot","description":"Analyze a screenshot or image file from disk. Pass the path to a PNG or JPG and an optional question. Uses LLaVA to describe the image, then Hermes3 to reason over that description and answer the question.","parameters":{"type":"object","properties":{"image_path":{"type":"string","description":"Absolute or relative path to the image file (PNG, JPG, JPEG, WEBP, BMP)"},"question":{"type":"string","description":"What to ask or focus on (optional — defaults to a general description and analysis)"}},"required":["image_path"]}}},
     {"type":"function","function":{"name":"start_evening_capture","description":"Capture photos of the evening at a timed interval through Stack-Chan's (Dio's) own camera. Frames are saved to Ph3b3's captures folder (~/ph3b3_data/captures) — the only photo store. Say 'start capturing the evening' or 'start evening capture' to trigger this.","parameters":{"type":"object","properties":{"label":{"type":"string","default":"evening","description":"A short label for this capture session, for your own reference"},"interval":{"type":"number","default":120,"description":"Seconds between shots"}}}}},
     {"type":"function","function":{"name":"stop_evening_capture","description":"Stop the evening photo capture session and report how many photos were saved to Ph3b3's captures folder.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"fleet_status","description":"Get a READ-ONLY summary of the device fleet (Nyx, Iris, Dio/Stack-Chan, Argus): each device's health state — HEALTHY, SICK, or SILENT — plus last-seen, battery, and signal. CALL THIS when asked 'how's the fleet', 'are the devices online/breathing', 'is Iris/Dio awake', battery/device status, or anything about fleet health. Observability only — you cannot restart, reflash, or change any device.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"find_recipe","description":"Search 2+ million local recipes from the RecipeNLG corpus — fully offline, zero network, zero GPU. Three modes: 'text' for free-text search (e.g. 'carbonara', 'Thai noodles'), 'strict' to find recipes that use ALL listed ingredients, 'pantry' (default) to find the best matches from what you have on hand — results are ranked by fewest missing ingredients. You will receive structured recipe rows: narrate them to the user (title, key ingredients, directions summary, what they're missing in pantry mode). Do NOT fabricate or invent recipe details — report exactly what the tool returns.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Free-text search term — used in 'text' mode (e.g. 'carbonara', 'banana bread')"},"ingredients":{"type":"array","items":{"type":"string"},"description":"List of ingredient names — used in 'strict' and 'pantry' modes (e.g. ['chicken', 'rice', 'lime'])"},"mode":{"type":"string","enum":["text","strict","pantry"],"default":"pantry","description":"'text': free-text FTS search. 'strict': recipes using ALL listed ingredients. 'pantry': best matches from what you have, ranked by fewest missing."},"limit":{"type":"integer","default":5,"description":"Number of results to return (1–20)"}},"required":[]}}},
     {"type":"function","function":{"name":"generate_video","description":"Generate a short AI video clip from a text description, or animate an EXISTING generated image into a video. Use when the user asks to make/create/render a video, or to animate/bring an image to life. Presets: ltx-fast (~1.5 min, quick default), wan-fast (~10 min, higher quality), wan-quality (~35 min, best). The render runs in the background and holds the GPU — tell the user the ETA from the tool's reply. Report the status line the tool returns; never fabricate progress.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What the video should show and how it should move"},"preset":{"type":"string","enum":["ltx-fast","wan-fast","wan-quality"],"description":"Speed/quality preset; default ltx-fast"},"source_job_id":{"type":"string","description":"Optional job id of an existing generated image to animate (image-to-video)"}},"required":["prompt"]}}}
 ]
@@ -664,6 +669,8 @@ async def execute_tool(name, args, device="nyx", session_id=""):
             )
         elif name == "stop_evening_capture":
             result = _ec_mod.tool_stop_evening_capture()
+        elif name == "fleet_status":
+            result = _fleet_status_summary()
         elif name == "find_recipe":
             _mode  = args.get("mode", "pantry")
             _limit = max(1, min(int(args.get("limit", 5)), 20))
@@ -2000,6 +2007,84 @@ async def service_worker():
 @app.get("/devices")
 async def devices():
     return {"devices": dict(_device_roster)}
+
+# ── Argus: read-only fleet observability ──────────────────────────────────────
+def _fleet_status_summary() -> str:
+    """Concise fleet summary for the fleet_status tool (values audited: state +
+    last-seen + battery/RSSI + drift, nothing Argus could act on)."""
+    contracts = load_contracts()
+    lines = []
+    for ev in argus_store.fleet(contracts):
+        d, s = ev["device_id"], ev["state"]
+        if s == "SILENT":
+            lines.append(f"{d}: SILENT (last seen {_argus_iso(ev['last_seen']) or 'never'}"
+                         + (f", last state before silence follows contract" if ev['last_seen'] else "") + ")")
+        else:
+            extra = []
+            if ev.get("battery") is not None: extra.append(f"battery {ev['battery']}%")
+            if ev.get("rssi") is not None:    extra.append(f"RSSI {ev['rssi']}dBm")
+            if ev.get("firmware_drift"):      extra.append("FIRMWARE DRIFT")
+            lines.append(f"{d}: {s}" + (f" ({', '.join(extra)})" if extra else ""))
+    return "Fleet status:\n" + "\n".join(lines) if lines else "Fleet status: no devices known yet."
+
+@app.post("/argus/heartbeat")
+async def argus_heartbeat(request: Request):
+    """Device heartbeat ingest — rides the existing verified check-in path (the
+    auth middleware already enforced Basic auth + stamped _device_roster). Records
+    a structured heartbeat to the dedicated argus.db. Read-only observability:
+    Argus stores, never acts.
+
+    Spoof-hardening: only Dio is IP-pinned (via the camera-verified dio_host). If
+    dio_host is known and a 'stackchan' claim arrives from a different IP, reject +
+    log. Other devices verify via the shared Basic-auth cred (existing model — no
+    new auth scheme)."""
+    device = request.headers.get("X-Ph3b3-Device", "unidentified")
+    if (device == "stackchan" and vision.dio_host
+            and request.client and request.client.host != vision.dio_host):
+        log.warning("[ARGUS] rejected spoofed heartbeat: 'stackchan' from %s (verified dio_host=%s)",
+                    request.client.host, vision.dio_host)
+        raise HTTPException(403, "unverified device identity")
+    body = await request.body()
+    if len(body) > 512:                       # payload contract is <200 B; 512 is a hard cap
+        raise HTTPException(413, "heartbeat payload too large")
+    try:
+        data = json.loads(body or b"{}")
+    except Exception:
+        raise HTTPException(400, "invalid heartbeat JSON")
+    def _i(v):
+        try: return int(v)
+        except (TypeError, ValueError): return None
+    fw = data.get("firmware_hash")
+    argus_store.record_heartbeat(
+        device,
+        battery=_i(data.get("battery")), rssi=_i(data.get("rssi")),
+        uptime=_i(data.get("uptime")), free_heap=_i(data.get("free_heap")),
+        firmware_hash=(str(fw)[:64] if fw else None),
+    )
+    return {"ok": True}
+
+@app.get("/argus/fleet")
+async def argus_fleet():
+    """Read-only fleet summary for the panel: every contract device with derived
+    state, last-seen, battery/RSSI, firmware drift, and a short heap/battery
+    sparkline. Contracts are reloaded per call, so they're editable without a
+    restart."""
+    contracts = load_contracts()
+    now = time.time()
+    fleet = []
+    for ev in argus_store.fleet(contracts, now=now):
+        hist = argus_store.history(ev["device_id"], limit=30)
+        ev["last_seen_iso"] = _argus_iso(ev["last_seen"])
+        ev["spark_heap"] = [h["free_heap"] for h in reversed(hist) if h["free_heap"] is not None]
+        ev["spark_batt"] = [h["battery"]  for h in reversed(hist) if h["battery"]  is not None]
+        fleet.append(ev)
+    self_last = argus_store.self_last()
+    return {
+        "fleet": fleet,
+        "argus": {"last_self": self_last, "last_self_iso": _argus_iso(self_last),
+                  "age_s": int(now - self_last) if self_last else None},
+        "generated": _argus_iso(int(now)),
+    }
 
 @app.get("/")
 async def index():
