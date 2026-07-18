@@ -978,7 +978,14 @@ def _vision_intercept(msg: str, device: str = "nyx"):
                                           "what are you seeing", "describe what you see",
                                           "describe the view", "what's in view", "whats in view",
                                           "look through the webcam", "look through the camera",
-                                          "look through your camera"))
+                                          "look through your camera",
+                                          # explicit "use/with/through the camera" phrasings — a
+                                          # weak model otherwise leaks "let me look..." as text
+                                          # and never captures (the finger-count deflection).
+                                          "use your camera", "use the camera", "using your camera",
+                                          "using the camera", "with your camera", "with the camera",
+                                          "through your camera", "through the camera",
+                                          "look and tell me", "how many fingers"))
     if not (wants_photo or wants_describe):
         return None
     # Origin picks the camera. Dio-named OR coming from Dio → her camera — UNLESS
