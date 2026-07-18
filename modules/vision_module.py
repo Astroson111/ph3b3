@@ -42,6 +42,11 @@ CAPTURE_DIR    = Path.home() / "ph3b3_data" / "captures"   # the ONLY photo stor
 # Dio's on-device HTTP camera control (served by the CoreS3 firmware, Phase-2 fw).
 DIO_CAM_PORT = int(os.getenv("PH3B3_DIO_CAM_PORT", "8080"))
 DIO_WAIT     = float(os.getenv("PH3B3_DIO_WAIT", "3"))   # s to wait for Dio before falling back
+# Native photo loop (PUSH-primary): Dio captures on-device and POSTs the frame to
+# /vision/frame right before the describe call. If a Dio push landed within this
+# window, _grab_frame uses it directly and never pulls :8080 — the pull path is
+# retired as the primary route (kept only as a fallback for the legacy flow).
+PUSH_FRESH_S = float(os.getenv("PH3B3_PUSH_FRESH_S", "8"))
 
 
 def _truthy(v) -> bool:
@@ -80,6 +85,7 @@ class VisionModule:
         self.dio_host     = None          # Dio's LAN IP, learned (and verified) from her calls
         self._latest_jpeg = None          # bytes of the most recent frame Dio POSTed
         self._latest_ts   = 0.0
+        self._latest_src  = None          # 'stackchan' | 'webcam' — origin of _latest_jpeg
         self._frame_event = threading.Event()
         self._cam_lock    = threading.Lock()   # serialize webcam grabs (V4L2 is single-open)
         self.baseline_jpeg = None         # baseline frame for ghost-hunt anomaly checks
@@ -121,6 +127,7 @@ class VisionModule:
             return "empty frame"
         self._latest_jpeg = jpeg
         self._latest_ts   = time.time()
+        self._latest_src  = "webcam" if source == "webcam" else "stackchan"
         prefix = "webcam" if source == "webcam" else "dio"
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         path = CAPTURE_DIR / f"{prefix}_{ts}.jpg"
@@ -133,6 +140,12 @@ class VisionModule:
         """Return (jpeg_bytes, source) trying Dio first then a local camera.
         source is 'stackchan' | 'webcam' | None (both failed). BLOCKING — the
         caller must run this off the event loop (server dispatch uses to_thread)."""
+        # PUSH-primary: the native photo loop has Dio capture on-device and POST
+        # the frame just before this call. If a fresh Dio push is already in hand,
+        # use it directly and skip the :8080 pull entirely (pull is now fallback).
+        if (self._latest_jpeg is not None and self._latest_src == "stackchan"
+                and (time.time() - self._latest_ts) <= PUSH_FRESH_S):
+            return self._latest_jpeg, "stackchan"
         jpeg = self._request_and_wait(DIO_WAIT)
         if jpeg is not None:
             return jpeg, "stackchan"

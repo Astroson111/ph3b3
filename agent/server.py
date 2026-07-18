@@ -981,10 +981,15 @@ def _vision_intercept(msg: str, device: str = "nyx"):
                                           "look through your camera"))
     if not (wants_photo or wants_describe):
         return None
-    # Origin picks the camera. Dio-named OR coming from Dio → her camera.
+    # Origin picks the camera. Dio-named OR coming from Dio → her camera — UNLESS
+    # the user explicitly reaches for the big/PC camera, which overrides origin
+    # and sends even a Dio-side request to the Nyx webcam.
+    big_camera = any(p in m for p in ("big camera", "the webcam", "pc camera",
+                                      "computer camera", "desktop camera", "nyx camera",
+                                      "use the computer", "laptop camera"))
     from_dio = (str(device or "").lower() == "stackchan"
                 or "dio" in m or "stackchan" in m or "stack-chan" in m or "stack chan" in m)
-    if from_dio:
+    if from_dio and not big_camera:
         return "look"
     # Nyx webcam: describe intent (alone OR combined with "take a photo") → describe_view.
     if wants_describe:
@@ -1390,10 +1395,17 @@ async def transcribe_audio(request: Request, body: dict):
         tmp_path = f.name
     try:
         result = stt.transcribe_file(tmp_path)
-        log.warning("[DBG-MIC] dev=%s transcript=%r err=%s", _device, (result.get("text") or "")[:80], result.get("error"))
+        _text = result.get("text") or ""
+        log.warning("[DBG-MIC] dev=%s transcript=%r err=%s", _device, _text[:80], result.get("error"))
         _persist_capture(request.headers.get("X-Ph3b3-Device", "unknown"),  # Argus captures feed (read-only)
-                         audio_bytes, result.get("text") or "")
-        return {"text": result.get("text") or "", "error": result.get("error")}
+                         audio_bytes, _text)
+        # Native photo loop: tell Dio (and only Dio) to run her on-device capture
+        # loop when this utterance is a vision request routed to HER camera. The
+        # firmware branches on "camera":"dio"; absent/other → normal chat.
+        _resp = {"text": _text, "error": result.get("error")}
+        if _device == "stackchan" and _vision_intercept(_text, device=_device) == "look":
+            _resp["camera"] = "dio"
+        return _resp
     finally:
         try:
             os.unlink(tmp_path)
