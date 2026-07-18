@@ -787,15 +787,18 @@ async def chat_with_tools(messages, device="nyx", session_id=""):
                 fn = tc["function"]["name"]
                 args = tc["function"]["arguments"]
                 if isinstance(args, str): args = json.loads(args)
-                # Deterministic vision routing: `look` (Dio's camera) fires ONLY when
-                # the user named Dio/Stack-Chan; every other vision request goes to
-                # describe_view (the webcam). The 8B model otherwise sends
-                # "what do you see" to look ~75% of the time (→ Dio-offline deflection).
+                # Deterministic vision routing by ORIGIN: `look` (Dio's camera) fires
+                # when the request comes FROM Dio (device=stackchan) or names
+                # Dio/Stack-Chan; every other vision request goes to describe_view
+                # (the webcam). The 8B model otherwise sends "what do you see" to look
+                # ~75% of the time (→ Dio-offline deflection).
                 if fn in ("look", "describe_view"):
                     _lu = next((str(m.get("content", "")) for m in reversed(messages)
                                 if m.get("role") == "user"), "").lower()
-                    fn = "look" if ("dio" in _lu or "stackchan" in _lu
-                                    or "stack-chan" in _lu or "stack chan" in _lu) else "describe_view"
+                    _from_dio = (str(device or "").lower() == "stackchan"
+                                 or "dio" in _lu or "stackchan" in _lu
+                                 or "stack-chan" in _lu or "stack chan" in _lu)
+                    fn = "look" if _from_dio else "describe_view"
                 if fn in ONE_SHOT_TOOLS and fn in tool_cache:
                     result = tool_cache[fn]
                 else:
@@ -952,24 +955,41 @@ def _looks_like_self_echo(session_id, text):
     return sum(1 for w in tw if w in pw) / len(tw) >= 0.6
 
 
-def _vision_intercept(msg: str):
+def _vision_intercept(msg: str, device: str = "nyx"):
     """Detect an EXPLICIT vision request and return which tool to force — routed
     BEFORE the LLM so the weak 8B model can't deflect or mis-route it (deterministic
     per Captain decision). Tight patterns ONLY, so a capture never fires except on a
-    direct ask (the explicit-only rule). `look` (Dio's camera) only when Dio is named;
-    every other vision request → describe_view (the webcam)."""
+    direct ask (the explicit-only rule).
+
+    Routing:
+      - The camera is chosen by ORIGIN: a request coming FROM Dio (device=stackchan),
+        or any request that names Dio/Stack-Chan, uses DIO's own camera (`look`).
+        Everything else uses the Nyx webcam.
+      - Intent picks the webcam tool: any "describe / what do you see" phrasing —
+        INCLUDING a combined "take a picture AND describe what you see" — routes to
+        describe_view, which captures AND describes. Only a bare "take a photo" with
+        no describe intent routes to take_photo (capture, no narration). `look`
+        already captures + describes, so it covers both intents for Dio."""
     m = (msg or "").lower()
-    if any(p in m for p in ("take a photo", "take a picture", "take photo", "take pic",
-                            "snap a photo", "snap a picture", "grab a photo",
-                            "get a photo", "get a picture")):
-        return "take_photo"
-    if any(p in m for p in ("what do you see", "what can you see", "what you see",
-                            "what are you seeing", "describe what you see", "what's in view",
-                            "whats in view", "look through the webcam", "look through the camera",
-                            "look through your camera")):
-        dio = ("dio" in m or "stackchan" in m or "stack-chan" in m or "stack chan" in m)
-        return "look" if dio else "describe_view"
-    return None
+    wants_photo = any(p in m for p in ("take a photo", "take a picture", "take photo",
+                                       "take pic", "snap a photo", "snap a picture",
+                                       "grab a photo", "get a photo", "get a picture"))
+    wants_describe = any(p in m for p in ("what do you see", "what can you see", "what you see",
+                                          "what are you seeing", "describe what you see",
+                                          "describe the view", "what's in view", "whats in view",
+                                          "look through the webcam", "look through the camera",
+                                          "look through your camera"))
+    if not (wants_photo or wants_describe):
+        return None
+    # Origin picks the camera. Dio-named OR coming from Dio → her camera.
+    from_dio = (str(device or "").lower() == "stackchan"
+                or "dio" in m or "stackchan" in m or "stack-chan" in m or "stack chan" in m)
+    if from_dio:
+        return "look"
+    # Nyx webcam: describe intent (alone OR combined with "take a photo") → describe_view.
+    if wants_describe:
+        return "describe_view"
+    return "take_photo"
 
 
 async def _run_chat_pipeline(body: dict, request: Request):
@@ -1084,7 +1104,7 @@ async def _run_chat_pipeline(body: dict, request: Request):
         except Exception:
             log.exception("Mnemosyne auto-recall failed")
 
-    _vt = _vision_intercept(user_msg)
+    _vt = _vision_intercept(user_msg, device=(device or "nyx"))
     if _vt:
         # Forced vision path — guarantee the right tool fires (skip the LLM's choice).
         if _vt == "take_photo":
@@ -1094,11 +1114,18 @@ async def _run_chat_pipeline(body: dict, request: Request):
         else:
             response = await asyncio.to_thread(vision.describe_view)
         # Spoken directly, so strip the LLM-relay tag and unwrap a fully-bracketed
-        # status message (brackets must not be read aloud).
+        # status message (brackets must not be read aloud). But `look` may have
+        # fallen back to the PC webcam when Dio was unreachable — that disclosure
+        # lives in the stripped tag, so keep it as a spoken preface. Never let a
+        # Dio request silently describe the PC webcam as if it were Dio's eyes.
+        _used_webcam_fallback = (_vt == "look" and "PC webcam fallback" in response)
         if "\n\n[" in response:
             response = response.split("\n\n[")[0].strip()
         if response.startswith("[") and response.endswith("]"):
             response = response[1:-1].strip()
+        if _used_webcam_fallback:
+            response = ("Stack-Chan's camera wasn't reachable, so I used the backup "
+                        "PC camera instead. " + response)
         updated = messages
     else:
         response, updated = await chat_with_tools(

@@ -81,6 +81,7 @@ class VisionModule:
         self._latest_jpeg = None          # bytes of the most recent frame Dio POSTed
         self._latest_ts   = 0.0
         self._frame_event = threading.Event()
+        self._cam_lock    = threading.Lock()   # serialize webcam grabs (V4L2 is single-open)
         self.baseline_jpeg = None         # baseline frame for ghost-hunt anomaly checks
         # Read tunables at construction so a .env change + restart takes effect.
         self.fallback_enabled = _truthy(os.getenv("PH3B3_VISION_FALLBACK", "1"))
@@ -172,6 +173,13 @@ class VisionModule:
         except ImportError:
             log.warning("Vision fallback: OpenCV (cv2) not installed — no local camera path")
             return None
+        # Serialize: V4L2 devices are single-open, so two overlapping captures (e.g.
+        # two chats, or a chat racing an Argus check) would make the second fail to
+        # open and report the camera "unavailable" when it is merely busy.
+        with self._cam_lock:
+            return self._local_capture_locked(cv2)
+
+    def _local_capture_locked(self, cv2):
         for idx in self._candidate_indices():
             cap = None
             try:
@@ -181,17 +189,21 @@ class VisionModule:
                 # Most UVC webcams only stream once given a concrete format; without
                 # one the driver select()-times-out (~10s/read). MJPG at 1280x720 is
                 # near-universal and generic (not device-specific), and small enough
-                # for LLaVA. Break on the first real frame so a dead device fails fast.
+                # for LLaVA.
                 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                # Warm the camera up: a cold-(re)opened UVC webcam drops its first
+                # several frames (MJPG format negotiation + auto-exposure settling),
+                # so 3 reads was too few — the 2nd rapid capture came back empty and
+                # reported "unavailable". Read a run of frames and keep the last
+                # valid one (settled exposure). Only give up if NONE arrive.
                 frame = None
-                for _ in range(3):
+                for _ in range(15):
                     ok, f = cap.read()
                     if ok and f is not None:
                         frame = f
-                        break
                 if frame is None:
                     continue
                 ok, buf = cv2.imencode(".jpg", frame)
