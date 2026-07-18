@@ -16,6 +16,8 @@ Filename conventions (prefix → device):
 """
 from __future__ import annotations
 
+import datetime
+import time
 from pathlib import Path
 
 from paths import PH3B3_DATA
@@ -95,6 +97,37 @@ class CapturesFeed:
                 return {"name": it["name"], "device": it["device"],
                         "ts": it["ts"], "transcript": it["transcript"]}
         return None
+
+    def group_by_day(self, items: list, now: float = None) -> list:
+        """Group already-filtered feed items under date headers, newest group
+        first. Key = capture mtime in SERVER LOCAL TIME (no schema, no DB — the
+        items already come from a directory walk). Labels: Today / Yesterday /
+        'Wed, Jul 15'. Each group carries a count; empty days don't appear because
+        only days with items form groups (so device/type filters recount headers).
+        Today is marked open=True; all others open=False (collapsed by default)."""
+        now = now if now is not None else time.time()
+        today = datetime.date.fromtimestamp(now)
+        order, groups = [], {}
+        for it in items:                       # items are already newest-first
+            d = datetime.date.fromtimestamp(it["ts"])
+            key = d.isoformat()
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(it)
+        out = []
+        for key in order:
+            d = datetime.date.fromisoformat(key)
+            delta = (today - d).days
+            if delta == 0:
+                label = "Today"
+            elif delta == 1:
+                label = "Yesterday"
+            else:
+                label = d.strftime("%a, %b ") + str(d.day)   # "Wed, Jul 15"
+            out.append({"key": key, "label": label, "count": len(groups[key]),
+                        "open": delta == 0, "items": groups[key]})
+        return out
 
     def resolve(self, name: str):
         """Map a requested filename to a real file INSIDE the store, or None.

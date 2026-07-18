@@ -307,6 +307,18 @@
     .cap-transcript.empty { color: var(--dim); font-style: italic; }
     .cap-card audio { width: 100%; height: 34px; }
     .cap-thumb { max-width: 100%; max-height: 180px; border-radius: 6px; display: block; cursor: pointer; }
+    /* date-group headers */
+    .cap-group { border-bottom: 1px solid var(--border); }
+    .cap-group:last-child { border-bottom: none; }
+    .cap-group-hd { list-style: none; cursor: pointer; user-select: none; display: flex;
+      align-items: center; gap: .5rem; padding: .5rem .2rem; font-size: .78rem; font-weight: 700; color: var(--text); }
+    .cap-group-hd::-webkit-details-marker { display: none; }
+    .cap-group-hd::before { content: '\25B8'; color: var(--dim); font-size: .7rem; transition: transform .18s ease; }
+    details[open] > .cap-group-hd::before { transform: rotate(90deg); }
+    .cap-group-ct { margin-left: auto; font-size: .66rem; font-weight: 600; color: var(--dim);
+      font-variant-numeric: tabular-nums; }
+    .cap-group-body { display: flex; flex-direction: column; gap: .5rem; padding: .1rem 0 .55rem; }
+    @media (prefers-reduced-motion: reduce) { .cap-group-hd::before { transition: none; } }
     .btn-sm {
       margin-left: auto;
       background: rgba(124,58,237,.18); border: 1px solid var(--border);
@@ -1354,22 +1366,29 @@ async function refreshCaptures() {
     if (capDevice.options.length <= 1 && data.devices) {
       data.devices.forEach(d => { const o = document.createElement('option'); o.value = d; o.textContent = d; capDevice.appendChild(o); });
     }
-    const items = data.items || [];
-    if (!items.length) { capFeed.innerHTML = '<div class="dev-empty">No captures yet.</div>'; return; }
-    capFeed.innerHTML = items.map(it => {
-      const head = `<div class="cap-head"><span class="cap-dev">${capEsc(it.device)}</span><span class="cap-ts">${fleetAgo(it.ts)}</span></div>`;
-      const url = '/captures/file/' + encodeURIComponent(it.name);
-      if (it.type === 'audio') {
-        // transcript is PRIMARY content; player sits beneath it
-        const t = it.transcript ? `<div class="cap-transcript">${capEsc(it.transcript)}</div>`
-                                : `<div class="cap-transcript empty">(no transcript)</div>`;
-        return `<div class="cap-card">${head}${t}<audio controls preload="none" src="${url}"></audio></div>`;
-      }
-      return `<div class="cap-card">${head}<img class="cap-thumb" loading="lazy" src="${url}" onclick="window.open(this.src,'_blank')" alt="capture"></div>`;
+    const groups = data.groups || [];
+    if (!groups.length) { capFeed.innerHTML = '<div class="dev-empty">No captures yet.</div>'; return; }
+    capFeed.innerHTML = groups.map(g => {
+      const cards = g.items.map(renderCapCard).join('');
+      const n = g.count + ' ' + (g.count === 1 ? 'capture' : 'captures');
+      return `<details class="cap-group"${g.open ? ' open' : ''}>`
+        + `<summary class="cap-group-hd">${capEsc(g.label)}<span class="cap-group-ct">${n}</span></summary>`
+        + `<div class="cap-group-body">${cards}</div></details>`;
     }).join('');
   } catch {
     capFeed.innerHTML = '<div class="dev-empty">Captures unavailable.</div>';
   }
+}
+function renderCapCard(it) {
+  const head = `<div class="cap-head"><span class="cap-dev">${capEsc(it.device)}</span><span class="cap-ts">${fleetAgo(it.ts)}</span></div>`;
+  const url = '/captures/file/' + encodeURIComponent(it.name);
+  if (it.type === 'audio') {
+    // transcript is PRIMARY content; player sits beneath it
+    const t = it.transcript ? `<div class="cap-transcript">${capEsc(it.transcript)}</div>`
+                            : `<div class="cap-transcript empty">(no transcript)</div>`;
+    return `<div class="cap-card">${head}${t}<audio controls preload="none" src="${url}"></audio></div>`;
+  }
+  return `<div class="cap-card">${head}<img class="cap-thumb" loading="lazy" src="${url}" onclick="window.open(this.src,'_blank')" alt="capture"></div>`;
 }
 if (capDevice) capDevice.addEventListener('change', refreshCaptures);
 if (capType)   capType.addEventListener('change', refreshCaptures);

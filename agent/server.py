@@ -2109,9 +2109,13 @@ def _persist_capture(device: str, audio_bytes: bytes, text: str) -> None:
 
 @app.get("/captures/feed")
 async def captures_list(device: str = None, type: str = None):
-    """Read-only reverse-chron feed of device artifacts (audio/transcripts/images).
-    Behind the portal auth gate (the middleware). Filter by device and/or type."""
-    return {"items": captures_feed.feed(device=device, type=type),
+    """Read-only feed of device artifacts (audio/transcripts/images), grouped
+    under date headers (Today/Yesterday/'Wed, Jul 15', newest first, Today open).
+    Grouping key = file mtime in server local time, computed here — no schema, no
+    DB, just the directory walk. Filters apply before grouping, so empty days
+    drop out and counts recount. Behind the portal auth gate."""
+    items = captures_feed.feed(device=device, type=type)
+    return {"groups": captures_feed.group_by_day(items),
             "devices": captures_feed.devices()}
 
 @app.get("/captures/file/{name}")
