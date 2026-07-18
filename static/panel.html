@@ -319,6 +319,27 @@
       font-variant-numeric: tabular-nums; }
     .cap-group-body { display: flex; flex-direction: column; gap: .5rem; padding: .1rem 0 .55rem; }
     @media (prefers-reduced-motion: reduce) { .cap-group-hd::before { transition: none; } }
+
+    /* ── Chats (transcript history, Argus tab) ── */
+    .chats-feed { display: flex; flex-direction: column; }
+    .chat-sess { border-bottom: 1px solid rgba(124,58,237,.15); }
+    .chat-sess-hd { list-style: none; cursor: pointer; display: grid;
+      grid-template-columns: auto auto 1fr auto; gap: .5rem; align-items: baseline;
+      padding: .45rem .3rem; font-size: .78rem; }
+    .chat-sess-hd::-webkit-details-marker { display: none; }
+    .chat-sess-time { color: var(--dim); font-family: 'SF Mono','Consolas',monospace; font-size: .66rem; }
+    .chat-sess-src { font-size: .58rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+      color: var(--cyan); background: rgba(0,229,255,.1); padding: .05rem .35rem; border-radius: 4px; align-self: center; }
+    .chat-sess-prev { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chat-sess-ct { color: var(--dim); font-size: .64rem; }
+    .chat-sess-body { padding: .3rem 0 .55rem; display: flex; flex-direction: column; gap: .4rem; }
+    .chat-turn { display: flex; flex-direction: column; gap: .1rem; padding: .35rem .5rem; border-radius: 7px; }
+    .chat-turn.user   { background: rgba(43,15,95,.4); }
+    .chat-turn.phoebe { background: rgba(0,229,255,.06); }
+    .chat-who { font-size: .58rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); }
+    .chat-turn.phoebe .chat-who { color: var(--cyan); }
+    .chat-turn.user .chat-who   { color: var(--magenta); }
+    .chat-text { font-size: .82rem; color: var(--text); line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
     .btn-sm {
       margin-left: auto;
       background: rgba(124,58,237,.18); border: 1px solid var(--border);
@@ -1097,6 +1118,10 @@
       </div>
       <div class="cap-feed" id="capFeed"><div class="dev-empty">Loading…</div></div>
     </div>
+    <div class="card">
+      <div class="card-title">Chats</div>
+      <div class="chats-feed" id="chatsFeed"><div class="dev-empty">Loading…</div></div>
+    </div>
     <div class="ts" id="argusTs"></div>
   </section>
 
@@ -1390,6 +1415,51 @@ function renderCapCard(it) {
   }
   return `<div class="cap-card">${head}<img class="cap-thumb" loading="lazy" src="${url}" onclick="window.open(this.src,'_blank')" alt="capture"></div>`;
 }
+
+// ── Argus chats (transcript history) ──────────────────────────────────────────
+const chatsFeed = document.getElementById('chatsFeed');
+const CHAT_SRC = { portal: 'Portal chat', iris: 'Iris PTT', dio: 'Dio' };
+function chatClock(ts) { return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+async function refreshChats() {
+  if (!chatsFeed) return;
+  try {
+    const data = await fetch('/chats/feed').then(r => r.json());
+    const groups = data.groups || [];
+    if (!groups.length) { chatsFeed.innerHTML = '<div class="dev-empty">No chat sessions yet.</div>'; return; }
+    chatsFeed.innerHTML = groups.map(g => {
+      const rows = g.sessions.map(s => {
+        const src = capEsc(CHAT_SRC[s.source] || s.source);
+        return `<details class="chat-sess" data-name="${encodeURIComponent(s.name)}">`
+          + `<summary class="chat-sess-hd"><span class="chat-sess-time">${chatClock(s.ts)}</span>`
+          + `<span class="chat-sess-src">${src}</span>`
+          + `<span class="chat-sess-prev">${capEsc(s.preview || '(no preview)')}</span>`
+          + `<span class="chat-sess-ct">${s.turns} turns</span></summary>`
+          + `<div class="chat-sess-body"><div class="dev-empty">…</div></div></details>`;
+      }).join('');
+      const n = g.count + ' ' + (g.count === 1 ? 'session' : 'sessions');
+      return `<details class="cap-group"${g.open ? ' open' : ''}>`
+        + `<summary class="cap-group-hd">${capEsc(g.label)}<span class="cap-group-ct">${n}</span></summary>`
+        + `<div class="cap-group-body">${rows}</div></details>`;
+    }).join('');
+    // lazy-load the full transcript the first time a session is expanded
+    chatsFeed.querySelectorAll('.chat-sess').forEach(el => {
+      el.addEventListener('toggle', async () => {
+        if (!el.open || el.dataset.loaded) return;
+        el.dataset.loaded = '1';
+        const body = el.querySelector('.chat-sess-body');
+        try {
+          const t = await fetch('/chats/session/' + el.dataset.name).then(r => r.json());
+          body.innerHTML = (t.turns || []).map(turn => {
+            const who = turn.role === 'phoebe' ? 'Phoebe' : 'You';
+            return `<div class="chat-turn ${turn.role === 'phoebe' ? 'phoebe' : 'user'}">`
+              + `<span class="chat-who">${who}</span><span class="chat-text">${capEsc(turn.text)}</span></div>`;
+          }).join('') || '<div class="dev-empty">(empty)</div>';
+        } catch { body.innerHTML = '<div class="dev-empty">Failed to load transcript.</div>'; }
+      });
+    });
+  } catch { chatsFeed.innerHTML = '<div class="dev-empty">Chats unavailable.</div>'; }
+}
+refreshChats();
 if (capDevice) capDevice.addEventListener('change', refreshCaptures);
 if (capType)   capType.addEventListener('change', refreshCaptures);
 refreshCaptures();

@@ -305,6 +305,8 @@ from argus import ArgusStore, load_contracts, iso as _argus_iso
 argus_store = ArgusStore()
 from captures import CapturesFeed, CAPTURES_DIR as _CAPTURES_DIR   # read-only artifact feed (Argus Part 2)
 captures_feed = CapturesFeed()
+from chats import ChatLog                                          # per-session chat transcripts (Argus Chats)
+chat_log = ChatLog()
 import evening_capture as _ec_mod
 _ec_mod.alba_say = lambda t: _tts_announce(t)
 
@@ -1073,6 +1075,15 @@ async def _run_chat_pipeline(body: dict, request: Request):
                                role="user", kind="conversation")
         except Exception:
             log.exception("Mnemosyne auto-capture failed")
+
+    # Argus Chats: persist the full turn pair (user + Phoebe) to the per-session
+    # transcript store (deliberate transcript-keeping, Captain decision 2026-07-18;
+    # separate from Mnemosyne). Source = calling device. This helper backs both
+    # /chat and /chat/stream, so portal, Iris, and Dio all get logged here.
+    _sid = body.get("session_id", "default")
+    _src = request.headers.get("X-Ph3b3-Device", "") or (device or "nyx")
+    if user_msg:  chat_log.log_turn(_sid, _src, "user", user_msg)
+    if response:  chat_log.log_turn(_sid, _src, "phoebe", response)
 
     return response
 
@@ -2126,6 +2137,23 @@ async def captures_file(name: str):
     if p is None:
         raise HTTPException(404, "capture not found")
     return FileResponse(p)
+
+@app.get("/chats/feed")
+async def chats_list():
+    """Read-only chat-session history grouped by date (Today/Yesterday/'Wed, Jul
+    15', newest first, Today open). One entry per session: timestamp, source
+    (portal/iris/dio), first user line as preview, turn count. Behind the portal
+    auth gate. Full turns are fetched per session via /chats/session."""
+    return {"groups": chat_log.group_by_day(chat_log.sessions())}
+
+@app.get("/chats/session/{name}")
+async def chats_session(name: str):
+    """Full transcript (user + Phoebe turns) for one session — read-only,
+    traversal-refused, auth-gated."""
+    turns = chat_log.transcript(name)
+    if turns is None:
+        raise HTTPException(404, "session not found")
+    return {"turns": turns}
 
 @app.get("/")
 async def index():
