@@ -1,0 +1,22 @@
+{
+  "_comment": "Argus per-device cadence contracts. Editable without code changes; reloaded per fleet read. type=service (Nyx-local, steady heartbeat) or battery (badge: check-in on wake + every N min awake, sleep windows count as healthy silence). silent_after_s = past this with no report => SILENT. sick_if floors => SICK. expected_firmware_hash set => drift flag when mismatch. sleep_windows are local-time HH:MM ranges (may wrap midnight).",
+
+  "defaults": { "type": "service", "heartbeat_s": 30, "silent_after_s": 120 },
+
+  "devices": {
+    "nyx":       { "type": "service", "heartbeat_s": 30,  "silent_after_s": 120,
+                   "sick_if": { "free_heap_below": 50000000 } },
+
+    "argus":     { "type": "service", "heartbeat_s": 30,  "silent_after_s": 120 },
+
+    "iris":      { "type": "battery", "heartbeat_s": 300, "silent_after_s": 900,
+                   "expected_firmware_hash": null,
+                   "sick_if": { "battery_below": 10, "free_heap_below": 20000 },
+                   "sleep_windows": [] },
+
+    "stackchan": { "type": "battery", "heartbeat_s": 300, "silent_after_s": 900,
+                   "expected_firmware_hash": null,
+                   "sick_if": { "battery_below": 10, "free_heap_below": 20000 },
+                   "sleep_windows": [] }
+  }
+}
