@@ -115,6 +115,7 @@ from vision_module import VisionModule
 from search_module import SearchModule
 from tts_module import TTSModule, trim_silence_b64
 from stt_module import STTModule
+from paths import PH3B3_DATA  # [DBG-AUDIO] instrumentation save-dir root
 from anime_module import AnimeModule
 from stories_module import StoriesModule
 from notes_module import NotesModule
@@ -1235,29 +1236,63 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str = "default"):
         log.info(f"Stack-chan disconnected: {session_id}")
 
 @app.post("/transcribe")
-async def transcribe_audio(body: dict):
+async def transcribe_audio(request: Request, body: dict):
     """Accept base64-encoded WAV audio and return transcribed text via the server's STT module."""
     audio_b64 = body.get("audio", "")
     if not audio_b64:
         return {"text": "", "error": "no audio provided"}
     audio_bytes = base64.b64decode(audio_b64)
+    # Which device POSTed this — Iris and Dio both hit /transcribe; the firmware
+    # sends X-Ph3b3-Device. Used only for [DBG-MIC]/[DBG-AUDIO] labelling.
+    _device = request.headers.get("X-Ph3b3-Device", "unknown")
     try:                                                          # [DBG-MIC] keep last capture for audition
         open("/tmp/dio_mic_last.wav", "wb").write(audio_bytes)
     except Exception:
         pass
     # [DBG-MIC] characterise captured audio: mic-dead (near-zero level) vs STT-mishear (real level, wrong text)
     _rms = None
+    _peak = 0
+    _hdr_rate = 16000  # WAV fmt-chunk sample rate; falls back to the firmware assumption
     try:
         import struct as _st
+        # Read the real rate/channels/bits from the fmt chunk instead of assuming
+        # 16 kHz — a resample or PDM-rate mismatch (candidate #4) shows up here.
+        if len(audio_bytes) >= 44 and audio_bytes[:4] == b"RIFF":
+            _ch      = _st.unpack("<H", audio_bytes[22:24])[0]
+            _hdr_rate = _st.unpack("<I", audio_bytes[24:28])[0] or 16000
+            _bits    = _st.unpack("<H", audio_bytes[34:36])[0]
+        else:
+            _ch, _bits = 1, 16
         _pcm = audio_bytes[44:]
         _n = len(_pcm) // 2
         if _n:
             _s = _st.unpack("<%dh" % _n, _pcm[:_n * 2])
             _peak = max(abs(x) for x in _s)
             _rms = (sum(x * x for x in _s) / _n) ** 0.5
-            log.warning("[DBG-MIC] in %d B ~%.1fs peak=%d/32767 rms=%.0f", len(audio_bytes), _n / 16000.0, _peak, _rms)
+            _clip = sum(1 for x in _s if abs(x) >= 32752)
+            log.warning("[DBG-MIC] dev=%s in %d B ~%.2fs rate=%d ch=%d bits=%d peak=%d/32767 rms=%.0f clip=%.1f%%",
+                        _device, len(audio_bytes), _n / float(_hdr_rate), _hdr_rate, _ch, _bits,
+                        _peak, _rms, 100.0 * _clip / _n)
     except Exception as _e:
         log.warning("[DBG-MIC] level calc failed: %s", _e)
+
+    # [DBG-AUDIO] Off by default. Set PH3B3_DEBUG_AUDIO=1 to archive every capture,
+    # timestamped + attributed + self-describing, under ~/ph3b3_data/debug_audio/.
+    # Delete the dir or unset the flag when the diagnosis is done.
+    if os.getenv("PH3B3_DEBUG_AUDIO"):
+        try:
+            _dbg_dir = PH3B3_DATA / "debug_audio"
+            _dbg_dir.mkdir(parents=True, exist_ok=True)
+            _ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+            _dur = (_n / float(_hdr_rate)) if _rms is not None else 0.0
+            _dev_tag = "".join(c if c.isalnum() else "-" for c in _device)[:16]
+            _fname = ("%s_%s_dur%.2fs_rate%d_rms%s_pk%d.wav"
+                      % (_ts, _dev_tag, _dur, _hdr_rate,
+                         ("%.0f" % _rms) if _rms is not None else "na", _peak))
+            (_dbg_dir / _fname).write_bytes(audio_bytes)
+            log.warning("[DBG-AUDIO] saved %s", _dbg_dir / _fname)
+        except Exception as _e:
+            log.warning("[DBG-AUDIO] save failed: %s", _e)
     # Silence-floor gate: auto-relisten captures ~1.2s of ambient room noise at rms<900; Whisper
     # hallucinates words ("New York City." @ rms 684) out of that silence. Real speech lands rms>2600.
     # Drop anything below the floor before STT — kills phantom transcripts and skips a wasted Whisper call.
@@ -1270,7 +1305,9 @@ async def transcribe_audio(body: dict):
         tmp_path = f.name
     try:
         result = stt.transcribe_file(tmp_path)
-        log.warning("[DBG-MIC] transcript=%r err=%s", (result.get("text") or "")[:80], result.get("error"))
+        log.warning("[DBG-MIC] dev=%s transcript=%r err=%s", _device, (result.get("text") or "")[:80], result.get("error"))
+        _persist_capture(request.headers.get("X-Ph3b3-Device", "unknown"),  # Argus captures feed (read-only)
+                         audio_bytes, result.get("text") or "")
         return {"text": result.get("text") or "", "error": result.get("error")}
     finally:
         try:
