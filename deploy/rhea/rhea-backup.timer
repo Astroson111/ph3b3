@@ -1,0 +1,12 @@
+[Unit]
+Description=Rhea nightly backup timer (03:30 local)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+# If Nyx was powered off at 03:30, run the missed backup on next boot.
+Persistent=true
+# Jitter so it never lands exactly on some other 03:30 job.
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

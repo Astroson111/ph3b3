@@ -1,0 +1,18 @@
+[Unit]
+Description=Rhea — nightly encrypted backup of Ph3b3 data to the RHEA external drive
+Documentation=file:///home/astroson/Desktop/ph3b3_v2/deploy/rhea/README.md
+Wants=network-online.target
+After=network-online.target
+# Intentionally NOT Requires= the mount: the script fails loudly if RHEA is
+# absent (that is the designed behaviour — a missing drive must surface, not be
+# silently skipped). If the mount exists, order after it.
+After=mnt-rhea.mount
+
+[Service]
+Type=oneshot
+User=astroson
+Group=astroson
+ExecStart=/home/astroson/Desktop/ph3b3_v2/deploy/rhea/rhea-backup.sh
+# Be gentle — this runs nightly alongside the live server.
+Nice=10
+IOSchedulingClass=idle
