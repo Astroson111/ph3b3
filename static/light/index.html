@@ -11,6 +11,7 @@
     <link rel="manifest" href="/static/light/site.webmanifest">
     <meta name="theme-color" content="#5DDFF2">
     <link rel="stylesheet" href="/static/shared/base.css">
+    <link rel="stylesheet" href="/static/light/status.css">
 </head>
 <body>
     <div id="login-overlay">
@@ -33,6 +34,7 @@
             <button class="img-mode-btn" data-mode="auto">AUTO</button>
         </span>
         <button id="gallery-open" title="Browse the image gallery">🖼 GALLERY</button>
+        <button id="status-open" title="Voice &amp; language">🗣 VOICE</button>
         <select id="server-select" title="Ph3b3 server" style="background:#1a1530;color:#cbb8ff;border:1px solid #3d3660;border-radius:4px;font:inherit;font-size:11px;padding:2px 4px;margin:0 4px;"></select>
         <button id="server-edit" title="Edit servers (Iris / Dio / Nyx / local)" style="background:none;border:none;color:#8b7fb8;cursor:pointer;font-size:13px;padding:0 4px;">⚙</button>
         <span id="title">PH3B3-LIGHT</span>
@@ -72,11 +74,37 @@
     </div>
     <div id="gallery-lightbox"><img id="gallery-lightbox-img" alt="" /></div>
 
+    <div id="status-overlay">
+        <div id="status-bar">
+            <button id="status-back" title="Return to chat">← BACK TO CHAT</button>
+            <span id="status-title">VOICE &amp; LANGUAGE</span>
+        </div>
+        <div id="status-body">
+            <div class="status-card">
+                <div class="status-card-title">🗣 Voice</div>
+                <div class="status-row">
+                    <select id="voice-select"></select>
+                    <button id="voice-preview-btn">▶ Preview</button>
+                </div>
+                <div id="voice-current" class="status-note"></div>
+            </div>
+            <div class="status-card">
+                <div class="status-card-title">🌐 Language</div>
+                <div class="status-row">
+                    <select id="lang-select"></select>
+                </div>
+                <div id="lang-note" class="status-note"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Shared core (classic scripts, one global scope, run in document order) -->
     <script src="/static/shared/api.js"></script>
     <script src="/static/shared/chat.js"></script>
     <script src="/static/shared/mic.js"></script>
     <script src="/static/shared/gallery.js"></script>
+    <!-- Voice & language status view (light-only) -->
+    <script src="/static/light/status.js"></script>
     <!-- Light-portal bootstrap -->
     <script src="/static/light/light.js"></script>
 </body>
