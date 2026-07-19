@@ -181,7 +181,6 @@ Where she's going next:
 - **More languages & voices** — multilingual voice + response ships today (eight voiced languages, Japanese/Korean text-only). The bench stays open: any medium-or-better Piper voice drops in through the registry and a by-ear review, no code change. The next real step is *voicing* Japanese and Korean — official Piper has nothing that clears the bar, so it needs a second local TTS engine (VITS-class) behind the same registry.
 - **Agent orchestration** — multi-step autonomous tool chaining: give her a goal, she plans and sequences her own tool calls (across the existing 88 functions) instead of single-shot invocation.
 - **RAG memory backend** — vector-store retrieval over her long-term memory so recall scales past what fits in context, with the same local-only guarantee (embeddings generated and stored locally, nothing leaves).
-- **Flipper Zero integration** — voice-triggered Flipper actions ("Ph3b3, run the sub-GHz scan"), signal-capture data logged to her memory, the Flipper as a hardware key / physical trigger, and her responses shown on the Flipper screen. Lives in `integrations/flipper_zero/` when work starts.
 - **Integrations pattern** — a repeatable shape for new capabilities: a subfolder under `integrations/`, its own README and scripts, wired into `server.py`.
 
 Accessibility is the through-line for all of it — every addition is measured against whether it makes her more usable for the people she's built for, not less.
