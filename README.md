@@ -44,7 +44,7 @@ That's the direction: capable, private help, shaped by the people the industry u
 Ph3b3 is a FastAPI application that runs entirely on **your own machine** — the reference build is a desktop with a Ryzen 9 7950X and an RTX 4060 Ti (16 GB). The full stack is local:
 
 - **Brain:** Hermes3 via Ollama
-- **Voice (TTS):** Piper — **Alba** (en_GB) by default, with native es/fr/de/zh/it/pl/ru voices, selectable per language (Japanese & Korean run text-only). New voice candidates install gated as *unreviewed* and only reach the picker once approved by ear in the Status tab — adding a language or voice is a registry entry plus a hash-pinned download, not code.
+- **Voice (TTS):** Piper — **Alba** (en_GB) by default, plus native voices across **fifteen languages** (Latin, Hanzi, Cyrillic, and Arabic RTL scripts), selectable per language; Japanese, Korean, Hindi & Indonesian run text-only. New voice candidates install gated as *unreviewed* and only reach the picker once approved by ear in the Status tab — adding a language or voice is a registry entry plus a hash-pinned download, not code.
 - **Hearing (STT):** Whisper, running on CUDA
 - **Server:** FastAPI over HTTPS, basic-auth protected
 - **Modules:** 30 capability modules
