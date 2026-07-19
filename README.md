@@ -210,19 +210,19 @@ Accessibility is the through-line for all of it — every addition is measured a
 
 Most models are ~60–110 MB (`.onnx` + `.onnx.json`). A voice is either **approved** (in the picker) or an **unreviewed candidate** (installed and synth-checked, but reachable only through the Status-tab review flow until the Captain approves it by ear). Rejecting a candidate deletes its model from disk. Only voices for a language in the picker are installed — no orphan models for languages Phoebe can't be set to.
 
-| Voice | Language | Tier | Size | Status |
-|-------|----------|------|-----:|--------|
-| `en_GB-alba-medium` | English (Scottish) — **Alba** | strong | 60 MB | approved |
-| `es_ES-davefx-medium` | Español (España) | strong | 60 MB | approved |
-| `fr_FR-siwis-medium` | Français (France) | strong | 60 MB | approved |
-| `de_DE-thorsten-medium` | Deutsch (Deutschland) | strong | 60 MB | approved |
-| `zh_CN-huayan-medium` | 中文 (普通话) — Mandarin | functional | 60 MB | approved |
-| `es_MX-ald-medium` | Español (México) | functional | 60 MB | *unreviewed* |
-| `es_ES-sharvard-medium` | Español (España) — alt | strong | 74 MB | *unreviewed* |
-| `es_MX-claude-high` | Español (México) — HQ | strong | 61 MB | *unreviewed* |
-| `de_DE-thorsten-high` | Deutsch (Deutschland) — HQ | strong | 109 MB | *unreviewed* |
+| Voice model | Name | Language | Tier | Size | Status |
+|-------------|------|----------|------|-----:|--------|
+| `en_GB-alba-medium` | **Alba** | English (Scottish) | strong | 60 MB | approved |
+| `es_ES-davefx-medium` | Davefx | Español (España) | strong | 60 MB | approved |
+| `fr_FR-siwis-medium` | Siwis | Français (France) | strong | 60 MB | approved |
+| `de_DE-thorsten-medium` | Thorsten | Deutsch (Deutschland) | strong | 60 MB | approved |
+| `zh_CN-huayan-medium` | Huayan | 中文 (普通话) | functional | 60 MB | approved |
+| `es_MX-ald-medium` | Ald | Español (México) | functional | 60 MB | approved |
+| `es_ES-sharvard-medium` | Sharvard | Español (España) | strong | 74 MB | approved |
+| `es_MX-claude-high` | Claude | Español (México) | strong | 61 MB | approved |
+| `de_DE-thorsten-high` | Thorsten HD | Deutsch (Deutschland) | strong | 109 MB | approved |
 
-**Total: ~0.6 GB** for all nine (~0.30 GB approved defaults + ~0.30 GB across four unreviewed candidates). Voices behind the honest-gap rule — a language with no medium-or-better Piper voice — ship **no** model at all; that language is disabled in the picker (it cannot be set into a silent state) rather than falling back to a bad-accent read.
+**Total: ~0.6 GB** for all nine, all approved (Spanish has four seated voices, German two). New voices added later ship as `unreviewed` candidates and join the picker only once approved by ear. Voices behind the honest-gap rule — a language with no medium-or-better Piper voice — ship **no** model at all; that language is disabled in the picker (it cannot be set into a silent state) rather than falling back to a bad-accent read.
 
 ### Start her
 

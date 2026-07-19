@@ -85,9 +85,10 @@ voices:
     sample_text: "你好！我是 Phoebe。"
     status: approved
 
-  # ── Candidates awaiting the Captain's ear (status: unreviewed) ───────────────
-  # Installed + synth-checked, but absent from the main Voice dropdown until
-  # approved in the Status-tab review flow.
+  # ── Additional voices, Captain-approved by ear (status: approved) ────────────
+  # Seated in the picker for their language. New candidates added here should
+  # ship as `status: unreviewed` and be approved via the Status-tab review flow;
+  # these were reviewed and promoted.
   es_MX:
     model: es_MX-ald-medium.onnx
     lang: es
@@ -95,7 +96,7 @@ voices:
     script: latin
     tier: functional
     sample_text: "¡Hola! Soy Phoebe."
-    status: unreviewed
+    status: approved
   es_sharvard:
     model: es_ES-sharvard-medium.onnx
     lang: es
@@ -103,7 +104,7 @@ voices:
     script: latin
     tier: strong
     sample_text: "¡Hola! Soy Phoebe."
-    status: unreviewed
+    status: approved
   es_MX_high:
     model: es_MX-claude-high.onnx
     lang: es
@@ -111,7 +112,7 @@ voices:
     script: latin
     tier: strong
     sample_text: "¡Hola! Soy Phoebe."
-    status: unreviewed
+    status: approved
   de_high:
     model: de_DE-thorsten-high.onnx
     lang: de
@@ -119,7 +120,7 @@ voices:
     script: latin
     tier: strong
     sample_text: "Hallo! Ich bin Phoebe."
-    status: unreviewed
+    status: approved
 # Roster note: the ticket's it_IT / pt_BR / ru_RU / pl_PL voices are intentionally
 # NOT installed — those languages are not in the LANGUAGE picker (LANG_NAMES), so a
 # voice for them would be unreachable. fr_FR-siwis-medium is already the seated fr
