@@ -11,7 +11,7 @@ set -euo pipefail
 RHEA_MNT="${RHEA_MNT:-/mnt/rhea}"                 # overridable only to test the drive-missing guard
 RESTIC_REPO="$RHEA_MNT/restic"
 RESTIC_BIN="$RHEA_MNT/bin/restic"                 # binary lives ON the drive (self-contained restore)
-PASSFILE="$HOME/.config/rhea/passphrase"          # on the INTERNAL SSD, not the drive (stolen drive ≠ decryptable)
+PASSFILE="/home/astroson/.config/rhea/passphrase" # ABSOLUTE (service runs as root → $HOME is /root); on the INTERNAL SSD, not the drive (stolen drive ≠ decryptable)
 PH3B3_DIR="/home/astroson/Desktop/ph3b3_v2"
 DATA_DIR="/home/astroson/ph3b3_data"
 V2DATA_DIR="/home/astroson/Desktop/ph3b3_v2_data"
@@ -52,6 +52,19 @@ s.backup(d); d.close(); s.close()' "$db" "$SQLITE_STAGE/$name" || fail "sqlite o
 done
 
 # ── 3. restic backup — the irreplaceable set. Models/venvs/caches EXCLUDED ────────
+# System configs (root-owned): WireGuard keys + the deployed systemd units. Only
+# added if READABLE, so an astroson-run test skips them gracefully; the root
+# service (its real home) captures them. Standing invariants — backed up, never modified.
+SYS_PATHS=()
+for p in /etc/wireguard \
+         /etc/systemd/system/ph3b3.service \
+         /etc/systemd/system/argus.service \
+         /etc/systemd/system/rhea-backup.service \
+         /etc/systemd/system/rhea-backup.timer; do
+  [ -r "$p" ] && SYS_PATHS+=("$p")
+done
+[ "${#SYS_PATHS[@]}" -gt 0 ] && log "system configs: ${SYS_PATHS[*]}"
+
 log "restic backup..."
 "$RESTIC_BIN" backup --tag nightly --exclude-caches \
   --exclude "$DATA_DIR"/'*.db' --exclude "$DATA_DIR"/'*.db-wal' --exclude "$DATA_DIR"/'*.db-shm' \
@@ -67,6 +80,7 @@ log "restic backup..."
   "$PH3B3_DIR/soul" \
   "$PH3B3_DIR/config" \
   "$PH3B3_DIR/deploy" \
+  ${SYS_PATHS[@]+"${SYS_PATHS[@]}"} \
   || fail "restic backup failed"
 
 # ── 4. Retention: 7 daily / 4 weekly / 6 monthly, auto-prune ──────────────────────

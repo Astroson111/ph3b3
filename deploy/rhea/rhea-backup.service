@@ -10,8 +10,11 @@ After=mnt-rhea.mount
 
 [Service]
 Type=oneshot
-User=astroson
-Group=astroson
+# Runs as root so the backup can capture root-owned system configs (WireGuard
+# keys in /etc/wireguard, the deployed systemd units). It still reads the
+# astroson-owned data + the mode-600 passphrase (root reads both). Paths in the
+# script are absolute, not $HOME-relative, precisely because $HOME is /root here.
+User=root
 ExecStart=/home/astroson/Desktop/ph3b3_v2/deploy/rhea/rhea-backup.sh
 # Be gentle — this runs nightly alongside the live server.
 Nice=10
