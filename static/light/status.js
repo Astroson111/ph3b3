@@ -37,15 +37,21 @@
         try {
             const d = await apiGet('/voice');
             voiceSel.innerHTML = '';
+            let rendered = 0;
             for (const v of d.voices || []) {
+                // Server owns approval. Honor it defensively: an unreviewed voice
+                // (approved === false) never renders in light. Voices with no
+                // approved field (e.g. local standalone) are shown as before.
+                if (v.approved === false) continue;
                 const o = document.createElement('option');
                 o.value = v.id; o.textContent = v.label;
                 if (v.id === d.current) o.selected = true;
                 voiceSel.appendChild(o);
+                rendered++;
             }
-            const cur = (d.voices || []).find(v => v.id === d.current);
+            const cur = (d.voices || []).find(v => v.id === d.current && v.approved !== false);
             voiceCurrent.textContent = cur ? `Current: ${cur.label}` : '';
-            previewBtn.disabled = !(d.voices || []).length;
+            previewBtn.disabled = rendered === 0;
         } catch (e) {
             if (e.message === '404') {
                 voiceSel.innerHTML = '<option>Not supported by this server</option>';
