@@ -1672,8 +1672,14 @@ async function loadLocale(lang) {
     try { I18N.en = await fetch('/static/locales/en.json').then(r => r.json()); } catch {}
   }
   if (lang && lang !== 'en') {
-    try { I18N.dict = await fetch('/static/locales/' + lang + '.json').then(r => r.json()); I18N.locale = lang; }
-    catch { I18N.dict = I18N.en; I18N.locale = 'en'; }        // missing locale file → English
+    // Languages without a UI locale file (it/pl/ru/ja/ko today) fall back to the
+    // English UI. Check r.ok: a 404 returns valid JSON ({"detail":"Not Found"}),
+    // so parsing alone wouldn't throw — that would mislabel the page language.
+    try {
+      const r = await fetch('/static/locales/' + lang + '.json');
+      if (!r.ok) throw new Error('no locale for ' + lang);
+      I18N.dict = await r.json(); I18N.locale = lang;
+    } catch { I18N.dict = I18N.en; I18N.locale = 'en'; }
   } else { I18N.dict = I18N.en; I18N.locale = 'en'; }
   document.documentElement.lang = I18N.locale;
   applyI18n();
