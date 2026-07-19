@@ -48,20 +48,19 @@ Ph3b3 is a FastAPI application that runs entirely on **your own machine** — th
 - **Hearing (STT):** Whisper, running on CUDA
 - **Server:** FastAPI over HTTPS, basic-auth protected
 - **Modules:** 30 capability modules
-- **Tools:** 88 callable functions she can invoke
+- **Tools:** 87 callable functions she can invoke
 
-Her range is wide for a single-author build — she spans security, household, creative, and investigative work:
+Her range is wide for a single-author build:
 
-| Domain | Modules |
-|---|---|
-| **Security** | cybersec, scam_detector, network |
-| **Vision** | camera, screenshot, vision, vision_stream, evening_capture |
-| **Voice I/O** | tts, stt |
-| **Household & productivity** | calendar, reminders, notes, timer, weather, recipes, resume |
-| **Media & creative** | anime, film, jokes, stories, spotify |
-| **Investigation / paranormal** | investigation, occult |
-| **Comms** | bluetooth, translation |
-| **Other** | dnd, search, memory, system |
+- **Voice conversation** — she speaks through Piper TTS (the **Alba** voice, British accent). Push-to-talk capture, with a server-side silence gate so quiet is never transcribed into phantom words.
+- **Sight on request** — she takes photos and describes what she sees, through a webcam or Dio's own camera, **only when you ask**. Never ambient, never silent: every capture is announced and logged.
+- **Image generation** — Morpheus (SDXL via ComfyUI), fully local.
+- **Argus** — fleet observability: heartbeats from every device, a captures feed (photos, audio, transcripts), and browsable chat history, all in one watchtower tab.
+- **Rhea** — nightly encrypted backups to a dedicated external drive, versioned, with a tested one-script restore. If the server dies tonight, she survives.
+- **30 modules** — ghost hunting, translation, cybersecurity, film, anime, D&D, weather, music, notes, karaoke, a resume analyzer (Ariadne), an on-page utility tray (timer, calc, converter, scratchpad, QR, dice, world clock) and more.
+- **Persistent memory across sessions** — Mnemosyne, in active development toward full retrieval.
+- **Reflective learning loop.**
+- **Web UI** accessible over Tailscale from anywhere.
 
 ### Honest limits
 
@@ -74,7 +73,7 @@ This matters more than the feature list. Ph3b3 runs on an **8 GB VRAM ceiling** 
 Ph3b3 started as one box you typed at. She's becoming an ecosystem — and every device in it is a client of *her* local API. None of them touch the cloud, and none of them talk to each other; they all talk to her.
 
 - **Iris** — an M5StickS3 voice combadge, described below.
-- **Stack-chan** — a CoreS3 companion wearing her face.
+- **Stack-chan body (Dio)** — a CoreS3 companion wearing her face: a camera with photo-on-face display (she shows you what she captured while describing it), a touchscreen, a fleet heartbeat, and a face that reacts — a head-pat gets a smile and a soft purr.
 - **The Control Panel** — a local control-plane PWA, served by Ph3b3 herself, described below.
 
 This is the privacy thesis extended to the remote: even the thing that *commands* her is local, also hers, served from the same box.
@@ -178,7 +177,7 @@ targeting `m5stack:esp32:m5stack_cores3`; copy `secrets.example.h` to
 Where she's going next:
 
 - **Multilingual TTS** — per-language Piper voice models, swapped to match the detected target language, so translated output is spoken in a native accent instead of Alba reading romanization.
-- **Agent orchestration** — multi-step autonomous tool chaining: give her a goal, she plans and sequences her own tool calls (across the existing 88 functions) instead of single-shot invocation.
+- **Agent orchestration** — multi-step autonomous tool chaining: give her a goal, she plans and sequences her own tool calls (across the existing 87 functions) instead of single-shot invocation.
 - **RAG memory backend** — vector-store retrieval over her long-term memory so recall scales past what fits in context, with the same local-only guarantee (embeddings generated and stored locally, nothing leaves).
 - **Flipper Zero integration** — voice-triggered Flipper actions ("Ph3b3, run the sub-GHz scan"), signal-capture data logged to her memory, the Flipper as a hardware key / physical trigger, and her responses shown on the Flipper screen. Lives in `integrations/flipper_zero/` when work starts.
 - **Integrations pattern** — a repeatable shape for new capabilities: a subfolder under `integrations/`, its own README and scripts, wired into `server.py`.
