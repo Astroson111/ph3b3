@@ -946,20 +946,27 @@ async def skills_log():
 # ~/ph3b3_data/language.json and applies to ALL output paths — portal, Dio, Iris.
 # Language and voice stay INDEPENDENT underneath; changing language OFFERS the
 # matching voice, never forces it. Alba is the invariant fallback.
-def _lang_voice_display(lang: str, text_only: bool) -> str:
-    if text_only:
-        return f"Text only — {voices.LANG_NAMES.get(lang, lang)} (no voice)"
-    return voices.active_voice_display()
+def _lang_ui_state(lang: str):
+    """(text_only, pending_review, voice_display) for a language. Three states:
+    voiced → the voice's display; pending_review → a voice is installed but
+    unreviewed (NOT 'text only' — it is sourced, just awaiting approval);
+    text_only → a genuine gap with no voice at all."""
+    name = voices.LANG_NAMES.get(lang, lang)
+    if voices.language_has_voice(lang):
+        return False, False, voices.active_voice_display()
+    if voices.language_has_installed_voice(lang):
+        return False, True, f"Voice in review — approve {name} to enable speech"
+    return True, False, f"Text only — {name} (no voice)"
 
 @app.get("/language")
 async def language_get():
     s = voices.get_setting()
     lang = s["language"]
-    text_only = not voices.language_has_voice(lang)
+    text_only, pending, disp = _lang_ui_state(lang)
     return {"language": lang, "voice": s["voice"], "text_only": text_only,
-            "voice_display": _lang_voice_display(lang, text_only),
-            "languages": voices.list_languages_for_ui(),        # each flagged text_only
-            "voices": voices.voices_for_language_ui(lang),      # empty for a text-only language
+            "pending_review": pending, "voice_display": disp,
+            "languages": voices.list_languages_for_ui(),        # each: voiced / pending_review / text_only
+            "voices": voices.voices_for_language_ui(lang),      # empty until a voice is approved
             "lang_names": voices.LANG_NAMES,
             "voice_fell_back": voices.voice_fell_back()}
 
@@ -968,13 +975,13 @@ async def language_set(body: dict):
     code = (body.get("language") or "en").strip()
     if code not in voices.LANG_NAMES:
         raise HTTPException(400, f"unknown language {code!r}")
-    # A voiceless language is now SELECTABLE as declared text-only (not rejected).
-    # 'Silent by surprise' stays impossible — a voiced language always binds to its
-    # own voice; a text-only language synthesizes nothing, by design and labeled.
-    s = voices.set_language(code)               # voice auto-follows (derived; None if text-only)
-    text_only = not voices.language_has_voice(code)
-    return {"ok": True, "language": code, "voice": s["voice"], "text_only": text_only,
-            "voice_display": _lang_voice_display(code, text_only)}
+    # A voiceless language is SELECTABLE (declared text-only or awaiting review, not
+    # rejected). 'Silent by surprise' stays impossible — a voiced language always
+    # binds to its own voice; anything else synthesizes nothing, by design and labeled.
+    s = voices.set_language(code)               # voice auto-follows (derived; None if unvoiced)
+    text_only, pending, disp = _lang_ui_state(code)
+    return {"ok": True, "language": code, "voice": s["voice"],
+            "text_only": text_only, "pending_review": pending, "voice_display": disp}
 
 @app.post("/voice/primary")
 async def voice_set(body: dict):

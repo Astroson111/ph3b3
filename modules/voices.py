@@ -133,6 +133,18 @@ def language_has_voice(lang: str) -> bool:
     return bool(approved_voices_for(lang))
 
 
+def language_has_installed_voice(lang: str) -> bool:
+    """True if ANY voice serving `lang` has a model on disk, regardless of review
+    status. Distinguishes a genuine text-only GAP (no voice exists) from a voice
+    that is installed but still awaiting the Captain's ear (PENDING review) — the
+    latter must not wear the 'text only' label, or a sourced voice looks unsourced."""
+    reg = load_registry().get("voices") or {}
+    for code, e in reg.items():
+        if e.get("lang", code) == lang and (VOICE_DIR / e.get("model", "")).exists():
+            return True
+    return False
+
+
 def voice_for_language(lang: str, prefs: dict | None = None):
     """The ACTIVE voice code for a response language: the user's saved preference
     if it is still an approved match, else the language's primary voice, else
@@ -245,16 +257,23 @@ def _language_tier(code: str, voiced: bool) -> str:
 
 
 def list_languages_for_ui() -> list:
-    """Every response-language. ALL are selectable now: a language with an approved
-    voice speaks; one without is TEXT-ONLY (flagged), selectable by declared design
-    with explicit labeling rather than disabled. `text_only` derives from the
-    REGISTRY (no approved voice) — the day a text-only language gains an approved
-    voice it flips to voiced with zero code change."""
+    """Every response-language, ALL selectable, in one of three states:
+      voiced          — has an approved voice; speaks.
+      pending_review  — a voice IS installed but unreviewed; speaks nothing yet,
+                        labeled "voice in review" (NOT "text only" — it is sourced).
+      text_only       — a genuine GAP: no voice exists at all (ja/ko/hi/id). The
+                        only state that wears the "text only" label.
+    Derives entirely from the registry, so approving a pending voice flips it to
+    voiced, and adding a voice for a text-only language flips it to pending — both
+    with zero code change."""
     out = []
     for c, n in LANG_NAMES.items():
-        voiced = language_has_voice(c)
+        voiced    = language_has_voice(c)
+        installed = voiced or language_has_installed_voice(c)
         out.append({"code": c, "name": n, "selectable": True,
-                    "text_only": not voiced, "tier": _language_tier(c, voiced)})
+                    "text_only": not installed,             # true gap only
+                    "pending_review": installed and not voiced,
+                    "tier": _language_tier(c, voiced)})
     return out
 
 

@@ -1714,15 +1714,14 @@ function _renderNote(voiceCode) {
     : '<span class="lv-tier-functional">functional</span> — small local models vary in fluency by language';
   note.innerHTML = `Voice model installed. Fluency: ${tier}.`;
 }
-function _renderAnnounce(display, textOnly) {
-  // Voiced: "Speaking with: <voice>". Text-only: a declared no-voice notice.
+function _renderAnnounce(display, textOnly, pending) {
+  // Three states. <bdi> isolates the name's direction so an RTL display_name
+  // (Arabic) can't reorder the surrounding LTR chrome.
   const el = document.getElementById('lvOffer');
   el.hidden = false;
-  // <bdi> isolates the voice name's direction so an RTL display_name (Arabic)
-  // can't reorder the surrounding LTR chrome.
-  el.innerHTML = textOnly
-    ? `📝 <strong><bdi>${display || 'Text only'}</bdi></strong> — Phoebe writes, no speech`
-    : `🔊 Speaking with: <strong><bdi>${display || 'Alba'}</bdi></strong>`;
+  if (textOnly)      el.innerHTML = `📝 <strong><bdi>${display || 'Text only'}</bdi></strong> — Phoebe writes, no speech`;
+  else if (pending)  el.innerHTML = `🕐 <strong><bdi>${display || 'Voice in review'}</bdi></strong>`;
+  else               el.innerHTML = `🔊 Speaking with: <strong><bdi>${display || 'Alba'}</bdi></strong>`;
 }
 async function langInit(force) {
   if (_langLoaded && !force) return;
@@ -1732,17 +1731,21 @@ async function langInit(force) {
   _langLoaded = true;
   const langSel = document.getElementById('langSel');
   const voiceSel = document.getElementById('voiceSel');
-  // Language options: ALL selectable. A language with no approved voice is
-  // labeled "— text only" (declared design), not disabled.
-  langSel.innerHTML = (_langData.languages || []).map(l =>
-    `<option value="${l.code}">${l.name}${l.text_only ? ' — text only' : ''}</option>`).join('');
+  // Language options: ALL selectable. "— text only" is reserved for a genuine gap
+  // (no voice exists); a language whose voice is installed-but-unreviewed reads
+  // "— voice in review" (it IS sourced, just awaiting approval), never "text only".
+  langSel.innerHTML = (_langData.languages || []).map(l => {
+    const tag = l.text_only ? ' — text only' : (l.pending_review ? ' — voice in review' : '');
+    return `<option value="${l.code}">${l.name}${tag}</option>`;
+  }).join('');
   const vs = _langData.voices || [];
-  if (_langData.text_only || vs.length === 0) {
-    // No voice: the dropdown shows a disabled placeholder; nothing synthesizes.
-    voiceSel.innerHTML = '<option>None (text only)</option>';
+  if (vs.length === 0) {
+    // No APPROVED voice yet: disabled placeholder. Distinguish gap vs pending.
+    voiceSel.innerHTML = _langData.pending_review ? '<option>None (voice in review)</option>' : '<option>None (text only)</option>';
     voiceSel.disabled = true;
-    document.getElementById('lvNote').innerHTML =
-      'Text only — response fluency: <span class="lv-tier-functional">functional</span>. No voice model for this language yet.';
+    document.getElementById('lvNote').innerHTML = _langData.pending_review
+      ? 'A voice for this language is <strong>installed and awaiting your ear</strong> in the review section below — approve it to enable speech.'
+      : 'Text only — response fluency: <span class="lv-tier-functional">functional</span>. No voice model for this language yet.';
   } else {
     voiceSel.innerHTML = vs.map(v => `<option value="${v.code}" dir="auto">${v.display_name}</option>`).join('');
     voiceSel.value = _langData.voice;
@@ -1750,7 +1753,7 @@ async function langInit(force) {
     _renderNote(_langData.voice);
   }
   langSel.value = _langData.language;
-  _renderAnnounce(_langData.voice_display, _langData.text_only);
+  _renderAnnounce(_langData.voice_display, _langData.text_only, _langData.pending_review);
   reviewLoad();
   loadLocale(_langData.language);          // localize the whole portal to the setting
 }
