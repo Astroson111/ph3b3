@@ -88,3 +88,31 @@ voices:
     tier: functional
     sample_text: "Hola, soy Phoebe. Esta es mi voz."
     status: unreviewed
+  es_sharvard:
+    model: es_ES-sharvard-medium.onnx
+    lang: es
+    display_name: "Español (España) — Sharvard"
+    script: latin
+    tier: strong
+    sample_text: "Hola, soy Phoebe. Esta es mi voz."
+    status: unreviewed
+  es_MX_high:
+    model: es_MX-claude-high.onnx
+    lang: es
+    display_name: "Español (México) — alta calidad"
+    script: latin
+    tier: strong
+    sample_text: "Hola, soy Phoebe. Esta es mi voz."
+    status: unreviewed
+  de_high:
+    model: de_DE-thorsten-high.onnx
+    lang: de
+    display_name: "Deutsch (Deutschland) — hohe Qualität"
+    script: latin
+    tier: strong
+    sample_text: "Guten Tag, ich bin Phoebe. Das ist meine Stimme."
+    status: unreviewed
+# Roster note: the ticket's it_IT / pt_BR / ru_RU / pl_PL voices are intentionally
+# NOT installed — those languages are not in the LANGUAGE picker (LANG_NAMES), so a
+# voice for them would be unreachable. fr_FR-siwis-medium is already the seated fr
+# primary above. Install a language's voice only when the language is offered.

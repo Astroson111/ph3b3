@@ -390,6 +390,8 @@
     .lv-cand button.lv-approve { border-color:#5fbf7f; color:#5fbf7f; }
     .lv-cand button.lv-reject  { border-color:#e06a6a; color:#e06a6a; }
     .lv-cand button:disabled { opacity:.4; cursor:not-allowed; }
+    .lv-audio { width:100%; height:2rem; margin-top:.5rem; }
+    .lv-prev-err { font-size:.74rem; color:#e06a6a; margin-top:.35rem; }
 
     /* ── WireGuard tunnel toggle ── */
     .wg-badge { font-size:.65rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
@@ -1069,10 +1071,13 @@
       <div class="lv-row">
         <label class="lv-label" for="voiceSel" data-i18n="status.voice">Voice</label>
         <select id="voiceSel" class="lv-sel"><option>…</option></select>
-        <button class="lv-prev" id="lvPreviewBtn" title="Preview voice" aria-label="Preview voice">▶</button>
+        <button type="button" class="lv-prev" id="lvPreviewBtn" title="Preview voice" aria-label="Preview voice">▶</button>
       </div>
       <div class="lv-note" id="lvNote"></div>
-      <audio id="lvAudio" hidden></audio>
+      <div class="lv-prev-err" id="lvPrevErr" hidden></div>
+      <!-- controls = a manual-play fallback if the browser blocks autoplay after
+           the fetch (user-activation can expire across an await on strict browsers) -->
+      <audio id="lvAudio" class="lv-audio" controls preload="none" hidden></audio>
 
       <!-- Voice review — unreviewed candidates, gated out of the dropdown until approved by ear -->
       <div class="lv-review" id="lvReview" hidden>
@@ -1749,9 +1754,9 @@ async function reviewLoad() {
       <span class="lv-cand-meta">${v.language} · ${v.tier}</span>
       ${synth}
       <span class="lv-cand-sp"></span>
-      <button class="lv-prev-c" title="Preview">▶</button>
-      <button class="lv-approve"${v.synth_ok ? '' : ' disabled title="synth check failed"'}>Approve</button>
-      <button class="lv-reject">Reject</button>
+      <button type="button" class="lv-prev-c" title="Preview">▶</button>
+      <button type="button" class="lv-approve"${v.synth_ok ? '' : ' disabled title="synth check failed"'}>Approve</button>
+      <button type="button" class="lv-reject">Reject</button>
     </div>`;
   }).join('');
   list.querySelectorAll('.lv-cand').forEach(row => {
@@ -1761,14 +1766,35 @@ async function reviewLoad() {
     row.querySelector('.lv-reject').onclick  = () => reviewReject(code, row.querySelector('.lv-cand-name').textContent);
   });
 }
-async function previewCode(code) {
+// Shared voice player. Robust against the two ways preview "did nothing":
+//   1) play() was called after `await fetch` → user-activation can be gone on
+//      strict browsers → autoplay rejected. We catch the rejection and leave the
+//      visible <audio controls> as a manual-play fallback (never silent-fail).
+//   2) synth returned no audio → we SAY so instead of doing nothing.
+async function playVoice(code, btn) {
+  const a = document.getElementById('lvAudio');
+  const err = document.getElementById('lvPrevErr');
+  err.hidden = true; err.textContent = '';
+  if (btn) btn.disabled = true;
   try {
     const r = await fetch('/voice/preview', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ voice: code }) }).then(r => r.json());
-    if (r.audio) { const a = document.getElementById('lvAudio');
-      a.src = 'data:audio/wav;base64,' + r.audio; a.play(); }
-  } catch {}
+      body: JSON.stringify({ voice: code }) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    if (!j.audio) { err.hidden = false; err.textContent = 'No audio — this voice failed to synthesize.'; a.hidden = true; return; }
+    a.src = 'data:audio/wav;base64,' + j.audio;
+    a.hidden = false;
+    a.load();
+    a.play().catch(() => {           // autoplay blocked — the controls above are the fallback
+      err.hidden = false; err.textContent = 'Tap ▶ on the player below to hear it (autoplay blocked).';
+    });
+  } catch (e) {
+    err.hidden = false; err.textContent = 'Preview failed: ' + e.message;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
+function previewCode(code) { return playVoice(code, null); }
 async function reviewApprove(code) {
   const r = await fetch('/voice/review/approve', { method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ voice: code }) }).then(r => r.json()).catch(() => ({}));
@@ -1798,17 +1824,11 @@ async function voiceSet(code) {
   if (r.ok) { _renderNote(code); _renderAnnounce(r.voice_display); }
   else await langInit(true);                // resync on refusal
 }
-async function voicePreview() {
-  const code = document.getElementById('voiceSel').value;
-  const btn = document.getElementById('lvPreviewBtn'); btn.disabled = true;
-  try {
-    const r = await fetch('/voice/preview', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ voice: code }) }).then(r => r.json());
-    if (r.audio) {
-      const a = document.getElementById('lvAudio');
-      a.src = 'data:audio/wav;base64,' + r.audio; a.play();
-    }
-  } finally { btn.disabled = false; }
+function voicePreview() {
+  // voiceSel is disabled when a language has only one voice, but its .value is
+  // still readable; fall back to the active voice if somehow empty.
+  const code = document.getElementById('voiceSel').value || (_langData && _langData.voice) || 'en';
+  return playVoice(code, document.getElementById('lvPreviewBtn'));
 }
 document.getElementById('langSel').addEventListener('change', e => langSet(e.target.value));
 document.getElementById('voiceSel').addEventListener('change', e => voiceSet(e.target.value));
