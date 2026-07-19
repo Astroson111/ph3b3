@@ -44,7 +44,7 @@ That's the direction: capable, private help, shaped by the people the industry u
 Ph3b3 is a FastAPI application that runs entirely on **your own machine** — the reference build is a desktop with a Ryzen 9 7950X and an RTX 4060 Ti (16 GB). The full stack is local:
 
 - **Brain:** Hermes3 via Ollama
-- **Voice (TTS):** Piper — **Alba** (en_GB) by default, with native es/fr/de/zh voices, selectable per language. New voice candidates install gated as *unreviewed* and only reach the picker once approved by ear in the Status tab.
+- **Voice (TTS):** Piper — **Alba** (en_GB) by default, with native es/fr/de/zh/it/pl/ru voices, selectable per language (Japanese & Korean run text-only). New voice candidates install gated as *unreviewed* and only reach the picker once approved by ear in the Status tab — adding a language or voice is a registry entry plus a hash-pinned download, not code.
 - **Hearing (STT):** Whisper, running on CUDA
 - **Server:** FastAPI over HTTPS, basic-auth protected
 - **Modules:** 30 capability modules
@@ -52,7 +52,7 @@ Ph3b3 is a FastAPI application that runs entirely on **your own machine** — th
 
 Her range is wide for a single-author build:
 
-- **Voice conversation, in five languages** — she speaks through Piper TTS, defaulting to the **Alba** voice (English, Scottish). Pick a language in the Status tab and she both *responds* and *speaks* in it — **English, Spanish, French, German, or Mandarin** — each in a real native voice (Mandarin in Hanzi, not romanization read with an English mouth). One setting, applied everywhere she talks — portal, Dio, Iris. Her **safety refusals hold in every language** (the "the filter only speaks English" hole, closed). Push-to-talk capture, with a server-side silence gate so quiet is never transcribed into phantom words.
+- **Voice conversation, in eight languages — and text in more** — she speaks through Piper TTS, defaulting to the **Alba** voice (English, Scottish). Pick a language in the Status tab and she both *responds* and *speaks* in it — **English, Spanish, French, German, Mandarin, Italian, Polish, or Russian** — each in a real native voice (Mandarin in Hanzi, Russian in Cyrillic, never romanization read with an English mouth). Languages without a quality voice yet — **Japanese, Korean** — are offered *text-only*: she writes in them and stays silent rather than faking an accent, by declared design. The portal UI localizes too. **More can be added**: a new language or voice is a registry entry plus a one-time, hash-pinned model download, reviewed by ear before it goes live — not a code change. One setting, applied everywhere she talks — portal, Dio, Iris. Her **safety refusals hold in every language** (the "the filter only speaks English" hole, closed). Push-to-talk capture, with a server-side silence gate so quiet is never transcribed into phantom words.
 - **Sight on request** — she takes photos and describes what she sees, through a webcam or Dio's own camera, **only when you ask**. Never ambient, never silent: every capture is announced and logged.
 - **Image generation** — Morpheus (SDXL via ComfyUI), fully local.
 - **Argus** — fleet observability: heartbeats from every device, a captures feed (photos, audio, transcripts), and browsable chat history, all in one watchtower tab.
@@ -176,7 +176,7 @@ targeting `m5stack:esp32:m5stack_cores3`; copy `secrets.example.h` to
 
 Where she's going next:
 
-- **Multilingual TTS** — per-language Piper voice models, swapped to match the detected target language, so translated output is spoken in a native accent instead of Alba reading romanization.
+- **More languages & voices** — multilingual voice + response ships today (eight voiced languages, Japanese/Korean text-only). The bench stays open: any medium-or-better Piper voice drops in through the registry and a by-ear review, no code change. The next real step is *voicing* Japanese and Korean — official Piper has nothing that clears the bar, so it needs a second local TTS engine (VITS-class) behind the same registry.
 - **Agent orchestration** — multi-step autonomous tool chaining: give her a goal, she plans and sequences her own tool calls (across the existing 87 functions) instead of single-shot invocation.
 - **RAG memory backend** — vector-store retrieval over her long-term memory so recall scales past what fits in context, with the same local-only guarantee (embeddings generated and stored locally, nothing leaves).
 - **Flipper Zero integration** — voice-triggered Flipper actions ("Ph3b3, run the sub-GHz scan"), signal-capture data logged to her memory, the Flipper as a hardware key / physical trigger, and her responses shown on the Flipper screen. Lives in `integrations/flipper_zero/` when work starts.

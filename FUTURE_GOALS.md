@@ -11,14 +11,15 @@ What's shipped, what's active, what's next. Only things that actually run on `ma
 - **Photo tools — `take_photo` / `describe_view`.** Explicit-ask only; every capture announced and logged to Argus.
 - **Dio native photo loop.** Her own camera, drawn to her own screen, described aloud. (Yes, the colors were briefly psychedelic. Fixed.)
 - **STT hallucination gate.** Silence is no longer transcribed into phantom whispers.
-- **Language selection (voice + response).** One setting in the Status tab and Phoebe both *responds* and *speaks* in English, Spanish, French, German, or Mandarin — each a real native Piper voice (Mandarin in Hanzi, not romanization). Her safety refusals hold in every language. Absorbs the old "Multilingual TTS" goal.
+- **Language & voice.** One setting in the Status tab and Phoebe both *responds* and *speaks* in eight languages — English, Spanish (four regional voices), French, German, Mandarin (Hanzi), Italian, Polish, and Russian (Cyrillic) — each a real native Piper voice, never romanization. New voices install hash-pinned and are reviewed *by ear* in the portal before they can be picked, so a wrong-accent model never ships silently; adding a language or voice is a registry entry plus a one-time model download, not code. Safety refusals hold in every language. Absorbs the old "Multilingual TTS" goal.
+- **Text-only languages.** A language with no voice that clears the quality bar is still selectable — labeled "text only" — and Phoebe answers in text, synthesizing nothing (declared design, never silent-by-surprise; Alba is never assigned to it). Japanese and Korean ship this way today.
+- **Portal localization.** The interface itself — tabs, buttons, cards — renders in the selected language via locale files with English fallback. Live for English, Spanish, French, German, Mandarin, Italian, Polish, and Russian; Polish and Russian await a native polish pass, and Japanese/Korean chrome falls back to English until translated.
 
 ---
 
 ## Active
 
 - **Mnemosyne — persistent local memory spine.** Growing into retrieval over long-term memory (this absorbs the old "RAG memory backend" goal). Same guarantee as everything else here: embeddings are generated and stored locally, nothing leaves.
-- **Portal UI localization.** The interface itself in every language (locale files + lookup, English fallback) — the response/voice half already ships above; this extends it to the labels. Machine-drafted translations in human review before it lands.
 
 ---
 
