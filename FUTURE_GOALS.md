@@ -27,5 +27,6 @@ What's shipped, what's active, what's next. Only things that actually run on `ma
 - **Chronos — a sense of time.** A local scheduler for reminders, briefs, and "you've been at this four hours."
 - **Aura — a sense of the room.** Environmental sensing — temperature, humidity, air quality — as a fleet device.
 - **Argus phase two — immunity.** Continuous config-hash self-checks; noticing changes no PR made.
+- **JA/KO voices.** Japanese and Korean are offered today as text-only languages (Phoebe writes, doesn't speak) because official Piper has no ja/ko voice that clears the quality bar. Voicing them requires a second local TTS engine (VITS-class) behind the existing voice registry — no cloud, no quality compromise.
 - **Agent orchestration.** Goal-directed multi-step tool chaining across the full function set, instead of single-shot invocation.
 - **Integrations pattern.** A repeatable shape for new capabilities: a subfolder under `integrations/`, its own README, wired into `agent/server.py`.

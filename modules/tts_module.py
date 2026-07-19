@@ -178,6 +178,15 @@ def _prep(text: str, script: str) -> str:
     return (text or "").strip() if script == "native" else _strip_for_piper(text)
 
 
+def _current_text_only() -> bool:
+    """True when the current language is text-only (no approved voice) — default-
+    voice callers skip synthesis so no empty-audio call is made. Never raises."""
+    try:
+        return _voices.current_is_text_only()
+    except Exception:
+        return False
+
+
 class TTSModule:
     def __init__(self):
         self._lock      = threading.Lock()
@@ -193,6 +202,9 @@ class TTSModule:
             return "TTS not available."
         if not text or not text.strip():
             return "Nothing to say."
+        if voice is None and _current_text_only():   # declared text-only: no speech
+            log.info("[TTS] text-only language — synthesis skipped")
+            return "Text-only language: no speech."
         model, script = _resolve_voice(voice)
         tts_text = _prep(text, script)
         if not tts_text:
@@ -303,6 +315,8 @@ class TTSModule:
         """Run Piper and return base64-encoded WAV, or None if unavailable. `voice`
         is a registry code (e.g. 'es'); default = the selected primary voice."""
         if not self._available or not text or not text.strip():
+            return None
+        if voice is None and _current_text_only():   # declared text-only: no audio
             return None
         model, script = _resolve_voice(voice)
         tts_text = _prep(text, script)

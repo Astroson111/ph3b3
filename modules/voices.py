@@ -31,6 +31,12 @@ DEFAULT_LANG  = "en"          # Alba — the constant that cannot break
 LANG_NAMES = {
     "en": "English", "es": "Spanish", "fr": "French",
     "de": "German",  "zh": "Mandarin Chinese",
+    "it": "Italian", "pl": "Polish",  "ru": "Russian",
+    # Text-only languages: offered for response text, but Piper has no voice that
+    # clears the quality bar, so they synthesize nothing (declared text-only, not
+    # silent-by-surprise). They become voiced automatically the day the registry
+    # gains an approved voice for them — no code change (see list_languages_for_ui).
+    "ja": "Japanese", "ko": "Korean",
 }
 
 _lock = threading.Lock()
@@ -207,25 +213,47 @@ def voice_fell_back() -> bool:
 
 
 def output_for_response(response_lang: str | None = None) -> dict:
-    """Runtime binding for speaking a reply (belt + suspenders). Returns
-    {'voice': code, 'notice': str|None}: the approved voice matching the response
-    language, or — if that language has no approved voice — Alba ('en') plus a
-    one-line notice to speak instead, so Phoebe is NEVER silent without saying
-    why. `response_lang` defaults to the current language setting."""
+    """Runtime binding for speaking a reply. Returns {'voice': code|None,
+    'text_only': bool}. A language with an approved voice → that voice. A language
+    with NO approved voice → text_only (voice None): nothing synthesizes and Alba
+    is NOT assigned — the reply is delivered as TEXT ONLY by declared design.
+    'Silent by surprise' stays forbidden (a voiced language always resolves to its
+    own voice); 'silent by declared design' is supported. Defaults to current lang."""
     lang = response_lang or get_setting()["language"]
     code = voice_for_language(lang)
     if code:
-        return {"voice": code, "notice": None}
-    name = LANG_NAMES.get(lang, lang)
-    return {"voice": "en", "notice": f"I can't voice {name} yet, so here's the text."}
+        return {"voice": code, "text_only": False}
+    return {"voice": None, "text_only": True}
+
+
+def current_is_text_only() -> bool:
+    """True when the current language has no approved voice — the TTS layer skips
+    synthesis for it (default-voice callers), so no empty-audio call is made."""
+    return not language_has_voice(get_setting()["language"])
+
+
+def _language_tier(code: str, voiced: bool) -> str:
+    """Fluency shown in the picker: a voiced language uses its primary voice's
+    tier; a text-only language is 'functional' (honest — a small local model
+    answering in a non-primary language)."""
+    if voiced:
+        e = (load_registry().get("voices") or {}).get(default_voice_for(code)) or {}
+        return e.get("tier", "functional")
+    return "functional"
 
 
 def list_languages_for_ui() -> list:
-    """Every response-language, each flagged `selectable` (has an approved voice).
-    A non-selectable language renders disabled — it cannot be chosen into a
-    silent state."""
-    return [{"code": c, "name": n, "selectable": language_has_voice(c)}
-            for c, n in LANG_NAMES.items()]
+    """Every response-language. ALL are selectable now: a language with an approved
+    voice speaks; one without is TEXT-ONLY (flagged), selectable by declared design
+    with explicit labeling rather than disabled. `text_only` derives from the
+    REGISTRY (no approved voice) — the day a text-only language gains an approved
+    voice it flips to voiced with zero code change."""
+    out = []
+    for c, n in LANG_NAMES.items():
+        voiced = language_has_voice(c)
+        out.append({"code": c, "name": n, "selectable": True,
+                    "text_only": not voiced, "tier": _language_tier(c, voiced)})
+    return out
 
 
 def voices_for_language_ui(lang: str) -> list:

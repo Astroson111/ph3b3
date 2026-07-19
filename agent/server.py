@@ -946,13 +946,20 @@ async def skills_log():
 # ~/ph3b3_data/language.json and applies to ALL output paths — portal, Dio, Iris.
 # Language and voice stay INDEPENDENT underneath; changing language OFFERS the
 # matching voice, never forces it. Alba is the invariant fallback.
+def _lang_voice_display(lang: str, text_only: bool) -> str:
+    if text_only:
+        return f"Text only — {voices.LANG_NAMES.get(lang, lang)} (no voice)"
+    return voices.active_voice_display()
+
 @app.get("/language")
 async def language_get():
     s = voices.get_setting()
-    return {"language": s["language"], "voice": s["voice"],
-            "voice_display": voices.active_voice_display(),
-            "languages": voices.list_languages_for_ui(),        # selectable flags (rule 2)
-            "voices": voices.voices_for_language_ui(s["language"]),  # picker, filtered to language
+    lang = s["language"]
+    text_only = not voices.language_has_voice(lang)
+    return {"language": lang, "voice": s["voice"], "text_only": text_only,
+            "voice_display": _lang_voice_display(lang, text_only),
+            "languages": voices.list_languages_for_ui(),        # each flagged text_only
+            "voices": voices.voices_for_language_ui(lang),      # empty for a text-only language
             "lang_names": voices.LANG_NAMES,
             "voice_fell_back": voices.voice_fell_back()}
 
@@ -961,12 +968,13 @@ async def language_set(body: dict):
     code = (body.get("language") or "en").strip()
     if code not in voices.LANG_NAMES:
         raise HTTPException(400, f"unknown language {code!r}")
-    if not voices.language_has_voice(code):     # rule 2 — cannot select into a silent state
-        raise HTTPException(400, f"no approved voice installed for {code!r}")
-    s = voices.set_language(code)               # voice auto-follows (derived)
-    return {"ok": True, "language": code,
-            "voice": s["voice"],                # the auto-switched active voice
-            "voice_display": voices.active_voice_display()}
+    # A voiceless language is now SELECTABLE as declared text-only (not rejected).
+    # 'Silent by surprise' stays impossible — a voiced language always binds to its
+    # own voice; a text-only language synthesizes nothing, by design and labeled.
+    s = voices.set_language(code)               # voice auto-follows (derived; None if text-only)
+    text_only = not voices.language_has_voice(code)
+    return {"ok": True, "language": code, "voice": s["voice"], "text_only": text_only,
+            "voice_display": _lang_voice_display(code, text_only)}
 
 @app.post("/voice/primary")
 async def voice_set(body: dict):
@@ -1346,15 +1354,13 @@ async def chat_endpoint(body: dict, request: Request):
     if reply is None:
         return {"response": "", "audio": ""}
     _LAST_REPLY[body.get("session_id", "default")] = reply   # echo-guard memory
-    # Runtime voice↔language guard: speak the reply in the language's approved
-    # voice; if the language has no voice, Alba speaks a one-line notice and the
-    # text is still returned (never silent without saying why).
+    # Voice↔language binding: a voiced language speaks in its own voice; a
+    # text-only language (no approved voice) synthesizes NOTHING — reply is
+    # returned as text, Alba is not assigned, no empty-audio call is made.
     plan = voices.output_for_response()
-    if plan["notice"]:
-        audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, plan["notice"], "en")
-    else:
-        audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, reply, plan["voice"])
-    return {"response": reply, "audio": audio_b64}
+    audio_b64 = "" if plan["text_only"] else await asyncio.to_thread(
+        tts.synthesize_to_b64, reply, plan["voice"])
+    return {"response": reply, "audio": audio_b64, "text_only": plan["text_only"]}
 
 
 # ── Chunked TTS (synth-on-demand) — additive; clients opt in via /chat/stream ──
@@ -1399,14 +1405,13 @@ async def chat_stream_endpoint(body: dict, request: Request):
         return {"response": "", "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}
     _LAST_REPLY[body.get("session_id", "default")] = reply   # echo-guard memory
-    # Runtime voice↔language guard (same as /chat): match the voice to the
-    # response language; if unvoiceable, Alba speaks a one-line notice as the
-    # sole chunk and the reply text is still returned for rendering.
+    # Text-only language: return the reply text and synthesize nothing (no stream,
+    # no Alba). Devices render the text and attempt no audio.
     plan = voices.output_for_response()
-    if plan["notice"]:
-        chunks, out_voice = [plan["notice"]], "en"
-    else:
-        chunks, out_voice = split_for_tts(reply), plan["voice"]
+    if plan["text_only"]:
+        return {"response": reply, "stream_id": "", "chunk_count": 0,
+                "chunk_index": -1, "audio": "", "last": True, "text_only": True}
+    chunks, out_voice = split_for_tts(reply), plan["voice"]
     if not chunks:
         return {"response": reply, "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}

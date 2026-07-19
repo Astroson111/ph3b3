@@ -33,6 +33,9 @@ declare -A VOICES=(
   [es_ES-sharvard-medium]="es/es_ES/sharvard/medium"  # unreviewed candidate (Español España alt)
   [es_MX-claude-high]="es/es_MX/claude/high"          # unreviewed candidate (Español México HQ)
   [de_DE-thorsten-high]="de/de_DE/thorsten/high"      # unreviewed candidate (Deutsch HQ)
+  [it_IT-paola-medium]="it/it_IT/paola/medium"        # unreviewed candidate (Italiano)
+  [pl_PL-gosia-medium]="pl/pl_PL/gosia/medium"        # unreviewed candidate (Polski)
+  [ru_RU-irina-medium]="ru/ru_RU/irina/medium"        # unreviewed candidate (Русский)
 )
 # Registry code → sha256 (onnx, then .onnx.json). Pinned at selection time.
 declare -A SHA_ONNX=(
@@ -45,6 +48,9 @@ declare -A SHA_ONNX=(
   [es_ES-sharvard-medium]=40febfb1679c69a4505ff311dc136e121e3419a13a290ef264fdf43ddedd0fb1
   [es_MX-claude-high]=3ef40a71ea63852cd8ab7e6fa7d2ecdcfa67a0b47c9c48e3f10e02ee02083ea0
   [de_DE-thorsten-high]=9df1c43c61149ef9b39e618e2b861fbe41e1fcea9390b2dac62e8761573ea4f1
+  [it_IT-paola-medium]=6fc918b5a0ea6137382833dddfa567bffbe6a5060c02043c87192ee59c04210c
+  [pl_PL-gosia-medium]=38f66464240ed74f186e6b7dc13c6e3b22e023426299f25c2b3cc9dfa9373fbc
+  [ru_RU-irina-medium]=8ff38212d23da300bbe3705c645e6e5b9475f0bfde01558eb17813e22acaaaaa
 )
 declare -A SHA_JSON=(
   [en_GB-alba-medium]=aa965a2f02ecced632c2694e1fc72bbff6d65f265fab567ca945918c73dd89f4
@@ -56,6 +62,9 @@ declare -A SHA_JSON=(
   [es_ES-sharvard-medium]=7438c9b699c72b0c3388dae1b68d3f364dc66a2150fe554a1c11f03372957b2c
   [es_MX-claude-high]=1afc81f703c0e4cb3b4d7c0dca096b8b54a98806807f0170cf5eb5557723c12d
   [de_DE-thorsten-high]=6de734444e4c3f9e33b7ebe2746dbc19b71e85f613e79c65acf623200b99a76a
+  [it_IT-paola-medium]=aea19c0a7fce29fbc359b93f10e7902854401e4c95ae2ea328ae516b15d296cf
+  [pl_PL-gosia-medium]=1aefb31a9d53ffe44a8163ff73ec833acb7a6253848f6bb0403d8a66f9c7510d
+  [ru_RU-irina-medium]=c2ec28bb38e2b59e93b959b3e40348c1afebbd272f30fed5d41205d08e98a9d7
 )
 verify() {  # verify <file> <expected-sha256>
   local got; got="$(sha256sum "$1" | cut -d' ' -f1)"
@@ -81,7 +90,7 @@ PY
 )"
 fi
 
-echo "Fetching Piper voices (~600 MB total, one-time, hash-verified) → $VOICE_DIR"
+echo "Fetching Piper voices (~780 MB total, one-time, hash-verified) → $VOICE_DIR"
 for name in "${!VOICES[@]}"; do
   if printf '%s\n' $REJECTED_MODELS | grep -qx "$name"; then
     echo "  $name rejected by review — skipping"; continue

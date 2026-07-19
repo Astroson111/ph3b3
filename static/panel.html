@@ -1708,11 +1708,13 @@ function _renderNote(voiceCode) {
     : '<span class="lv-tier-functional">functional</span> — small local models vary in fluency by language';
   note.innerHTML = `Voice model installed. Fluency: ${tier}.`;
 }
-function _renderAnnounce(display) {
-  // "Speaking with: <voice>" — the auto-switch is shown, not offered.
+function _renderAnnounce(display, textOnly) {
+  // Voiced: "Speaking with: <voice>". Text-only: a declared no-voice notice.
   const el = document.getElementById('lvOffer');
   el.hidden = false;
-  el.innerHTML = `🔊 Speaking with: <strong>${display || 'Alba'}</strong>`;
+  el.innerHTML = textOnly
+    ? `📝 <strong>${display || 'Text only'}</strong> — Phoebe writes, no speech`
+    : `🔊 Speaking with: <strong>${display || 'Alba'}</strong>`;
 }
 async function langInit(force) {
   if (_langLoaded && !force) return;
@@ -1722,17 +1724,25 @@ async function langInit(force) {
   _langLoaded = true;
   const langSel = document.getElementById('langSel');
   const voiceSel = document.getElementById('voiceSel');
-  // Language options: disable any language with no approved voice (rule 2).
+  // Language options: ALL selectable. A language with no approved voice is
+  // labeled "— text only" (declared design), not disabled.
   langSel.innerHTML = (_langData.languages || []).map(l =>
-    `<option value="${l.code}"${l.selectable ? '' : ' disabled'}>${l.name}${l.selectable ? '' : ' — no voice installed yet'}</option>`).join('');
-  // Voice options: only voices matching the current language (server-filtered).
-  voiceSel.innerHTML = (_langData.voices || []).map(v =>
-    `<option value="${v.code}">${v.display_name}</option>`).join('');
+    `<option value="${l.code}">${l.name}${l.text_only ? ' — text only' : ''}</option>`).join('');
+  const vs = _langData.voices || [];
+  if (_langData.text_only || vs.length === 0) {
+    // No voice: the dropdown shows a disabled placeholder; nothing synthesizes.
+    voiceSel.innerHTML = '<option>None (text only)</option>';
+    voiceSel.disabled = true;
+    document.getElementById('lvNote').innerHTML =
+      'Text only — response fluency: <span class="lv-tier-functional">functional</span>. No voice model for this language yet.';
+  } else {
+    voiceSel.innerHTML = vs.map(v => `<option value="${v.code}">${v.display_name}</option>`).join('');
+    voiceSel.value = _langData.voice;
+    voiceSel.disabled = vs.length < 2;     // nothing to pick if only one
+    _renderNote(_langData.voice);
+  }
   langSel.value = _langData.language;
-  voiceSel.value = _langData.voice;
-  voiceSel.disabled = (_langData.voices || []).length < 2;   // nothing to pick if only one
-  _renderNote(_langData.voice);
-  _renderAnnounce(_langData.voice_display);
+  _renderAnnounce(_langData.voice_display, _langData.text_only);
   reviewLoad();
   loadLocale(_langData.language);          // localize the whole portal to the setting
 }

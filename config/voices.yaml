@@ -121,7 +121,35 @@ voices:
     tier: strong
     sample_text: "Hallo! Ich bin Phoebe."
     status: approved
-# Roster note: the ticket's it_IT / pt_BR / ru_RU / pl_PL voices are intentionally
-# NOT installed — those languages are not in the LANGUAGE picker (LANG_NAMES), so a
-# voice for them would be unreachable. fr_FR-siwis-medium is already the seated fr
-# primary above. Install a language's voice only when the language is offered.
+
+  # ── Bench expansion: it / pl / ru (status: unreviewed, awaiting the ear) ──────
+  # Their languages are in the picker (LANG_NAMES); until approved these languages
+  # run TEXT-ONLY, then flip to voiced on approval.
+  it:
+    model: it_IT-paola-medium.onnx
+    lang: it
+    display_name: "Paola — Italiano (Italia)"
+    script: latin
+    tier: strong
+    sample_text: "Ciao! Sono Phoebe."
+    status: unreviewed
+  pl:
+    model: pl_PL-gosia-medium.onnx
+    lang: pl
+    display_name: "Gosia — Polski (Polska)"
+    script: latin
+    tier: strong
+    sample_text: "Cześć! Jestem Phoebe."
+    status: unreviewed
+  ru:
+    model: ru_RU-irina-medium.onnx
+    lang: ru
+    display_name: "Irina — Русский (Россия)"
+    script: native          # Cyrillic — never strip to Latin (would delete the text)
+    tier: strong
+    sample_text: "Привет! Я Фиби."
+    status: unreviewed
+# Roster note: pt_BR is intentionally NOT installed — Portuguese is not in the
+# LANGUAGE picker (LANG_NAMES), so a voice for it would be unreachable. Install a
+# language's voice only when the language is offered. Japanese / Korean are offered
+# TEXT-ONLY: official Piper has no ja/ko voice clearing the bar (see FUTURE_GOALS).

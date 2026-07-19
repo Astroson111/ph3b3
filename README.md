@@ -221,8 +221,13 @@ Most models are ~60–110 MB (`.onnx` + `.onnx.json`). A voice is either **appro
 | `es_ES-sharvard-medium` | Sharvard | Español (España) | strong | 74 MB | approved |
 | `es_MX-claude-high` | Claude | Español (México) | strong | 61 MB | approved |
 | `de_DE-thorsten-high` | Thorsten HD | Deutsch (Deutschland) | strong | 109 MB | approved |
+| `it_IT-paola-medium` | Paola | Italiano (Italia) | strong | 61 MB | *unreviewed* |
+| `pl_PL-gosia-medium` | Gosia | Polski (Polska) | strong | 61 MB | *unreviewed* |
+| `ru_RU-irina-medium` | Irina | Русский (Россия) | strong | 61 MB | *unreviewed* |
 
-**Total: ~0.6 GB** for all nine, all approved (Spanish has four seated voices, German two). New voices added later ship as `unreviewed` candidates and join the picker only once approved by ear. Voices behind the honest-gap rule — a language with no medium-or-better Piper voice — ship **no** model at all; that language is disabled in the picker (it cannot be set into a silent state) rather than falling back to a bad-accent read.
+**Total: ~0.78 GB** for all twelve. Nine are approved; Italian, Polish, and Russian ship as `unreviewed` candidates — their languages run **text-only** until the Captain approves the voice by ear, then flip to voiced. New voices always arrive `unreviewed` and join the picker only once approved.
+
+**Text-only languages.** A language with no *approved* voice is still selectable — labeled "— text only" — and Phoebe answers in that language as **text**, synthesizing nothing (declared design, never silent-by-surprise; Alba is never assigned to it). **Japanese** and **Korean** are offered this way today: official Piper has no ja/ko voice that clears the quality bar (voicing them needs a second local TTS engine — see [FUTURE_GOALS](FUTURE_GOALS.md)). The text-only state derives from the registry, so the day a language gains an approved voice the label drops off with zero code change.
 
 ### Start her
 
