@@ -114,7 +114,7 @@ from occult_module import OccultModule
 from jokes_module import JokesModule
 from vision_module import VisionModule
 from search_module import SearchModule
-from tts_module import TTSModule, trim_silence_b64
+from tts_module import TTSModule, trim_silence_b64, rms_b64, PREVIEW_RMS_FLOOR
 from stt_module import STTModule
 from paths import PH3B3_DATA  # [DBG-AUDIO] instrumentation save-dir root
 from anime_module import AnimeModule
@@ -151,6 +151,9 @@ class _DioStateProtocol(asyncio.DatagramProtocol):
 @asynccontextmanager
 async def lifespan(app):
     memory.confirm_boot()
+    _missing_st = voices.voices_missing_sample_text()
+    if _missing_st:                     # sample_text is required — say so loudly
+        log.error("Voices missing REQUIRED sample_text (will fail synth check): %s", _missing_st)
     boot_count = memory.memory.get("boot_count", 1)
     greetings = [
         "Soul online.",
@@ -979,13 +982,27 @@ async def voice_set(body: dict):
 @app.post("/voice/preview")
 async def voice_preview(body: dict):
     """Speak one short sample line in a given voice (before committing). Returns a
-    base64 WAV the browser plays — same synth path as everything else."""
+    base64 WAV the browser plays — same synth path as everything else.
+
+    Silence is an ERROR, never a 200: empty sample text is rejected, and the
+    generated clip is checked against an RMS floor before it is returned. So any
+    silence a client hears is downstream of a verified-audible payload."""
     code = (body.get("voice") or "en").strip()
     reg  = voices.load_registry()
     entry = (reg.get("voices") or {}).get(code) or {}
-    sample = (body.get("text") or entry.get("sample_text") or "Hello, this is a preview.")
+    sample = (body.get("text") or entry.get("sample_text") or "").strip()
+    if not sample:                      # no line to speak — never synth silence
+        log.warning("preview: empty sample text for voice %r", code)
+        raise HTTPException(422, f"no sample text for voice {code!r}")
     b64 = await asyncio.to_thread(tts.synthesize_to_b64, sample, code)
-    return {"audio": b64 or "", "text": sample, "voice": code}
+    if not b64:
+        log.error("preview: synthesis returned no audio (voice=%r text=%r)", code, sample)
+        raise HTTPException(500, "synthesis produced no audio")
+    rms = rms_b64(b64)
+    if rms < PREVIEW_RMS_FLOOR:         # audible check — silence is a failure
+        log.error("preview: SILENT audio rms=%.1f (voice=%r text=%r)", rms, code, sample)
+        raise HTTPException(500, f"synthesis was silent (rms {rms:.0f})")
+    return {"audio": b64, "text": sample, "voice": code, "rms": round(rms, 1)}
 
 
 # ── Voice review gate ─────────────────────────────────────────────────────────
@@ -999,8 +1016,14 @@ async def voice_review_list():
     voices_ = voices.list_for_review()
 
     def _synth_ok(code, text):
+        # Required-field enforcement: a voice with no sample line fails the check
+        # here (install/review time), never silently at preview time.
+        if not (text or "").strip():
+            log.warning("review: voice %r has no sample_text — synth check fails", code)
+            return False
         try:
-            return bool(tts.synthesize_to_b64(text or "Preview.", code))
+            b64 = tts.synthesize_to_b64(text, code)
+            return bool(b64) and rms_b64(b64) >= PREVIEW_RMS_FLOOR
         except Exception:
             return False
 

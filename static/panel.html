@@ -392,6 +392,7 @@
     .lv-cand button:disabled { opacity:.4; cursor:not-allowed; }
     .lv-audio { width:100%; height:2rem; margin-top:.5rem; }
     .lv-prev-err { font-size:.74rem; color:#e06a6a; margin-top:.35rem; }
+    .lv-prev-ok  { font-size:.74rem; color:#5fbf7f; margin-top:.35rem; }
 
     /* ── WireGuard tunnel toggle ── */
     .wg-badge { font-size:.65rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
@@ -1779,17 +1780,25 @@ async function playVoice(code, btn) {
   try {
     const r = await fetch('/voice/preview', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ voice: code }) });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) {                     // server rejects silence/empty as an error, not a 200
+      let msg = 'HTTP ' + r.status;
+      try { const d = await r.json(); if (d.detail) msg = d.detail; } catch {}
+      throw new Error(msg);
+    }
     const j = await r.json();
-    if (!j.audio) { err.hidden = false; err.textContent = 'No audio — this voice failed to synthesize.'; a.hidden = true; return; }
+    if (!j.audio) { err.className = 'lv-prev-err'; err.hidden = false; err.textContent = 'No audio — this voice failed to synthesize.'; a.hidden = true; return; }
     a.src = 'data:audio/wav;base64,' + j.audio;
     a.hidden = false;
     a.load();
-    a.play().catch(() => {           // autoplay blocked — the controls above are the fallback
-      err.hidden = false; err.textContent = 'Tap ▶ on the player below to hear it (autoplay blocked).';
+    // The server already verified this clip is audible (RMS above floor). Show it,
+    // so if you still hear nothing the fault is your audio output, not Ph3b3.
+    err.className = 'lv-prev-ok'; err.hidden = false;
+    err.textContent = `✓ audible clip sent (RMS ${j.rms}) — playing`;
+    a.play().catch(() => {           // autoplay blocked — the visible controls are the fallback
+      err.className = 'lv-prev-err'; err.textContent = 'Tap ▶ on the player below to hear it (autoplay blocked).';
     });
   } catch (e) {
-    err.hidden = false; err.textContent = 'Preview failed: ' + e.message;
+    err.className = 'lv-prev-err'; err.hidden = false; err.textContent = 'Preview failed: ' + e.message;
   } finally {
     if (btn) btn.disabled = false;
   }

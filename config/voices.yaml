@@ -19,7 +19,10 @@
 #                  voice's own model handles its script — never strip it)
 #   tier         — 'strong' | 'functional'  (honest-capability note in the UI: small
 #                  local models vary in fluency by language)
-#   sample_text  — one short line spoken by the Preview button
+#   sample_text  — REQUIRED. One short line IN THE VOICE'S OWN LANGUAGE, spoken
+#                  by Preview ("Hello! I'm Phoebe." and its translations). A voice
+#                  with no sample_text fails the synthesis check (it cannot be
+#                  previewed or approved) rather than emitting silence.
 #   status       — 'approved' | 'unreviewed'  (the review GATE, below)
 #
 # REVIEW GATE
@@ -42,7 +45,7 @@ voices:
     display_name: "Alba — English (Scottish)"
     script: latin
     tier: strong
-    sample_text: "Hello, I'm Phoebe. This is my voice."
+    sample_text: "Hello! I'm Phoebe."
     status: approved
   es:
     model: es_ES-davefx-medium.onnx
@@ -50,7 +53,7 @@ voices:
     display_name: "Español (España)"
     script: latin
     tier: strong
-    sample_text: "Hola, soy Phoebe. Esta es mi voz."
+    sample_text: "¡Hola! Soy Phoebe."
     status: approved
   fr:
     model: fr_FR-siwis-medium.onnx
@@ -58,7 +61,7 @@ voices:
     display_name: "Français (France)"
     script: latin
     tier: strong
-    sample_text: "Bonjour, je suis Phoebe. Voici ma voix."
+    sample_text: "Bonjour ! Je suis Phoebe."
     status: approved
   de:
     model: de_DE-thorsten-medium.onnx
@@ -66,7 +69,7 @@ voices:
     display_name: "Deutsch (Deutschland)"
     script: latin
     tier: strong
-    sample_text: "Guten Tag, ich bin Phoebe. Das ist meine Stimme."
+    sample_text: "Hallo! Ich bin Phoebe."
     status: approved
   zh:
     model: zh_CN-huayan-medium.onnx
@@ -74,7 +77,7 @@ voices:
     display_name: "中文 (普通话) — Mandarin"
     script: native
     tier: functional
-    sample_text: "你好，我是 Phoebe，这是我的声音。"
+    sample_text: "你好！我是 Phoebe。"
     status: approved
 
   # ── Candidates awaiting the Captain's ear (status: unreviewed) ───────────────
@@ -86,7 +89,7 @@ voices:
     display_name: "Español (México)"
     script: latin
     tier: functional
-    sample_text: "Hola, soy Phoebe. Esta es mi voz."
+    sample_text: "¡Hola! Soy Phoebe."
     status: unreviewed
   es_sharvard:
     model: es_ES-sharvard-medium.onnx
@@ -94,7 +97,7 @@ voices:
     display_name: "Español (España) — Sharvard"
     script: latin
     tier: strong
-    sample_text: "Hola, soy Phoebe. Esta es mi voz."
+    sample_text: "¡Hola! Soy Phoebe."
     status: unreviewed
   es_MX_high:
     model: es_MX-claude-high.onnx
@@ -102,7 +105,7 @@ voices:
     display_name: "Español (México) — alta calidad"
     script: latin
     tier: strong
-    sample_text: "Hola, soy Phoebe. Esta es mi voz."
+    sample_text: "¡Hola! Soy Phoebe."
     status: unreviewed
   de_high:
     model: de_DE-thorsten-high.onnx
@@ -110,7 +113,7 @@ voices:
     display_name: "Deutsch (Deutschland) — hohe Qualität"
     script: latin
     tier: strong
-    sample_text: "Guten Tag, ich bin Phoebe. Das ist meine Stimme."
+    sample_text: "Hallo! Ich bin Phoebe."
     status: unreviewed
 # Roster note: the ticket's it_IT / pt_BR / ru_RU / pl_PL voices are intentionally
 # NOT installed — those languages are not in the LANGUAGE picker (LANG_NAMES), so a

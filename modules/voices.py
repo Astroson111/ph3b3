@@ -240,6 +240,14 @@ def voices_for_language_ui(lang: str) -> list:
     return out
 
 
+def voices_missing_sample_text() -> list:
+    """Voice codes whose sample_text is absent/blank. sample_text is REQUIRED —
+    a voice without it cannot be previewed or synth-checked, so it fails review
+    rather than emitting silence. Logged at startup; enforced in the synth check."""
+    return [code for code, e in (load_registry().get("voices") or {}).items()
+            if not (e.get("sample_text") or "").strip()]
+
+
 def active_voice_display() -> str:
     """Display name of the current active voice — the 'Speaking with: …' line."""
     v = resolve_voice(get_setting()["voice"] or "en") or alba()

@@ -58,6 +58,27 @@ def trim_silence_b64(b64, thr=350, keep_ms=40):
         return b64
 
 
+# A real spoken line reads ~5000 RMS (s16); Piper's inter-word silence is ~0.
+# 200 sits far below speech and far above silence — a generated clip under it is
+# effectively silent and must never be served as a successful preview.
+PREVIEW_RMS_FLOOR = 200.0
+
+
+def rms_b64(b64: str) -> float:
+    """RMS amplitude of a base64 WAV (22050/mono/16-bit). 0.0 on any error or
+    empty input. Used to gate silent synthesis before it is served."""
+    try:
+        wav = base64.b64decode(b64)
+        wf = wave.open(io.BytesIO(wav), "rb")
+        s = array.array("h")
+        s.frombytes(wf.readframes(wf.getnframes()))
+        if not len(s):
+            return 0.0
+        return (sum(x * x for x in s) / len(s)) ** 0.5
+    except Exception:
+        return 0.0
+
+
 def _strip_for_piper(text: str) -> str:
     """Remove characters Piper/Alba cannot pronounce before synthesis.
 
