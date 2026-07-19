@@ -1599,6 +1599,12 @@ async def transcribe_audio(request: Request, body: dict):
             pass
 
 
+# ── Remote tunnel (WireGuard) — the ONLY WireGuard surface in this app ─────────
+# INVARIANT: the tunnel is DOWN by default (zero exposure at home) and comes up
+# ONLY via the user-toggled POST /iris/tunnel below (the Status-tab "Enable"
+# button). This code brings wg0 up/down; it NEVER edits the WireGuard config or
+# keys — those live in /etc/wireguard (root-owned, backed up by Rhea). Audit
+# WireGuard HERE, not in start.sh (which has no WG at all).
 def _wg_tunnel_up() -> bool:
     """Return True if wg0 exists and is UP — reads live kernel state, never a cached flag."""
     r = subprocess.run(["ip", "link", "show", "wg0"], capture_output=True, text=True)

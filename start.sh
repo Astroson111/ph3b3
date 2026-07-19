@@ -4,6 +4,13 @@ set -e
 PH3B3_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV="$PH3B3_DIR/.venv"
 
+# ── WireGuard note (for auditors) ─────────────────────────────────────────────
+# There is NO WireGuard here, by design. Remote access is a user-toggled control,
+# not a boot step: POST /iris/tunnel in agent/server.py runs `wg-quick up/down
+# wg0`. The tunnel is DOWN by default (zero exposure at home). WG keys/config live
+# in /etc/wireguard (root-owned, backed up by Rhea). Audit the tunnel there — this
+# script only loads .env and starts the server.
+
 # Load credentials and config from .env
 if [ -f "$PH3B3_DIR/.env" ]; then
     set -a
