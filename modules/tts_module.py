@@ -9,38 +9,59 @@ import threading
 import wave
 from pathlib import Path
 
-
-def _strip_for_piper(text: str) -> str:
-    """Remove characters Piper/Alba cannot pronounce before synthesis.
-
-    Two-pass approach:
-      1. Replace "native_script (romanisation)" → "romanisation" so that
-         e.g. "你好 (nǐ hǎo)" becomes "nǐ hǎo" rather than going silent.
-      2. Drop any remaining code-points outside Piper's Latin/ASCII range.
-
-    Characters kept:
-      - ASCII (U+0000–U+007F)
-      - Latin Extended A/B and IPA (U+00C0–U+024F) — covers diacritics used in
-        pinyin (ǐ ǎ ō …), Cyrillic romanisations, etc.
-      - Latin Extended Additional (U+1E00–U+1EFF) — covers Vietnamese tones
-        and other precomposed Latin forms.
-    """
-    # Pass 1: "non-Latin-word (romanisation)" → "romanisation"
-    text = re.sub(
-        r'[^\x00-\x7FÀ-ɏḀ-ỿ]+\s*\(([^)]+)\)',
-        r'\1',
-        text,
-    )
-    # Pass 2: drop remaining non-speakable code-points
-    kept = [
-        ch for ch in text
-        if ord(ch) <= 0x7F
-        or 0x00C0 <= ord(ch) <= 0x024F
-        or 0x1E00 <= ord(ch) <= 0x1EFF
-    ]
-    return re.sub(r'  +', ' ', ''.join(kept)).strip()
-
 log = logging.getLogger("ph3b3.tts")
+
+# Native non-Latin scripts to KEEP when the active voice is that language.
+# (A native voice must receive its own script; the Latin-only strip would mute it.)
+_EXTRA_SCRIPT = {
+    'zh': lambda o: 0x3000 <= o <= 0x9FFF or 0xF900 <= o <= 0xFAFF or 0xFF00 <= o <= 0xFFEF,  # CJK
+    'ru': lambda o: 0x0400 <= o <= 0x04FF,   # Cyrillic
+    'uk': lambda o: 0x0400 <= o <= 0x04FF,
+}
+
+# Language-appropriate preview sentence (server picks by the voice's language).
+_PREVIEW_SAMPLE = {
+    'en': "Hello — this is a preview of how I sound.",
+    'es': "Hola, así es como suena mi voz.",
+    'de': "Hallo, so klinge ich.",
+    'fr': "Bonjour, voici à quoi ressemble ma voix.",
+    'it': "Ciao, ecco come suona la mia voce.",
+    'pl': "Cześć, tak brzmi mój głos.",
+    'zh': "你好，这是我的声音预览。",
+    'ru': "Привет, вот как звучит мой голос.",
+}
+
+
+def _strip_for_piper(text: str, lang: str = None) -> str:
+    """Remove characters the ACTIVE voice cannot pronounce before synthesis.
+
+    Latin voices (en/es/de/fr/it/pl …): romanise "native (rom)" then drop
+    non-Latin code-points (keeps ASCII + Latin Extended incl. Polish diacritics).
+
+    Native non-Latin voices (zh, ru …): keep ASCII + Latin diacritics + that
+    voice's own script, so the native voice actually speaks — Alba is never used
+    for these; each language uses its own voice.
+    """
+    base = (lang or '').replace('-', '_').split('_')[0].lower()
+    extra = _EXTRA_SCRIPT.get(base)
+    if extra is None:
+        # Latin voice — original behaviour.
+        text = re.sub(r'[^\x00-\x7FÀ-ɏḀ-ỿ]+\s*\(([^)]+)\)', r'\1', text)
+        kept = [
+            ch for ch in text
+            if ord(ch) <= 0x7F
+            or 0x00C0 <= ord(ch) <= 0x024F
+            or 0x1E00 <= ord(ch) <= 0x1EFF
+        ]
+    else:
+        # Native non-Latin voice — keep ASCII, Latin diacritics, and its script.
+        kept = [
+            ch for ch in text
+            if ord(ch) <= 0x7F
+            or 0x00C0 <= ord(ch) <= 0x024F
+            or extra(ord(ch))
+        ]
+    return re.sub(r'  +', ' ', ''.join(kept)).strip()
 
 VOICE_DIR   = Path.home() / "ph3b3_data" / "voices"
 VOICE_MODEL = os.getenv("PH3B3_VOICE_MODEL", str(VOICE_DIR / "en_GB-alba-medium.onnx"))
@@ -81,12 +102,16 @@ def _voice_meta(onnx_path: Path) -> dict:
     return {"language_code": code, "language": name, "quality": quality, "dataset": dataset}
 
 
+def _base_lang(onnx_path) -> str:
+    """Base language code ('zh', 'ru', 'en' …) for a voice model path."""
+    return (_voice_meta(Path(onnx_path))["language_code"] or "").replace("-", "_").split("_")[0].lower()
+
+
 class TTSModule:
     def __init__(self):
         self._lock = threading.Lock()
-        # Active voice model. Defaults to Alba (PH3B3_VOICE_MODEL) and is
-        # runtime-switchable via set_voice(); the default is never mutated, so
-        # the Alba config and boot greeting are unchanged.
+        # Active voice model. Defaults to Alba (PH3B3_VOICE_MODEL, English only)
+        # and is runtime-switchable; the default is never mutated.
         self._current_model = VOICE_MODEL
         self._available = self._any_voice_available()
         if Path(self._current_model).exists():
@@ -153,7 +178,7 @@ class TTSModule:
             return "TTS not available."
         if not text or not text.strip():
             return "Nothing to say."
-        tts_text = _strip_for_piper(text)
+        tts_text = _strip_for_piper(text, _base_lang(self._current_model))
         if not tts_text:
             return "Nothing to say."
         if blocking:
@@ -178,13 +203,13 @@ class TTSModule:
         """Run Piper and return base64-encoded WAV, or None if unavailable.
 
         `model` lets callers (e.g. voice preview) render with a specific voice
-        without changing the active one. The WAV header uses that voice's own
-        sample rate, so non-22050 voices (x_low = 16 kHz) play at correct pitch.
+        without changing the active one. Text is filtered for that voice's own
+        language, and the WAV header uses that voice's sample rate.
         """
         model = model or self._current_model
         if not self._available or not text or not text.strip():
             return None
-        tts_text = _strip_for_piper(text)
+        tts_text = _strip_for_piper(text, _base_lang(model))
         if not tts_text:
             return None
         rate = _rate_for(model)
@@ -207,11 +232,16 @@ class TTSModule:
                 return None
 
     def preview_b64(self, voice_id: str, text: str | None = None) -> str | None:
-        """Render a short sample with a specific installed voice (no switch)."""
+        """Render a short sample with a specific installed voice (no switch).
+
+        Uses a language-appropriate sentence so each native voice previews in
+        its own language.
+        """
         path = self._voice_path(voice_id)
         if path is None:
             return None
-        sample = text or "Hello — this is a preview of how I sound."
+        base = _base_lang(str(path))
+        sample = text or _PREVIEW_SAMPLE.get(base, _PREVIEW_SAMPLE["en"])
         return self.synthesize_to_b64(sample, model=str(path))
 
     def status(self):
