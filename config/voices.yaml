@@ -122,9 +122,9 @@ voices:
     sample_text: "Hallo! Ich bin Phoebe."
     status: approved
 
-  # ── Bench expansion: it / pl / ru (status: unreviewed, awaiting the ear) ──────
-  # Their languages are in the picker (LANG_NAMES); until approved these languages
-  # run TEXT-ONLY, then flip to voiced on approval.
+  # ── Bench expansion: it / pl / ru (Captain-approved by ear) ──────────────────
+  # Reviewed and promoted; their languages are voiced. New candidates should still
+  # ship as `status: unreviewed` and be approved via the Status-tab review flow.
   it:
     model: it_IT-paola-medium.onnx
     lang: it
@@ -132,7 +132,7 @@ voices:
     script: latin
     tier: strong
     sample_text: "Ciao! Sono Phoebe."
-    status: unreviewed
+    status: approved
   pl:
     model: pl_PL-gosia-medium.onnx
     lang: pl
@@ -140,7 +140,7 @@ voices:
     script: latin
     tier: strong
     sample_text: "Cześć! Jestem Phoebe."
-    status: unreviewed
+    status: approved
   ru:
     model: ru_RU-irina-medium.onnx
     lang: ru
@@ -148,7 +148,7 @@ voices:
     script: native          # Cyrillic — never strip to Latin (would delete the text)
     tier: strong
     sample_text: "Привет! Я Фиби."
-    status: unreviewed
+    status: approved
 # Roster note: pt_BR is intentionally NOT installed — Portuguese is not in the
 # LANGUAGE picker (LANG_NAMES), so a voice for it would be unreachable. Install a
 # language's voice only when the language is offered. Japanese / Korean are offered
