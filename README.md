@@ -224,10 +224,17 @@ Most models are ~60–110 MB (`.onnx` + `.onnx.json`). A voice is either **appro
 | `it_IT-paola-medium` | Paola | Italiano (Italia) | strong | 61 MB | approved |
 | `pl_PL-gosia-medium` | Gosia | Polski (Polska) | strong | 61 MB | approved |
 | `ru_RU-irina-medium` | Irina | Русский (Россия) | strong | 61 MB | approved |
+| `vi_VN-vais1000-medium` | Vais1000 | Tiếng Việt (Việt Nam) | strong | 61 MB | *unreviewed* |
+| `ar_JO-kareem-medium` | Kareem | العربية (الأردن) — RTL | strong | 61 MB | *unreviewed* |
+| `tr_TR-dfki-medium` | DFKI | Türkçe (Türkiye) | strong | 61 MB | *unreviewed* |
+| `nl_NL-pim-medium` | Pim | Nederlands (Nederland) | strong | 61 MB | *unreviewed* |
+| `uk_UA-ukrainian_tts-medium` | Ukrainian TTS | Українська (Україна) | strong | 74 MB | *unreviewed* |
+| `cs_CZ-jirka-medium` | Jirka | Čeština (Česko) | strong | 61 MB | *unreviewed* |
+| `sv_SE-nst-medium` | NST | Svenska (Sverige) | strong | 61 MB | *unreviewed* |
 
-**Total: ~0.78 GB** for all twelve, all approved — eight languages voiced (Spanish has four seated voices, German two; Russian speaks Cyrillic natively). New voices always arrive `unreviewed` and join the picker only once approved by ear.
+**Total: ~1.2 GB** for all nineteen. Eight languages are voiced today; the seven above — Vietnamese, Arabic (the first right-to-left language), Turkish, Dutch, Ukrainian, Czech, and Swedish — ship as `unreviewed` candidates and run **text-only** until approved by ear, then flip to voiced. New voices always arrive `unreviewed` and join the picker only once approved. (Dutch: `pim` chosen over `mls` — a cleaner single-speaker voice — a flagged substitution.)
 
-**Text-only languages.** A language with no *approved* voice is still selectable — labeled "— text only" — and Phoebe answers in that language as **text**, synthesizing nothing (declared design, never silent-by-surprise; Alba is never assigned to it). **Japanese** and **Korean** are offered this way today: official Piper has no ja/ko voice that clears the quality bar (voicing them needs a second local TTS engine — see [FUTURE_GOALS](FUTURE_GOALS.md)). The text-only state derives from the registry, so the day a language gains an approved voice the label drops off with zero code change.
+**Text-only languages.** A language with no *approved* voice is still selectable — labeled "— text only" — and Phoebe answers in that language as **text**, synthesizing nothing (declared design, never silent-by-surprise; Alba is never assigned to it). **Japanese, Korean, Hindi, and Indonesian** are offered this way today: hugely popular languages, but official Piper has no voice that clears the quality bar, and no low-quality substitute is worth shipping (voicing them needs a second local TTS engine — see [FUTURE_GOALS](FUTURE_GOALS.md)). The text-only state derives from the registry, so the day a language gains an approved voice the label drops off with zero code change.
 
 ### Start her
 

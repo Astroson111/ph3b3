@@ -36,6 +36,13 @@ declare -A VOICES=(
   [it_IT-paola-medium]="it/it_IT/paola/medium"        # unreviewed candidate (Italiano)
   [pl_PL-gosia-medium]="pl/pl_PL/gosia/medium"        # unreviewed candidate (Polski)
   [ru_RU-irina-medium]="ru/ru_RU/irina/medium"        # unreviewed candidate (Русский)
+  [vi_VN-vais1000-medium]="vi/vi_VN/vais1000/medium"  # unreviewed candidate (Tiếng Việt)
+  [ar_JO-kareem-medium]="ar/ar_JO/kareem/medium"      # unreviewed candidate (العربية, RTL)
+  [tr_TR-dfki-medium]="tr/tr_TR/dfki/medium"          # unreviewed candidate (Türkçe)
+  [nl_NL-pim-medium]="nl/nl_NL/pim/medium"            # unreviewed candidate (Nederlands; pim, not mls)
+  [uk_UA-ukrainian_tts-medium]="uk/uk_UA/ukrainian_tts/medium"  # unreviewed candidate (Українська)
+  [cs_CZ-jirka-medium]="cs/cs_CZ/jirka/medium"        # unreviewed candidate (Čeština)
+  [sv_SE-nst-medium]="sv/sv_SE/nst/medium"            # unreviewed candidate (Svenska)
 )
 # Registry code → sha256 (onnx, then .onnx.json). Pinned at selection time.
 declare -A SHA_ONNX=(
@@ -51,6 +58,13 @@ declare -A SHA_ONNX=(
   [it_IT-paola-medium]=6fc918b5a0ea6137382833dddfa567bffbe6a5060c02043c87192ee59c04210c
   [pl_PL-gosia-medium]=38f66464240ed74f186e6b7dc13c6e3b22e023426299f25c2b3cc9dfa9373fbc
   [ru_RU-irina-medium]=8ff38212d23da300bbe3705c645e6e5b9475f0bfde01558eb17813e22acaaaaa
+  [vi_VN-vais1000-medium]=ec7c89e2c85f4d1edc24b6120c18aaf1bda614f06b511567eb9c7c0de15e2dab
+  [ar_JO-kareem-medium]=9e95cab07b679da603bba17c4dec7ab3111320571964ee95c0379603c086491e
+  [tr_TR-dfki-medium]=2844717f524ab965d3fe86e60562cbb601d3e456836efcc2196cc3a14112a8fb
+  [nl_NL-pim-medium]=403e58c3675c394f505c2428117bf34cc56e9542dcf6eadbdd3a84706c12e048
+  [uk_UA-ukrainian_tts-medium]=7920419ac5f6fd8b6450520f24b52ed5a319cb53dd018fbcd71c9e079cbac84f
+  [cs_CZ-jirka-medium]=cbd5c900acacc8e8cbecd64347abb8de39c00a9d3104bed06fee92e4f319efc8
+  [sv_SE-nst-medium]=df011f56825a59dd1efc080c38a65a1ef70407e60f63050e9246f43a3d7e471e
 )
 declare -A SHA_JSON=(
   [en_GB-alba-medium]=aa965a2f02ecced632c2694e1fc72bbff6d65f265fab567ca945918c73dd89f4
@@ -65,6 +79,13 @@ declare -A SHA_JSON=(
   [it_IT-paola-medium]=aea19c0a7fce29fbc359b93f10e7902854401e4c95ae2ea328ae516b15d296cf
   [pl_PL-gosia-medium]=1aefb31a9d53ffe44a8163ff73ec833acb7a6253848f6bb0403d8a66f9c7510d
   [ru_RU-irina-medium]=c2ec28bb38e2b59e93b959b3e40348c1afebbd272f30fed5d41205d08e98a9d7
+  [vi_VN-vais1000-medium]=fafb9da1354ed4b77c31af228ed41fb41cd825c14cffa105454b25e6ae751ee0
+  [ar_JO-kareem-medium]=ea6d9b9d9076dbdb6bf5c98c6a141ef154959d2359709b37855727964e7d6c4d
+  [tr_TR-dfki-medium]=13ebd7810f1b61b5027583cf3131a0a233b6ea81c38f2200ebc4ff41c3cca039
+  [nl_NL-pim-medium]=08b58456ca00cf77123826b1712758f99d5fd19ddfb7ec7da8e1a715b047f642
+  [uk_UA-ukrainian_tts-medium]=4e96e72917ca9b94edc77d6ccfee03a73f450ba2fc1ca93c2e562bc014e5aa55
+  [cs_CZ-jirka-medium]=fb38b1799b7354808227c065efa97b1ffa2b0cde59505babb56a36d35af9c637
+  [sv_SE-nst-medium]=d45dd74cbb4eca58694bf04a97e243044092476f28a55ae26424f0653086980a
 )
 verify() {  # verify <file> <expected-sha256>
   local got; got="$(sha256sum "$1" | cut -d' ' -f1)"
@@ -90,7 +111,7 @@ PY
 )"
 fi
 
-echo "Fetching Piper voices (~780 MB total, one-time, hash-verified) → $VOICE_DIR"
+echo "Fetching Piper voices (~1.2 GB total, one-time, hash-verified) → $VOICE_DIR"
 for name in "${!VOICES[@]}"; do
   if printf '%s\n' $REJECTED_MODELS | grep -qx "$name"; then
     echo "  $name rejected by review — skipping"; continue

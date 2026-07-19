@@ -1718,9 +1718,11 @@ function _renderAnnounce(display, textOnly) {
   // Voiced: "Speaking with: <voice>". Text-only: a declared no-voice notice.
   const el = document.getElementById('lvOffer');
   el.hidden = false;
+  // <bdi> isolates the voice name's direction so an RTL display_name (Arabic)
+  // can't reorder the surrounding LTR chrome.
   el.innerHTML = textOnly
-    ? `📝 <strong>${display || 'Text only'}</strong> — Phoebe writes, no speech`
-    : `🔊 Speaking with: <strong>${display || 'Alba'}</strong>`;
+    ? `📝 <strong><bdi>${display || 'Text only'}</bdi></strong> — Phoebe writes, no speech`
+    : `🔊 Speaking with: <strong><bdi>${display || 'Alba'}</bdi></strong>`;
 }
 async function langInit(force) {
   if (_langLoaded && !force) return;
@@ -1742,7 +1744,7 @@ async function langInit(force) {
     document.getElementById('lvNote').innerHTML =
       'Text only — response fluency: <span class="lv-tier-functional">functional</span>. No voice model for this language yet.';
   } else {
-    voiceSel.innerHTML = vs.map(v => `<option value="${v.code}">${v.display_name}</option>`).join('');
+    voiceSel.innerHTML = vs.map(v => `<option value="${v.code}" dir="auto">${v.display_name}</option>`).join('');
     voiceSel.value = _langData.voice;
     voiceSel.disabled = vs.length < 2;     // nothing to pick if only one
     _renderNote(_langData.voice);
@@ -1767,7 +1769,7 @@ async function reviewLoad() {
       ? '<span class="lv-cand-synth ok" title="Renders audio">✓ synth</span>'
       : '<span class="lv-cand-synth bad" title="No audio — do not approve">✗ synth</span>';
     return `<div class="lv-cand" data-code="${v.code}">
-      <span class="lv-cand-name">${v.display_name}</span>
+      <span class="lv-cand-name"><bdi>${v.display_name}</bdi></span>
       <span class="lv-cand-meta">${v.language} · ${v.tier}</span>
       ${synth}
       <span class="lv-cand-sp"></span>

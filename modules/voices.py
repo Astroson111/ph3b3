@@ -32,11 +32,13 @@ LANG_NAMES = {
     "en": "English", "es": "Spanish", "fr": "French",
     "de": "German",  "zh": "Mandarin Chinese",
     "it": "Italian", "pl": "Polish",  "ru": "Russian",
+    "vi": "Vietnamese", "ar": "Arabic", "tr": "Turkish", "nl": "Dutch",
+    "uk": "Ukrainian",  "cs": "Czech",  "sv": "Swedish",
     # Text-only languages: offered for response text, but Piper has no voice that
     # clears the quality bar, so they synthesize nothing (declared text-only, not
     # silent-by-surprise). They become voiced automatically the day the registry
     # gains an approved voice for them — no code change (see list_languages_for_ui).
-    "ja": "Japanese", "ko": "Korean",
+    "ja": "Japanese", "ko": "Korean", "hi": "Hindi", "id": "Indonesian",
 }
 
 _lock = threading.Lock()

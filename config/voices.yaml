@@ -149,7 +149,69 @@ voices:
     tier: strong
     sample_text: "Привет! Я Фиби."
     status: approved
+
+  # ── Popular-language expansion (status: unreviewed, awaiting the ear) ─────────
+  # Their languages are in the picker; until approved they run TEXT-ONLY, then flip
+  # to voiced on approval. Arabic is the first RTL language (script: native).
+  vi:
+    model: vi_VN-vais1000-medium.onnx
+    lang: vi
+    display_name: "Vais1000 — Tiếng Việt (Việt Nam)"
+    script: latin           # Vietnamese tone marks live in Latin Extended — safe
+    tier: strong
+    sample_text: "Xin chào! Tôi là Phoebe."
+    status: unreviewed
+  ar:
+    model: ar_JO-kareem-medium.onnx
+    lang: ar
+    display_name: "Kareem — العربية (الأردن)"
+    script: native          # Arabic (RTL) — never strip to Latin (would delete the text)
+    tier: strong
+    sample_text: "مرحباً! أنا فيبي."
+    status: unreviewed
+  tr:
+    model: tr_TR-dfki-medium.onnx
+    lang: tr
+    display_name: "DFKI — Türkçe (Türkiye)"
+    script: latin
+    tier: strong
+    sample_text: "Merhaba! Ben Phoebe."
+    status: unreviewed
+  nl:
+    model: nl_NL-pim-medium.onnx
+    lang: nl
+    display_name: "Pim — Nederlands (Nederland)"
+    script: latin
+    tier: strong
+    sample_text: "Hallo! Ik ben Phoebe."
+    status: unreviewed
+  uk:
+    model: uk_UA-ukrainian_tts-medium.onnx
+    lang: uk
+    display_name: "Ukrainian TTS — Українська (Україна)"
+    script: native          # Cyrillic — never strip to Latin
+    tier: strong
+    sample_text: "Привіт! Я Фібі."
+    status: unreviewed
+  cs:
+    model: cs_CZ-jirka-medium.onnx
+    lang: cs
+    display_name: "Jirka — Čeština (Česko)"
+    script: latin
+    tier: strong
+    sample_text: "Ahoj! Jsem Phoebe."
+    status: unreviewed
+  sv:
+    model: sv_SE-nst-medium.onnx
+    lang: sv
+    display_name: "NST — Svenska (Sverige)"
+    script: latin
+    tier: strong
+    sample_text: "Hej! Jag är Phoebe."
+    status: unreviewed
 # Roster note: pt_BR is intentionally NOT installed — Portuguese is not in the
 # LANGUAGE picker (LANG_NAMES), so a voice for it would be unreachable. Install a
-# language's voice only when the language is offered. Japanese / Korean are offered
-# TEXT-ONLY: official Piper has no ja/ko voice clearing the bar (see FUTURE_GOALS).
+# language's voice only when the language is offered. Japanese / Korean / Hindi /
+# Indonesian are offered TEXT-ONLY: official Piper has no voice clearing the bar
+# for them (see FUTURE_GOALS). Dutch: pim chosen over the brief's mls suggestion
+# (cleaner single-speaker) — a flagged substitution.
