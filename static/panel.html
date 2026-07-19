@@ -305,6 +305,13 @@
       font-family: 'SF Mono','Consolas',monospace; }
     .cap-transcript { font-size: .82rem; color: var(--text); line-height: 1.45; margin-bottom: .4rem; }
     .cap-transcript.empty { color: var(--dim); font-style: italic; }
+    /* Gated (discarded) captures — kept for the audit trail, visually muted */
+    .cap-card-discarded { opacity: .6; }
+    .cap-discard { display: flex; flex-direction: column; gap: .15rem; margin-bottom: .4rem; }
+    .cap-discard-tag { align-self: flex-start; font-size: .68rem; text-transform: uppercase;
+                       letter-spacing: .04em; color: var(--dim); border: 1px solid var(--dim);
+                       border-radius: .35rem; padding: .05rem .35rem; }
+    .cap-discard-why { font-size: .78rem; color: var(--dim); font-style: italic; line-height: 1.4; }
     .cap-card audio { width: 100%; height: 34px; }
     .cap-thumb { max-width: 100%; max-height: 180px; border-radius: 6px; display: block; cursor: pointer; }
     /* date-group headers */
@@ -1779,6 +1786,13 @@ function renderCapCard(it) {
   const head = `<div class="cap-head"><span class="cap-dev">${capEsc(it.device)}</span><span class="cap-ts">${fleetAgo(it.ts)}</span></div>`;
   const url = '/captures/file/' + encodeURIComponent(it.name);
   if (it.type === 'audio') {
+    // Gated captures (silence / Whisper hallucination): greyed, labelled, kept on
+    // record but never sent to the chat pipeline.
+    if (it.discarded != null) {
+      const d = `<div class="cap-discard"><span class="cap-discard-tag">discarded · no speech</span>`
+              + `<span class="cap-discard-why">${capEsc(it.discarded)}</span></div>`;
+      return `<div class="cap-card cap-card-discarded">${head}${d}<audio controls preload="none" src="${url}"></audio></div>`;
+    }
     // transcript is PRIMARY content; player sits beneath it
     const t = it.transcript ? `<div class="cap-transcript">${capEsc(it.transcript)}</div>`
                             : `<div class="cap-transcript empty">(no transcript)</div>`;

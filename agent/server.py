@@ -1396,6 +1396,10 @@ async def transcribe_audio(request: Request, body: dict):
     SILENCE_FLOOR_RMS = 1200
     if _rms is not None and _rms < SILENCE_FLOOR_RMS:
         log.warning("[DBG-MIC] below silence floor (rms=%.0f < %d) — dropped, no STT", _rms, SILENCE_FLOOR_RMS)
+        # Pre-gate: keep the capture on record (labelled) but never transcribe or
+        # enter the pipeline — the first hallucination backstop, before Whisper.
+        _persist_capture(_device, audio_bytes, "",
+                         discarded=f"no speech (rms {_rms:.0f} < {SILENCE_FLOOR_RMS})")
         return {"text": "", "error": None}
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         f.write(audio_bytes)
@@ -1403,9 +1407,18 @@ async def transcribe_audio(request: Request, body: dict):
     try:
         result = stt.transcribe_file(tmp_path)
         _text = result.get("text") or ""
+        _discard = result.get("discard_reason")
+        # Post-gate: Whisper decoded something but the hallucination gate rejected
+        # it (high no_speech_prob / low avg_logprob / boilerplate / non-English).
+        # Keep it on record labelled, but it NEVER reaches the chat pipeline.
+        if _discard and not _text:
+            _raw = result.get("raw_text") or ""
+            log.warning("[DBG-MIC] dev=%s GATED (%s) phantom=%r — no pipeline", _device, _discard, _raw[:80])
+            _persist_capture(_device, audio_bytes, "",
+                             discarded=f"{_discard}: “{_raw[:120]}”" if _raw else _discard)
+            return {"text": "", "error": None}
         log.warning("[DBG-MIC] dev=%s transcript=%r err=%s", _device, _text[:80], result.get("error"))
-        _persist_capture(request.headers.get("X-Ph3b3-Device", "unknown"),  # Argus captures feed (read-only)
-                         audio_bytes, _text)
+        _persist_capture(_device, audio_bytes, _text)   # Argus captures feed (read-only)
         # Native photo loop: tell Dio (and only Dio) to run her on-device capture
         # loop when this utterance is a vision request routed to HER camera. The
         # firmware branches on "camera":"dio"; absent/other → normal chat.
@@ -2245,17 +2258,25 @@ async def argus_fleet():
         "generated": _argus_iso(int(now)),
     }
 
-def _persist_capture(device: str, audio_bytes: bytes, text: str) -> None:
-    """Argus Part 2: persist a device voice recording + its transcript sidecar to
-    the captures store, so it shows in the read-only captures feed. The .wav and
-    .txt share a filename stem — pairing is by name, no DB. Only real device
-    recordings that produced a transcript are kept."""
-    if device not in ("iris", "stackchan") or not text:
+def _persist_capture(device: str, audio_bytes: bytes, text: str, discarded: str = None) -> None:
+    """Argus Part 2: persist a device voice recording + a sidecar to the captures
+    store, so it shows in the read-only captures feed. The .wav shares its stem
+    with the sidecar — pairing is by name, no DB.
+      • real speech      → .txt sidecar (the transcript)
+      • gated/discarded  → .discarded sidecar (the reason + any phantom decode),
+                            so the audit trail stays whole and the feed can grey it.
+    A discarded capture is kept on the record but never enters the chat pipeline."""
+    if device not in ("iris", "stackchan"):
+        return
+    if not text and not discarded:
         return
     try:
         stem = _CAPTURES_DIR / f"{device}_{datetime.now():%Y%m%d_%H%M%S_%f}"
         stem.with_suffix(".wav").write_bytes(audio_bytes)
-        stem.with_suffix(".txt").write_text(text, encoding="utf-8")
+        if discarded:
+            stem.with_suffix(".discarded").write_text(discarded, encoding="utf-8")
+        else:
+            stem.with_suffix(".txt").write_text(text, encoding="utf-8")
     except Exception as e:
         log.warning("[CAPTURES] persist failed: %s", e)
 

@@ -49,14 +49,17 @@ class CapturesFeed:
         self.dir = Path(captures_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
 
-    def _sidecar_text(self, f: Path):
-        side = f.with_suffix(".txt")
+    def _sidecar(self, f: Path, ext: str):
+        side = f.with_suffix(ext)
         if side.exists():
             try:
                 return side.read_text(encoding="utf-8", errors="replace").strip()[:2000]
             except Exception:
                 return None
         return None
+
+    def _sidecar_text(self, f: Path):
+        return self._sidecar(f, ".txt")
 
     def feed(self, device: str = None, type: str = None, limit: int = 120) -> list:
         """Reverse-chron artifacts. `.txt` sidecars are never standalone items —
@@ -81,6 +84,12 @@ class CapturesFeed:
                     "ts": int(st.st_mtime), "size": st.st_size}
             if typ == "audio":
                 item["transcript"] = self._sidecar_text(f)
+                # Gated captures (silence / Whisper hallucination) carry a
+                # .discarded sidecar instead of a transcript — kept for the audit
+                # trail, shown greyed, and never entered the chat pipeline.
+                disc = self._sidecar(f, ".discarded")
+                if disc is not None:
+                    item["discarded"] = disc
             items.append(item)
         items.sort(key=lambda x: x["ts"], reverse=True)
         return items[:limit]
