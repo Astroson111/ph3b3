@@ -167,9 +167,9 @@ async def lifespan(app):
         # (maker's mark — the standing ruling on the greeting + Alba), regardless
         # of the selected primary voice/language.
         tts.speak(text, blocking=False, voice="en")
-        # Honest fallback note if the selected primary voice can't load.
+        # Honest fallback note if the current language has no usable voice.
         if voices.voice_fell_back():
-            _vn = voices.LANG_NAMES.get(voices.get_setting()["voice"], "that language")
+            _vn = voices.LANG_NAMES.get(voices.get_setting()["language"], "that language")
             tts.speak(f"I don't have a working voice for {_vn} right now, so I'm using Alba.",
                       blocking=False, voice="en")
         reminder_msg = reminders.on_boot()
@@ -947,7 +947,10 @@ async def skills_log():
 async def language_get():
     s = voices.get_setting()
     return {"language": s["language"], "voice": s["voice"],
-            "voices": voices.list_for_ui(), "lang_names": voices.LANG_NAMES,
+            "voice_display": voices.active_voice_display(),
+            "languages": voices.list_languages_for_ui(),        # selectable flags (rule 2)
+            "voices": voices.voices_for_language_ui(s["language"]),  # picker, filtered to language
+            "lang_names": voices.LANG_NAMES,
             "voice_fell_back": voices.voice_fell_back()}
 
 @app.post("/language")
@@ -955,17 +958,23 @@ async def language_set(body: dict):
     code = (body.get("language") or "en").strip()
     if code not in voices.LANG_NAMES:
         raise HTTPException(400, f"unknown language {code!r}")
-    voices.set_language(code)
-    match = voices.resolve_voice(code)          # a matching native voice to OFFER?
+    if not voices.language_has_voice(code):     # rule 2 — cannot select into a silent state
+        raise HTTPException(400, f"no approved voice installed for {code!r}")
+    s = voices.set_language(code)               # voice auto-follows (derived)
     return {"ok": True, "language": code,
-            "voice_available": match is not None,
-            "voice_display": (match or {}).get("display_name")}
+            "voice": s["voice"],                # the auto-switched active voice
+            "voice_display": voices.active_voice_display()}
 
 @app.post("/voice/primary")
 async def voice_set(body: dict):
+    """Manual voice pick for the current language. Only voices matching the
+    current language are valid (the picker offers only those)."""
     code = (body.get("voice") or "en").strip()
-    voices.set_voice(code)
-    return {"ok": True, "voice": code, "fell_back": voices.voice_fell_back()}
+    try:
+        s = voices.set_voice_for_current(code)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "voice": s["voice"], "voice_display": voices.active_voice_display()}
 
 @app.post("/voice/preview")
 async def voice_preview(body: dict):
@@ -1301,7 +1310,14 @@ async def chat_endpoint(body: dict, request: Request):
     if reply is None:
         return {"response": "", "audio": ""}
     _LAST_REPLY[body.get("session_id", "default")] = reply   # echo-guard memory
-    audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, reply)
+    # Runtime voice↔language guard: speak the reply in the language's approved
+    # voice; if the language has no voice, Alba speaks a one-line notice and the
+    # text is still returned (never silent without saying why).
+    plan = voices.output_for_response()
+    if plan["notice"]:
+        audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, plan["notice"], "en")
+    else:
+        audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, reply, plan["voice"])
     return {"response": reply, "audio": audio_b64}
 
 
@@ -1319,11 +1335,11 @@ def _tts_stream_gc(now):
     for k in [k for k, v in _TTS_STREAMS.items() if now - v["ts"] > _TTS_STREAM_TTL]:
         _TTS_STREAMS.pop(k, None)
 
-def _tts_stream_new(chunks):
+def _tts_stream_new(chunks, voice=None):
     now = time.monotonic()
     _tts_stream_gc(now)
     sid = uuid.uuid4().hex[:12]
-    _TTS_STREAMS[sid] = {"chunks": chunks, "audio": {}, "ts": now}
+    _TTS_STREAMS[sid] = {"chunks": chunks, "audio": {}, "ts": now, "voice": voice}
     return sid
 
 async def _tts_chunk_b64(sid, n):
@@ -1332,7 +1348,7 @@ async def _tts_chunk_b64(sid, n):
         return None
     st["ts"] = time.monotonic()
     if n not in st["audio"]:
-        b64 = await asyncio.to_thread(tts.synthesize_to_b64, st["chunks"][n]) or ""
+        b64 = await asyncio.to_thread(tts.synthesize_to_b64, st["chunks"][n], st.get("voice")) or ""
         st["audio"][n] = trim_silence_b64(b64) if b64 else ""   # drop Piper's ~200ms per-chunk gaps
     return st["audio"][n]
 
@@ -1347,11 +1363,18 @@ async def chat_stream_endpoint(body: dict, request: Request):
         return {"response": "", "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}
     _LAST_REPLY[body.get("session_id", "default")] = reply   # echo-guard memory
-    chunks = split_for_tts(reply)
+    # Runtime voice↔language guard (same as /chat): match the voice to the
+    # response language; if unvoiceable, Alba speaks a one-line notice as the
+    # sole chunk and the reply text is still returned for rendering.
+    plan = voices.output_for_response()
+    if plan["notice"]:
+        chunks, out_voice = [plan["notice"]], "en"
+    else:
+        chunks, out_voice = split_for_tts(reply), plan["voice"]
     if not chunks:
         return {"response": reply, "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}
-    sid = _tts_stream_new(chunks)
+    sid = _tts_stream_new(chunks, out_voice)
     audio0 = await _tts_chunk_b64(sid, 0)
     if len(chunks) > 1:
         asyncio.create_task(_tts_chunk_b64(sid, 1))   # read-ahead

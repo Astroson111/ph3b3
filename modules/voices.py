@@ -81,43 +81,169 @@ def alba() -> dict:
             "script": "latin", "display_name": "Alba", "tier": "strong"}
 
 
+# ── Voice ↔ language binding ───────────────────────────────────────────────────
+# LANGUAGE is the master setting; the VOICE follows it. Piper models are
+# single-language, so 'Spanish language + Alba (English) voice' produces garbage
+# or silence. We make that state UNREPRESENTABLE: the active voice is always
+# DERIVED from the language — there is no independent 'voice' field to drift.
+# Per-language choices (es_ES vs es_MX) are remembered in voice_prefs so a
+# round-trip switch restores them.
+def _voice_lang(code: str) -> str:
+    """The response-language a voice code pairs with (entry.lang, default code)."""
+    e = (load_registry().get("voices") or {}).get(code) or {}
+    return e.get("lang", code)
+
+
+def approved_voices_for(lang: str) -> list:
+    """Approved, installed voice codes serving `lang`, PRIMARY first (the voice
+    whose code == lang), then others (es → ['es', 'es_MX'] once es_MX is
+    approved). Empty when the language has no approved voice."""
+    reg, review = load_registry(), _load_review()
+    out = []
+    for code, e in (reg.get("voices") or {}).items():
+        if e.get("lang", code) != lang:
+            continue
+        if effective_status(code, e, review) != "approved":
+            continue
+        if not (VOICE_DIR / e.get("model", "")).exists():
+            continue
+        out.append(code)
+    out.sort(key=lambda c: (c != lang, c))       # primary (code == lang) first
+    return out
+
+
+def default_voice_for(lang: str):
+    """The voice a language uses with no saved preference — its primary approved
+    voice, or None if the language has no approved voice."""
+    v = approved_voices_for(lang)
+    return v[0] if v else None
+
+
+def language_has_voice(lang: str) -> bool:
+    """True iff `lang` has ≥1 approved installed voice — i.e. it can be selected
+    for SPEECH without landing in a silent state."""
+    return bool(approved_voices_for(lang))
+
+
+def voice_for_language(lang: str, prefs: dict | None = None):
+    """The ACTIVE voice code for a response language: the user's saved preference
+    if it is still an approved match, else the language's primary voice, else
+    None (no approved voice → caller falls back to Alba + a spoken notice)."""
+    if prefs is None:
+        prefs = get_setting()["voice_prefs"]
+    approved = approved_voices_for(lang)
+    pref = prefs.get(lang)
+    if pref and pref in approved:
+        return pref
+    return approved[0] if approved else None
+
+
 def get_setting() -> dict:
-    """Persisted {language, voice}. Defaults to en/en (Alba). Never raises."""
+    """Persisted {language, voice_prefs}, normalized, plus the DERIVED active
+    'voice'. Never raises. Legacy {language, voice} files are migrated on read —
+    the old independent voice is remembered as its own language's preference and
+    the stored mismatch is discarded (the active voice re-derives from language)."""
     try:
         d = json.loads(SETTING_PATH.read_text(encoding="utf-8"))
-        return {"language": d.get("language") or DEFAULT_LANG,
-                "voice":    d.get("voice")    or DEFAULT_LANG}
     except Exception:
-        return {"language": DEFAULT_LANG, "voice": DEFAULT_LANG}
+        d = {}
+    lang = d.get("language") or DEFAULT_LANG
+    prefs = d.get("voice_prefs")
+    if not isinstance(prefs, dict):
+        prefs = {}
+        old = d.get("voice")                     # migrate legacy independent voice
+        if old:
+            prefs[_voice_lang(old)] = old
+    return {"language": lang, "voice_prefs": prefs,
+            "voice": voice_for_language(lang, prefs)}
 
 
-def _save(setting: dict) -> None:
+def _save(language: str, prefs: dict) -> None:
     with _lock:
         SETTING_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SETTING_PATH.write_text(json.dumps(setting), encoding="utf-8")
+        SETTING_PATH.write_text(
+            json.dumps({"language": language, "voice_prefs": prefs}), encoding="utf-8")
 
 
 def set_language(code: str) -> dict:
-    s = get_setting(); s["language"] = code; _save(s); return s
+    """Master setting: switch language. The voice auto-follows (derived from the
+    new language + its saved preference). Preferences are left intact so a
+    round-trip switch restores each language's chosen voice."""
+    s = get_setting()
+    _save(code, s["voice_prefs"])
+    return get_setting()
 
 
-def set_voice(code: str) -> dict:
-    s = get_setting(); s["voice"] = code; _save(s); return s
+def set_voice_for_current(code: str) -> dict:
+    """Manual voice pick for the CURRENT language. The voice MUST be an approved
+    match for that language (the picker only offers such voices); a non-matching
+    code is refused rather than saved into a mismatch."""
+    s = get_setting()
+    lang = s["language"]
+    if code not in approved_voices_for(lang):
+        raise ValueError(
+            f"voice {code!r} is not an approved voice for {LANG_NAMES.get(lang, lang)}")
+    prefs = dict(s["voice_prefs"]); prefs[lang] = code
+    _save(lang, prefs)
+    return get_setting()
 
 
 def current_voice() -> dict:
-    """The selected primary voice, resolved — Alba if the selection is missing/corrupt.
-    Returns (entry, fell_back:bool) so the caller can add the honest spoken note."""
+    """The active voice, resolved — Alba if the language has no approved voice or
+    resolution fails. Derived from the language, so never a cross-language
+    mismatch."""
     code = get_setting()["voice"]
-    v = resolve_voice(code)
+    v = resolve_voice(code) if code else None
     if v:
         return v
-    log.warning("selected voice '%s' unavailable → Alba fallback", code)
+    log.warning("no resolvable voice for language '%s' → Alba", get_setting()["language"])
     return alba()
 
 
 def voice_fell_back() -> bool:
-    return resolve_voice(get_setting()["voice"]) is None
+    """True when the current language has no usable approved voice (→ Alba)."""
+    code = get_setting()["voice"]
+    return not code or resolve_voice(code) is None
+
+
+def output_for_response(response_lang: str | None = None) -> dict:
+    """Runtime binding for speaking a reply (belt + suspenders). Returns
+    {'voice': code, 'notice': str|None}: the approved voice matching the response
+    language, or — if that language has no approved voice — Alba ('en') plus a
+    one-line notice to speak instead, so Phoebe is NEVER silent without saying
+    why. `response_lang` defaults to the current language setting."""
+    lang = response_lang or get_setting()["language"]
+    code = voice_for_language(lang)
+    if code:
+        return {"voice": code, "notice": None}
+    name = LANG_NAMES.get(lang, lang)
+    return {"voice": "en", "notice": f"I can't voice {name} yet, so here's the text."}
+
+
+def list_languages_for_ui() -> list:
+    """Every response-language, each flagged `selectable` (has an approved voice).
+    A non-selectable language renders disabled — it cannot be chosen into a
+    silent state."""
+    return [{"code": c, "name": n, "selectable": language_has_voice(c)}
+            for c, n in LANG_NAMES.items()]
+
+
+def voices_for_language_ui(lang: str) -> list:
+    """Approved voices for `lang` (the manual picker, filtered to the current
+    language): [{code, display_name, tier}], primary first."""
+    reg = load_registry().get("voices") or {}
+    out = []
+    for code in approved_voices_for(lang):
+        e = reg.get(code, {})
+        out.append({"code": code, "display_name": e.get("display_name", code),
+                    "tier": e.get("tier", "functional")})
+    return out
+
+
+def active_voice_display() -> str:
+    """Display name of the current active voice — the 'Speaking with: …' line."""
+    v = resolve_voice(get_setting()["voice"] or "en") or alba()
+    return v.get("display_name", "Alba")
 
 
 def language_directive() -> str:
