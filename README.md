@@ -47,17 +47,18 @@ Ph3b3 is a FastAPI application that runs entirely on **your own machine** — th
 - **Voice (TTS):** Piper — **Alba** (en_GB) by default, plus native voices across **fifteen languages** (Latin, Hanzi, Cyrillic, and Arabic RTL scripts), selectable per language; Japanese, Korean, Hindi & Indonesian run text-only. New voice candidates install gated as *unreviewed* and only reach the picker once approved by ear in the Status tab — adding a language or voice is a registry entry plus a hash-pinned download, not code.
 - **Hearing (STT):** Whisper, running on CUDA
 - **Server:** FastAPI over HTTPS, basic-auth protected
-- **Modules:** 30 capability modules
-- **Tools:** 87 callable functions she can invoke
+- **Modules:** 31 capability modules
+- **Tools:** 88 callable functions she can invoke
 
 Her range is wide for a single-author build:
 
 - **Voice conversation, in eight languages — and text in more** — she speaks through Piper TTS, defaulting to the **Alba** voice (English, Scottish). Pick a language in the Status tab and she both *responds* and *speaks* in it — **English, Spanish, French, German, Mandarin, Italian, Polish, or Russian** — each in a real native voice (Mandarin in Hanzi, Russian in Cyrillic, never romanization read with an English mouth). Languages without a quality voice yet — **Japanese, Korean** — are offered *text-only*: she writes in them and stays silent rather than faking an accent, by declared design. The portal UI localizes too. **More can be added**: a new language or voice is a registry entry plus a one-time, hash-pinned model download, reviewed by ear before it goes live — not a code change. One setting, applied everywhere she talks — portal, Dio, Iris. Her **safety refusals hold in every language** (the "the filter only speaks English" hole, closed). Push-to-talk capture, with a server-side silence gate so quiet is never transcribed into phantom words.
 - **Sight on request** — she takes photos and describes what she sees, through a webcam or Dio's own camera, **only when you ask**. Never ambient, never silent: every capture is announced and logged.
 - **Image generation** — Morpheus (SDXL via ComfyUI), fully local.
+- **Web search** — Metis, her first step outside the machine, **off by default** and flipped on in the Status tab. Every search is announced and answers are cited from the *actual* result URLs; web pages are treated as untrusted input (summarized with no tools, safety-checked both ways), and a dead backend says so rather than inventing an answer. SearXNG in a localhost-only container, DuckDuckGo fallback.
 - **Argus** — fleet observability: heartbeats from every device, a captures feed (photos, audio, transcripts), and browsable chat history, all in one watchtower tab.
 - **Rhea** — nightly encrypted backups to a dedicated external drive, versioned, with a tested one-script restore. If the server dies tonight, she survives.
-- **30 modules** — ghost hunting, translation, cybersecurity, film, anime, D&D, weather, music, notes, karaoke, a resume analyzer (Ariadne), an on-page utility tray (timer, calc, converter, scratchpad, QR, dice, world clock) and more.
+- **31 modules** — ghost hunting, translation, cybersecurity, film, anime, D&D, weather, music, notes, karaoke, web search (Metis), a resume analyzer (Ariadne), an on-page utility tray (timer, calc, converter, scratchpad, QR, dice, world clock) and more.
 - **Persistent memory across sessions** — Mnemosyne, in active development toward full retrieval.
 - **Reflective learning loop.**
 - **Web UI** accessible over Tailscale from anywhere.
@@ -111,6 +112,7 @@ From any phone on the network it gives you:
 - **System status** — live health from `/health` and `/ready` (model loaded, soul, TTS, STT, boot count), polled continuously.
 - **Chat + voice in one** — type to her; she answers in text *and* speaks the reply in Alba's voice. Both come back from a single `/chat` call (`{response, audio}`), so the voice you hear is her real reply running through Hermes3, not a parrot reading your own words back.
 - **Argus — fleet observability.** Every device — Nyx, Iris, Stack-chan, and the **Rhea** backup drive — checks in on the same authenticated `X-Ph3b3-Device` path with a tiny heartbeat, and Argus derives a live state (**HEALTHY / SICK / SILENT**) from a per-device *cadence contract* rather than guessing from a raw last-seen. A badge silent past its window reads SILENT; one reporting a bad value — low battery, low heap, or the backup drive over 80 % full — reads SICK. It's strictly read-only: Argus watches and records, never acts, and keeps its own dedicated store separate from Phoebe's memory. The same tab carries the **captures feed** (every device photo and recording, paired with its transcript) and full **chat transcript history**. Contracts are plain JSON (`config/argus_contracts.json`), reloaded per read — editable without a restart.
+- **Web access (Metis).** A master switch, **off by default**, that governs whether Phoebe may reach the internet at all — no toggle, no packets. With it on, a *search-intent* message is routed to `web_search` server-side and answered fail-closed: the query is announced, results come from a localhost-only SearXNG container (DuckDuckGo fallback), and the reply is cited from the **actual** retrieved URLs, so a search-shaped answer can never be conjured. Fetched pages are untrusted — summarized with no tools available and safety-gated on both the query and the summary — and a dead backend reports itself out loud instead of fabricating. Watched by Argus; SSRF-guarded so it can never reach a private, loopback, or tailnet address.
 - **Iris networks** — add, remove, and manage the WiFi credentials stored on Iris. Changes are synced to the device automatically on next connect; no USB cable, no portal page, no reflash.
 
 It installs as a real standalone PWA (manifest + service worker), with Ph3b3's face as the app icon — themed in her identity: violet face, magenta-pink accents, cyan-and-magenta circuit lines.
@@ -177,7 +179,7 @@ targeting `m5stack:esp32:m5stack_cores3`; copy `secrets.example.h` to
 Where she's going next:
 
 - **More languages & voices** — multilingual voice + response ships today (eight voiced languages, Japanese/Korean text-only). The bench stays open: any medium-or-better Piper voice drops in through the registry and a by-ear review, no code change. The next real step is *voicing* Japanese and Korean — official Piper has nothing that clears the bar, so it needs a second local TTS engine (VITS-class) behind the same registry.
-- **Agent orchestration** — multi-step autonomous tool chaining: give her a goal, she plans and sequences her own tool calls (across the existing 87 functions) instead of single-shot invocation.
+- **Agent orchestration** — multi-step autonomous tool chaining: give her a goal, she plans and sequences her own tool calls (across the existing 88 functions) instead of single-shot invocation.
 - **RAG memory backend** — vector-store retrieval over her long-term memory so recall scales past what fits in context, with the same local-only guarantee (embeddings generated and stored locally, nothing leaves).
 - **Flipper Zero integration** — voice-triggered Flipper actions ("Ph3b3, run the sub-GHz scan"), signal-capture data logged to her memory, the Flipper as a hardware key / physical trigger, and her responses shown on the Flipper screen. Lives in `integrations/flipper_zero/` when work starts.
 - **Integrations pattern** — a repeatable shape for new capabilities: a subfolder under `integrations/`, its own README and scripts, wired into `server.py`.
