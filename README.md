@@ -44,7 +44,7 @@ That's the direction: capable, private help, shaped by the people the industry u
 Ph3b3 is a FastAPI application that runs entirely on **your own machine** — the reference build is a desktop with a Ryzen 9 7950X and an RTX 4060 Ti (16 GB). The full stack is local:
 
 - **Brain:** Hermes3 via Ollama
-- **Voice (TTS):** Piper, speaking in the **Alba** en_GB voice
+- **Voice (TTS):** Piper — **Alba** (en_GB) by default, with native es/fr/de/zh voices, selectable per language
 - **Hearing (STT):** Whisper, running on CUDA
 - **Server:** FastAPI over HTTPS, basic-auth protected
 - **Modules:** 30 capability modules
@@ -52,7 +52,7 @@ Ph3b3 is a FastAPI application that runs entirely on **your own machine** — th
 
 Her range is wide for a single-author build:
 
-- **Voice conversation** — she speaks through Piper TTS (the **Alba** voice, British accent). Push-to-talk capture, with a server-side silence gate so quiet is never transcribed into phantom words.
+- **Voice conversation, in five languages** — she speaks through Piper TTS, defaulting to the **Alba** voice (English, Scottish). Pick a language in the Status tab and she both *responds* and *speaks* in it — **English, Spanish, French, German, or Mandarin** — each in a real native voice (Mandarin in Hanzi, not romanization read with an English mouth). One setting, applied everywhere she talks — portal, Dio, Iris. Her **safety refusals hold in every language** (the "the filter only speaks English" hole, closed). Push-to-talk capture, with a server-side silence gate so quiet is never transcribed into phantom words.
 - **Sight on request** — she takes photos and describes what she sees, through a webcam or Dio's own camera, **only when you ask**. Never ambient, never silent: every capture is announced and logged.
 - **Image generation** — Morpheus (SDXL via ComfyUI), fully local.
 - **Argus** — fleet observability: heartbeats from every device, a captures feed (photos, audio, transcripts), and browsable chat history, all in one watchtower tab.
