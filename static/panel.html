@@ -1097,6 +1097,17 @@
       </div>
     </div>
 
+    <div class="card">
+      <div class="card-title">
+        <span>Web Access (Metis)</span>
+        <span id="egBadge" class="wg-badge wg-off">Off</span>
+      </div>
+      <div class="wg-row">
+        <span id="egDesc" class="wg-desc">Web search is <strong>off</strong> — Phoebe stays fully local</span>
+        <button class="wg-toggle" id="egToggleBtn">Enable</button>
+      </div>
+    </div>
+
     <!-- ══ Utility Tray — Timer + Calculator (portable component) ══════════════
          Markup half of the self-contained tray. Pairs with the .ut-* CSS block
          and the utilTray IIFE. Collapsed by default (no `open` on <details>). -->
@@ -1691,7 +1702,7 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
   document.getElementById('pane' + t.dataset.pane).classList.add('active');
-  if (t.dataset.pane === 'Status') { wgRefresh(); langInit(); }
+  if (t.dataset.pane === 'Status') { wgRefresh(); egressRefresh(); langInit(); }
 }));
 
 // ── Language & Voice card ──────────────────────────────────────────────────────
@@ -1905,7 +1916,7 @@ async function refreshStatus() {
   }
 }
 refreshStatus();
-wgRefresh();                       // WireGuard card lives in Status (default pane)
+wgRefresh(); egressRefresh();                       // WireGuard card lives in Status (default pane)
 setInterval(refreshStatus, 10_000);
 
 // ── chat + audio ──────────────────────────────────────────────────────────────
@@ -2251,6 +2262,37 @@ async function wgRefresh() {
     btn.className   = 'wg-toggle' + (up ? ' wg-danger' : '');
   } catch { /* server unreachable — leave badge as-is */ }
 }
+// ── Web-access (Metis) egress toggle — same pattern as WireGuard ──────────────
+async function egressRefresh() {
+  try {
+    const d = await fetch('/egress').then(r => r.json());
+    const on = d.web_access;
+    const badge = document.getElementById('egBadge');
+    const desc  = document.getElementById('egDesc');
+    const btn   = document.getElementById('egToggleBtn');
+    badge.className = 'wg-badge ' + (on ? 'wg-on' : 'wg-off');
+    badge.textContent = on ? 'On' : 'Off';
+    desc.innerHTML = on
+      ? (d.backend_up ? 'Web search is <strong>on</strong> — searches announced, answers cited'
+                      : 'Web search is <strong>on</strong> — <strong>backend down</strong>')
+      : 'Web search is <strong>off</strong> — Phoebe stays fully local';
+    btn.textContent = on ? 'Disable' : 'Enable';
+    btn.className = 'wg-toggle' + (on ? ' wg-danger' : '');
+  } catch {}
+}
+async function egressToggle() {
+  const btn = document.getElementById('egToggleBtn');
+  const turnOn = btn.textContent === 'Enable';
+  btn.disabled = true; btn.textContent = turnOn ? 'Enabling…' : 'Disabling…';
+  try {
+    await fetch('/egress', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({web_access: turnOn})});
+  } catch(e) {}
+  btn.disabled = false;
+  await egressRefresh();
+}
+document.getElementById('egToggleBtn')?.addEventListener('click', egressToggle);
+
 async function wgToggle() {
   const btn    = document.getElementById('wgToggleBtn');
   const action = btn.textContent === 'Enable' ? 'up' : 'down';

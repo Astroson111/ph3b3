@@ -1,27 +1,59 @@
 {
   "_comment": "Argus per-device cadence contracts. Editable without code changes; reloaded per fleet read. type=service (Nyx-local, steady heartbeat) or battery (badge: check-in on wake + every N min awake, sleep windows count as healthy silence). silent_after_s = past this with no report => SILENT. sick_if floors => SICK. expected_firmware_hash set => drift flag when mismatch. sleep_windows are local-time HH:MM ranges (may wrap midnight).",
-
-  "_rhea_note": "rhea = the RHEA backup drive (Rhea nightly job). Nightly cadence: heartbeat_s 24h, silent_after_s 26h (2h grace). A failed/unplugged run sends no heartbeat => SILENT within contract. free_heap carries the drive's FREE BYTES; free_heap_below = 20% of RHEA capacity => SICK when the drive exceeds 80% used (space warning; revisit prune). Reuses existing plumbing — no new alerting.",
-
-  "defaults": { "type": "service", "heartbeat_s": 30, "silent_after_s": 120 },
-
+  "_rhea_note": "rhea = the RHEA backup drive (Rhea nightly job). Nightly cadence: heartbeat_s 24h, silent_after_s 26h (2h grace). A failed/unplugged run sends no heartbeat => SILENT within contract. free_heap carries the drive's FREE BYTES; free_heap_below = 20% of RHEA capacity => SICK when the drive exceeds 80% used (space warning; revisit prune). Reuses existing plumbing \u2014 no new alerting.",
+  "defaults": {
+    "type": "service",
+    "heartbeat_s": 30,
+    "silent_after_s": 120
+  },
   "devices": {
-    "nyx":       { "type": "service", "heartbeat_s": 30,  "silent_after_s": 120,
-                   "sick_if": { "free_heap_below": 50000000 } },
-
-    "argus":     { "type": "service", "heartbeat_s": 30,  "silent_after_s": 120 },
-
-    "iris":      { "type": "battery", "heartbeat_s": 300, "silent_after_s": 900,
-                   "expected_firmware_hash": null,
-                   "sick_if": { "battery_below": 10, "free_heap_below": 20000 },
-                   "sleep_windows": [] },
-
-    "stackchan": { "type": "battery", "heartbeat_s": 300, "silent_after_s": 900,
-                   "expected_firmware_hash": null,
-                   "sick_if": { "battery_below": 10, "free_heap_below": 20000 },
-                   "sleep_windows": [] },
-
-    "rhea":      { "type": "service", "heartbeat_s": 86400, "silent_after_s": 93600,
-                   "sick_if": { "free_heap_below": 393569213644 } }
+    "nyx": {
+      "type": "service",
+      "heartbeat_s": 30,
+      "silent_after_s": 120,
+      "sick_if": {
+        "free_heap_below": 50000000
+      }
+    },
+    "argus": {
+      "type": "service",
+      "heartbeat_s": 30,
+      "silent_after_s": 120
+    },
+    "iris": {
+      "type": "battery",
+      "heartbeat_s": 300,
+      "silent_after_s": 900,
+      "expected_firmware_hash": null,
+      "sick_if": {
+        "battery_below": 10,
+        "free_heap_below": 20000
+      },
+      "sleep_windows": []
+    },
+    "stackchan": {
+      "type": "battery",
+      "heartbeat_s": 300,
+      "silent_after_s": 900,
+      "expected_firmware_hash": null,
+      "sick_if": {
+        "battery_below": 10,
+        "free_heap_below": 20000
+      },
+      "sleep_windows": []
+    },
+    "rhea": {
+      "type": "service",
+      "heartbeat_s": 86400,
+      "silent_after_s": 93600,
+      "sick_if": {
+        "free_heap_below": 393569213644
+      }
+    },
+    "metis": {
+      "type": "service",
+      "heartbeat_s": 60,
+      "silent_after_s": 180
+    }
   }
 }
