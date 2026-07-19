@@ -2,6 +2,8 @@
 
 What's shipped, what's active, what's next. Only things that actually run on `main` land in **Shipped** — no aspirational claims in that section.
 
+> Every capability that touches privacy, truth, safety, or autonomy has a recorded guardrail in the [values-audit trail](docs/VALUES_AUDIT.md) — added *before* the capability ships.
+
 ---
 
 ## Shipped
