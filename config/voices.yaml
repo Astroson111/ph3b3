@@ -10,43 +10,81 @@
 #
 # Fields:
 #   model        — filename in ~/ph3b3_data/voices/
+#   lang         — the response-language this voice pairs with (a key in
+#                  LANG_NAMES). Multiple voices may serve one language
+#                  (e.g. es_ES + es_MX both serve 'es'); the entry whose id
+#                  equals the lang code is that language's primary.
 #   display_name — shown in the picker (native name + language)
 #   script       — 'latin' (safe to strip for Piper) | 'native' (pass through; the
 #                  voice's own model handles its script — never strip it)
 #   tier         — 'strong' | 'functional'  (honest-capability note in the UI: small
 #                  local models vary in fluency by language)
 #   sample_text  — one short line spoken by the Preview button
+#   status       — 'approved' | 'unreviewed'  (the review GATE, below)
+#
+# REVIEW GATE
+#   Only status: approved voices appear in the portal Voice dropdown. An
+#   unreviewed voice is installed and synth-checked but reachable ONLY through
+#   the Status-tab review flow (preview + approve/reject). Approving is the
+#   Captain's call, by ear — it is never set here for a new voice by tooling.
+#   The runtime decision (approve/reject) is persisted OUTSIDE this file, in
+#   ~/ph3b3_data/voice_review.json, so this repo config stays immutable; a reject
+#   also deletes the model from disk. The status: here is the SEED default.
+#   The five voices below were seated before the gate existed → grandfathered
+#   approved.
 
 default: en          # Phoebe's default primary voice = Alba
 
 voices:
   en:
     model: en_GB-alba-medium.onnx
+    lang: en
     display_name: "Alba — English (Scottish)"
     script: latin
     tier: strong
     sample_text: "Hello, I'm Phoebe. This is my voice."
+    status: approved
   es:
     model: es_ES-davefx-medium.onnx
+    lang: es
     display_name: "Español (España)"
     script: latin
     tier: strong
     sample_text: "Hola, soy Phoebe. Esta es mi voz."
+    status: approved
   fr:
     model: fr_FR-siwis-medium.onnx
+    lang: fr
     display_name: "Français (France)"
     script: latin
     tier: strong
     sample_text: "Bonjour, je suis Phoebe. Voici ma voix."
+    status: approved
   de:
     model: de_DE-thorsten-medium.onnx
+    lang: de
     display_name: "Deutsch (Deutschland)"
     script: latin
     tier: strong
     sample_text: "Guten Tag, ich bin Phoebe. Das ist meine Stimme."
+    status: approved
   zh:
     model: zh_CN-huayan-medium.onnx
+    lang: zh
     display_name: "中文 (普通话) — Mandarin"
     script: native
     tier: functional
     sample_text: "你好，我是 Phoebe，这是我的声音。"
+    status: approved
+
+  # ── Candidates awaiting the Captain's ear (status: unreviewed) ───────────────
+  # Installed + synth-checked, but absent from the main Voice dropdown until
+  # approved in the Status-tab review flow.
+  es_MX:
+    model: es_MX-ald-medium.onnx
+    lang: es
+    display_name: "Español (México)"
+    script: latin
+    tier: functional
+    sample_text: "Hola, soy Phoebe. Esta es mi voz."
+    status: unreviewed

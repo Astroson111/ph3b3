@@ -979,6 +979,43 @@ async def voice_preview(body: dict):
     return {"audio": b64 or "", "text": sample, "voice": code}
 
 
+# ── Voice review gate ─────────────────────────────────────────────────────────
+# Unreviewed voices (installed, but awaiting the Captain's ear) never appear in
+# the main Voice dropdown — only here. Each is synth-checked server-side (the
+# silent-failure trap from the es_ES scare: a missing phoneme set renders no
+# audio, not an error). Approve → it joins the dropdown. Reject → model deleted
+# from disk + recorded so setup.sh won't re-fetch it.
+@app.get("/voice/review")
+async def voice_review_list():
+    voices_ = voices.list_for_review()
+
+    def _synth_ok(code, text):
+        try:
+            return bool(tts.synthesize_to_b64(text or "Preview.", code))
+        except Exception:
+            return False
+
+    for v in voices_:
+        v["synth_ok"] = await asyncio.to_thread(_synth_ok, v["code"], v.get("sample_text"))
+    return {"voices": voices_}
+
+@app.post("/voice/review/approve")
+async def voice_review_approve(body: dict):
+    code = (body.get("voice") or "").strip()
+    try:
+        return {"ok": True, **voices.approve(code)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/voice/review/reject")
+async def voice_review_reject(body: dict):
+    code = (body.get("voice") or "").strip()
+    try:
+        return {"ok": True, **voices.reject(code)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 def _triage_context(prior_messages) -> str:
     """Prior conversation turns (excluding the persona/system prompt) as plain text."""
     turns = [m for m in prior_messages if m.get("role") in ("user", "assistant")]

@@ -44,7 +44,7 @@ That's the direction: capable, private help, shaped by the people the industry u
 Ph3b3 is a FastAPI application that runs entirely on **your own machine** — the reference build is a desktop with a Ryzen 9 7950X and an RTX 4060 Ti (16 GB). The full stack is local:
 
 - **Brain:** Hermes3 via Ollama
-- **Voice (TTS):** Piper — **Alba** (en_GB) by default, with native es/fr/de/zh voices, selectable per language
+- **Voice (TTS):** Piper — **Alba** (en_GB) by default, with native es/fr/de/zh voices, selectable per language. New voice candidates install gated as *unreviewed* and only reach the picker once approved by ear in the Status tab.
 - **Hearing (STT):** Whisper, running on CUDA
 - **Server:** FastAPI over HTTPS, basic-auth protected
 - **Modules:** 30 capability modules
@@ -203,6 +203,23 @@ Accessibility is the through-line for all of it — every addition is measured a
 ```bash
 ./setup.sh      # one-time: installs system deps, creates the venv, pip installs
 ```
+
+`setup.sh` also downloads the Piper voice models once (zero runtime network fetches — a house privacy law). Every model is **hash-pinned**: its sha256 is recorded at selection time and verified on install, so a mismatch aborts rather than silently seating a swapped model.
+
+#### Voice models — disk cost
+
+Each model is ~60 MB (`.onnx` + `.onnx.json`). A voice is either **approved** (in the picker) or an **unreviewed candidate** (installed and synth-checked, but reachable only through the Status-tab review flow until the Captain approves it by ear). Rejecting a candidate deletes its model from disk.
+
+| Voice | Language | Tier | Size | Status |
+|-------|----------|------|-----:|--------|
+| `en_GB-alba-medium` | English (Scottish) — **Alba** | strong | 60 MB | approved |
+| `es_ES-davefx-medium` | Español (España) | strong | 60 MB | approved |
+| `fr_FR-siwis-medium` | Français (France) | strong | 60 MB | approved |
+| `de_DE-thorsten-medium` | Deutsch (Deutschland) | strong | 60 MB | approved |
+| `zh_CN-huayan-medium` | 中文 (普通话) — Mandarin | functional | 60 MB | approved |
+| `es_MX-ald-medium` | Español (México) | functional | 60 MB | *unreviewed* |
+
+**Total: ~0.35 GB** for all six (~0.30 GB approved + ~0.06 GB for the es_MX candidate). Voices behind the honest-gap rule — a language with no medium-or-better Piper voice — ship **no** model at all; that language falls back to Alba with a spoken note rather than a bad-accent read.
 
 ### Start her
 

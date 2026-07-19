@@ -373,6 +373,23 @@
     .lv-offer button { font-size:.75rem; padding:.2rem .5rem; border-radius:.35rem; cursor:pointer;
       border:1px solid var(--dim); background:transparent; color:var(--text); }
     .lv-offer button.lv-yes { border-color:var(--accent,#c060e0); color:var(--accent,#c060e0); }
+    /* Voice review — gated candidates */
+    .lv-review { margin-top:.7rem; padding-top:.6rem; border-top:1px dashed rgba(107,63,160,.35); }
+    .lv-review-hd { font-size:.8rem; font-weight:600; color:var(--text); margin-bottom:.4rem; }
+    .lv-review-sub { font-weight:400; color:var(--dim); }
+    .lv-cand { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap;
+      background:rgba(107,63,160,.10); border:1px solid rgba(107,63,160,.28); border-radius:.4rem;
+      padding:.4rem .55rem; margin:.3rem 0; font-size:.8rem; }
+    .lv-cand-name { font-weight:600; }
+    .lv-cand-meta { color:var(--dim); font-size:.72rem; }
+    .lv-cand-synth.ok  { color:#5fbf7f; }
+    .lv-cand-synth.bad { color:#e06a6a; }
+    .lv-cand-sp { flex:1; }
+    .lv-cand button { font-size:.74rem; padding:.2rem .5rem; border-radius:.35rem; cursor:pointer;
+      border:1px solid var(--dim); background:transparent; color:var(--text); }
+    .lv-cand button.lv-approve { border-color:#5fbf7f; color:#5fbf7f; }
+    .lv-cand button.lv-reject  { border-color:#e06a6a; color:#e06a6a; }
+    .lv-cand button:disabled { opacity:.4; cursor:not-allowed; }
 
     /* ── WireGuard tunnel toggle ── */
     .wg-badge { font-size:.65rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
@@ -1056,6 +1073,12 @@
       </div>
       <div class="lv-note" id="lvNote"></div>
       <audio id="lvAudio" hidden></audio>
+
+      <!-- Voice review — unreviewed candidates, gated out of the dropdown until approved by ear -->
+      <div class="lv-review" id="lvReview" hidden>
+        <div class="lv-review-hd">Voice review <span class="lv-review-sub">— candidates awaiting your ear</span></div>
+        <div id="lvReviewList"></div>
+      </div>
     </div>
     <div class="card">
       <div class="card-title">
@@ -1666,6 +1689,59 @@ async function langInit(force) {
   voiceSel.value = _langData.voice;
   _renderNote(_langData.voice);
   document.getElementById('lvOffer').hidden = true;
+  reviewLoad();
+}
+// ── Voice review: unreviewed candidates, gated out of the dropdown ─────────────
+async function reviewLoad() {
+  const box = document.getElementById('lvReview');
+  const list = document.getElementById('lvReviewList');
+  let data;
+  try { data = await fetch('/voice/review').then(r => r.json()); }
+  catch { box.hidden = true; return; }
+  const cands = data.voices || [];
+  if (!cands.length) { box.hidden = true; list.innerHTML = ''; return; }
+  box.hidden = false;
+  list.innerHTML = cands.map(v => {
+    const synth = v.synth_ok
+      ? '<span class="lv-cand-synth ok" title="Renders audio">✓ synth</span>'
+      : '<span class="lv-cand-synth bad" title="No audio — do not approve">✗ synth</span>';
+    return `<div class="lv-cand" data-code="${v.code}">
+      <span class="lv-cand-name">${v.display_name}</span>
+      <span class="lv-cand-meta">${v.language} · ${v.tier}</span>
+      ${synth}
+      <span class="lv-cand-sp"></span>
+      <button class="lv-prev-c" title="Preview">▶</button>
+      <button class="lv-approve"${v.synth_ok ? '' : ' disabled title="synth check failed"'}>Approve</button>
+      <button class="lv-reject">Reject</button>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('.lv-cand').forEach(row => {
+    const code = row.dataset.code;
+    row.querySelector('.lv-prev-c').onclick = () => previewCode(code);
+    row.querySelector('.lv-approve').onclick = () => reviewApprove(code);
+    row.querySelector('.lv-reject').onclick  = () => reviewReject(code, row.querySelector('.lv-cand-name').textContent);
+  });
+}
+async function previewCode(code) {
+  try {
+    const r = await fetch('/voice/preview', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ voice: code }) }).then(r => r.json());
+    if (r.audio) { const a = document.getElementById('lvAudio');
+      a.src = 'data:audio/wav;base64,' + r.audio; a.play(); }
+  } catch {}
+}
+async function reviewApprove(code) {
+  const r = await fetch('/voice/review/approve', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ voice: code }) }).then(r => r.json()).catch(() => ({}));
+  if (r.ok) { _langLoaded = false; await langInit(); }   // reload → voice now in dropdown
+  else alert('Approve failed' + (r.detail ? ': ' + r.detail : ''));
+}
+async function reviewReject(code, name) {
+  if (!confirm(`Reject ${name}?\n\nThis deletes the voice model from disk. It won't be re-downloaded by setup.`)) return;
+  const r = await fetch('/voice/review/reject', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ voice: code }) }).then(r => r.json()).catch(() => ({}));
+  if (r.ok) reviewLoad();
+  else alert('Reject failed' + (r.detail ? ': ' + r.detail : ''));
 }
 async function langSet(code) {
   const r = await fetch('/language', { method:'POST', headers:{'Content-Type':'application/json'},

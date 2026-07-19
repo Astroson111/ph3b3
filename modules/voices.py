@@ -21,7 +21,8 @@ log = logging.getLogger("ph3b3.voices")
 
 REGISTRY_PATH = Path(PH3B3_HOME) / "config" / "voices.yaml"
 VOICE_DIR     = Path(PH3B3_DATA) / "voices"
-SETTING_PATH  = Path(PH3B3_DATA) / "language.json"   # runtime state (user's choice), not repo config
+SETTING_PATH  = Path(PH3B3_DATA) / "language.json"      # runtime state (user's choice), not repo config
+REVIEW_PATH   = Path(PH3B3_DATA) / "voice_review.json"  # runtime review verdicts, not repo config
 
 DEFAULT_LANG  = "en"          # Alba — the constant that cannot break
 
@@ -133,13 +134,105 @@ def language_directive() -> str:
             f"unchanged and apply in {name} exactly as in English.")
 
 
+# ── Review gate ───────────────────────────────────────────────────────────────
+# A voice is offered in the main dropdown ONLY when its effective status is
+# 'approved'. The seed status lives in voices.yaml; the Captain's runtime verdict
+# (approve/reject) overlays it from voice_review.json so the repo config stays
+# immutable. Alba is always approved, whatever any file says. A voice with no
+# explicit status defaults to 'unreviewed' — approval is never granted by omission.
+def _load_review() -> dict:
+    """Runtime verdicts {voice_code: 'approved'|'rejected'}. Never raises."""
+    try:
+        return json.loads(REVIEW_PATH.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+
+def _save_review(d: dict) -> None:
+    with _lock:
+        REVIEW_PATH.parent.mkdir(parents=True, exist_ok=True)
+        REVIEW_PATH.write_text(json.dumps(d, indent=2), encoding="utf-8")
+
+
+def effective_status(code: str, entry: dict | None = None, review: dict | None = None) -> str:
+    """'approved' | 'unreviewed' | 'rejected' for a voice code, overlay applied."""
+    if code == "en":
+        return "approved"                     # Alba is never gated
+    if review is None:
+        review = _load_review()
+    verdict = review.get(code)
+    if verdict in ("approved", "rejected"):
+        return verdict
+    if entry is None:
+        entry = (load_registry().get("voices") or {}).get(code) or {}
+    return entry.get("status") or "unreviewed"
+
+
 def list_for_ui() -> list:
-    """Installed voices for the picker: [{code, display_name, tier, has_model}]."""
-    reg = load_registry()
+    """APPROVED, installed voices for the main picker:
+    [{code, display_name, tier, language, has_model}]. The review gate — an
+    unreviewed or rejected voice never reaches this list."""
+    reg, review = load_registry(), _load_review()
     out = []
     for code, e in (reg.get("voices") or {}).items():
+        if effective_status(code, e, review) != "approved":
+            continue
+        if not (VOICE_DIR / e.get("model", "")).exists():
+            continue
         out.append({"code": code, "display_name": e.get("display_name", code),
                     "tier": e.get("tier", "functional"),
-                    "language": LANG_NAMES.get(code, code),
-                    "has_model": (VOICE_DIR / e.get("model", "")).exists()})
+                    "language": LANG_NAMES.get(e.get("lang", code), code),
+                    "has_model": True})
     return out
+
+
+def list_for_review() -> list:
+    """Installed voices awaiting the Captain's verdict (effective status
+    'unreviewed'). These are reachable ONLY through the review flow, never the
+    main dropdown. Rejected voices (model deleted) are excluded."""
+    reg, review = load_registry(), _load_review()
+    out = []
+    for code, e in (reg.get("voices") or {}).items():
+        if effective_status(code, e, review) != "unreviewed":
+            continue
+        if not (VOICE_DIR / e.get("model", "")).exists():
+            continue
+        out.append({"code": code, "display_name": e.get("display_name", code),
+                    "lang": e.get("lang", code),
+                    "language": LANG_NAMES.get(e.get("lang", code), code),
+                    "tier": e.get("tier", "functional"),
+                    "sample_text": e.get("sample_text", "")})
+    return out
+
+
+def approve(code: str) -> dict:
+    """Captain's verdict: promote an unreviewed voice into the dropdown. Refuses
+    a code that is unknown or not currently unreviewed (idempotent-safe)."""
+    entry = (load_registry().get("voices") or {}).get(code)
+    if not entry:
+        raise ValueError(f"unknown voice {code!r}")
+    if effective_status(code, entry) != "unreviewed":
+        raise ValueError(f"voice {code!r} is not awaiting review")
+    review = _load_review(); review[code] = "approved"; _save_review(review)
+    return {"code": code, "status": "approved"}
+
+
+def reject(code: str) -> dict:
+    """Captain's verdict: drop an unreviewed voice — delete its model files from
+    disk and record the rejection so setup.sh will not re-fetch it. Alba and any
+    already-approved voice are protected."""
+    reg = load_registry()
+    entry = (reg.get("voices") or {}).get(code)
+    if not entry:
+        raise ValueError(f"unknown voice {code!r}")
+    if code == "en" or effective_status(code, entry) == "approved":
+        raise ValueError(f"voice {code!r} is protected and cannot be rejected")
+    model = entry.get("model", "")
+    for p in (VOICE_DIR / model, VOICE_DIR / (model + ".json")):
+        try:
+            p.unlink(missing_ok=True)
+        except Exception as e:
+            log.warning("reject: could not delete %s (%s)", p, e)
+    review = _load_review(); review[code] = "rejected"; _save_review(review)
+    log.info("voice %r rejected → model deleted", code)
+    return {"code": code, "status": "rejected"}
