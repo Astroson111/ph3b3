@@ -1050,24 +1050,24 @@
   <!-- STATUS -->
   <section id="paneStatus" class="pane active">
     <div class="card">
-      <div class="card-title">Health</div>
+      <div class="card-title" data-i18n="status.health">Health</div>
       <div id="healthRows"><div class="sr"><span class="sr-l">Status</span><span class="sr-v">checking…</span></div></div>
     </div>
     <div class="card">
-      <div class="card-title">Runtime</div>
+      <div class="card-title" data-i18n="status.runtime">Runtime</div>
       <div id="readyRows"><div class="sr"><span class="sr-l">Model</span><span class="sr-v">—</span></div></div>
     </div>
 
     <!-- ══ Language & Voice — one setting localizes Phoebe (response + voice) ══ -->
     <div class="card">
-      <div class="card-title">Language &amp; Voice</div>
+      <div class="card-title" data-i18n="status.langvoice">Language &amp; Voice</div>
       <div class="lv-row">
-        <label class="lv-label" for="langSel">Language</label>
+        <label class="lv-label" for="langSel" data-i18n="status.language">Language</label>
         <select id="langSel" class="lv-sel"><option>…</option></select>
       </div>
       <div class="lv-offer" id="lvOffer" hidden></div>
       <div class="lv-row">
-        <label class="lv-label" for="voiceSel">Voice</label>
+        <label class="lv-label" for="voiceSel" data-i18n="status.voice">Voice</label>
         <select id="voiceSel" class="lv-sel"><option>…</option></select>
         <button class="lv-prev" id="lvPreviewBtn" title="Preview voice" aria-label="Preview voice">▶</button>
       </div>
@@ -1082,7 +1082,7 @@
     </div>
     <div class="card">
       <div class="card-title">
-        Remote Tunnel (WireGuard)
+        <span data-i18n="status.tunnel">Remote Tunnel (WireGuard)</span>
         <span id="wgBadge" class="wg-badge wg-off">Offline</span>
       </div>
       <div class="wg-row">
@@ -1099,7 +1099,7 @@
         <span class="ut-ico" aria-hidden="true">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3 2 6"/><path d="m22 6-3-3"/></svg>
         </span>
-        Utilities
+        <span data-i18n="util.title">Utilities</span>
         <span class="ut-chev" aria-hidden="true">&#9658;</span>
       </summary>
       <div class="ut-body">
@@ -1108,11 +1108,11 @@
 
         <!-- ── Timer ── -->
         <details class="ut-tool" open>
-          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg>Timer<span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
+          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg><span data-i18n="util.timer">Timer</span><span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
           <div class="ut-tool-body">
             <div class="ut-modes">
-              <button class="ut-mode active" data-mode="countdown">Countdown</button>
-              <button class="ut-mode" data-mode="stopwatch">Stopwatch</button>
+              <button class="ut-mode active" data-mode="countdown" data-i18n="util.timer.countdown">Countdown</button>
+              <button class="ut-mode" data-mode="stopwatch" data-i18n="util.timer.stopwatch">Stopwatch</button>
             </div>
             <div class="ut-ring-wrap">
               <svg class="ut-ring" id="utRing" viewBox="0 0 120 120" role="img" aria-label="Timer">
@@ -1128,7 +1128,7 @@
                   <path d="M0,-7 A7,7 0 1,0 0,7 A5.5,5.5 0 1,1 0,-7 Z" fill="url(#utGrad)" transform="translate(60 8)"/>
                 </g>
                 <text class="ut-time" id="utTime" x="60" y="60" text-anchor="middle" dominant-baseline="central">00:00</text>
-                <text class="ut-time-lbl" id="utTimeLbl" x="60" y="80" text-anchor="middle">READY</text>
+                <text class="ut-time-lbl" id="utTimeLbl" x="60" y="80" text-anchor="middle" data-i18n="util.timer.ready">READY</text>
               </svg>
             </div>
             <div class="ut-cd-set" id="utCdSet">
@@ -1144,15 +1144,15 @@
               <button class="ut-preset" data-sec="1500">25m</button>
             </div>
             <div class="ut-controls">
-              <button class="ut-btn" id="utStart">Start</button>
-              <button class="ut-btn ut-btn-ghost" id="utReset">Reset</button>
+              <button class="ut-btn" id="utStart" data-i18n="util.timer.start">Start</button>
+              <button class="ut-btn ut-btn-ghost" id="utReset" data-i18n="util.timer.reset">Reset</button>
             </div>
           </div>
         </details>
 
         <!-- ── Calculator ── -->
         <details class="ut-tool">
-          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg>Calculator<span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
+          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg><span data-i18n="util.calc">Calculator</span><span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
           <div class="ut-tool-body">
             <div class="ut-calc-disp" id="utCalcDisp">0</div>
             <div class="ut-keys" id="utKeys">
@@ -1180,14 +1180,14 @@
 
         <!-- ── Unit converter ── -->
         <details class="ut-tool">
-          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg>Converter<span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
+          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg><span data-i18n="util.converter">Converter</span><span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
           <div class="ut-tool-body">
             <select class="ut-sel" id="utConvCat" aria-label="category">
-              <option value="length">Length</option>
-              <option value="weight">Weight</option>
-              <option value="temp">Temperature</option>
-              <option value="data">Data size</option>
-              <option value="volume">Volume</option>
+              <option value="length" data-i18n="util.conv.length">Length</option>
+              <option value="weight" data-i18n="util.conv.weight">Weight</option>
+              <option value="temp" data-i18n="util.conv.temp">Temperature</option>
+              <option value="data" data-i18n="util.conv.data">Data size</option>
+              <option value="volume" data-i18n="util.conv.volume">Volume</option>
             </select>
             <div class="ut-conv-row">
               <input class="ut-num ut-conv-num" id="utConvIn" type="number" value="1" inputmode="decimal" aria-label="value">
@@ -1198,41 +1198,41 @@
               <input class="ut-num ut-conv-num ut-conv-out" id="utConvOut" readonly aria-label="result">
               <select class="ut-sel" id="utConvTo" aria-label="to unit"></select>
             </div>
-            <button class="ut-btn ut-btn-ghost" id="utConvSwap">&#8645; Swap units</button>
+            <button class="ut-btn ut-btn-ghost" id="utConvSwap" data-i18n-html="util.conv.swap">&#8645; Swap units</button>
           </div>
         </details>
 
         <!-- ── Scratchpad ── -->
         <details class="ut-tool">
-          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg>Scratchpad<span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
+          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg><span data-i18n="util.scratchpad">Scratchpad</span><span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
           <div class="ut-tool-body">
-            <textarea class="ut-scratch" id="utScratch" rows="5" placeholder="Sticky note — saved to this device only, never synced…"></textarea>
+            <textarea class="ut-scratch" id="utScratch" rows="5" placeholder="Sticky note — saved to this device only, never synced…" data-i18n-ph="util.scratch.ph"></textarea>
             <div class="ut-scratch-foot">
               <span class="ut-scratch-status" id="utScratchStatus">&nbsp;</span>
-              <button class="ut-btn ut-btn-ghost" id="utScratchClear">Clear</button>
+              <button class="ut-btn ut-btn-ghost" id="utScratchClear" data-i18n="util.scratch.clear">Clear</button>
             </div>
           </div>
         </details>
 
         <!-- ── QR generator ── -->
         <details class="ut-tool">
-          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg>QR code<span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
+          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg><span data-i18n="util.qr">QR code</span><span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
           <div class="ut-tool-body">
-            <input class="ut-txt" id="utQrIn" type="text" placeholder="Text or URL…" autocomplete="off" spellcheck="false">
+            <input class="ut-txt" id="utQrIn" type="text" placeholder="Text or URL…" data-i18n-ph="util.qr.ph" autocomplete="off" spellcheck="false">
             <div class="ut-qr-wrap"><canvas class="ut-qr-canvas" id="utQrCanvas" width="240" height="240"></canvas></div>
-            <div class="ut-qr-hint" id="utQrHint">Type above to generate a code.</div>
-            <button class="ut-btn" id="utQrDl" disabled>Download PNG</button>
+            <div class="ut-qr-hint" id="utQrHint" data-i18n="util.qr.hint">Type above to generate a code.</div>
+            <button class="ut-btn" id="utQrDl" disabled data-i18n="util.qr.dl">Download PNG</button>
           </div>
         </details>
 
         <!-- ── Dice / RNG ── -->
         <details class="ut-tool">
-          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg>Dice &amp; RNG<span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
+          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg><span data-i18n="util.dice">Dice &amp; RNG</span><span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
           <div class="ut-tool-body">
             <div class="ut-dice-result" id="utDiceResult">—</div>
-            <div class="ut-dice-sub" id="utDiceSub">crypto-grade randomness</div>
+            <div class="ut-dice-sub" id="utDiceSub" data-i18n="util.dice.sub">crypto-grade randomness</div>
             <div class="ut-chips">
-              <button class="ut-chip" data-roll="coin">Coin</button>
+              <button class="ut-chip" data-roll="coin" data-i18n="util.dice.coin">Coin</button>
               <button class="ut-chip" data-roll="d6">d6</button>
               <button class="ut-chip" data-roll="d20">d20</button>
             </div>
@@ -1240,21 +1240,21 @@
               <input class="ut-num" id="utDiceMin" type="number" value="1" aria-label="minimum">
               <span class="ut-colon">–</span>
               <input class="ut-num" id="utDiceMax" type="number" value="100" aria-label="maximum">
-              <button class="ut-btn ut-btn-ghost" id="utDiceRoll">Roll</button>
+              <button class="ut-btn ut-btn-ghost" id="utDiceRoll" data-i18n="util.dice.roll">Roll</button>
             </div>
           </div>
         </details>
 
         <!-- ── World clock ── -->
         <details class="ut-tool">
-          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg>World clock<span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
+          <summary class="ut-tool-sum"><svg class="ut-tmoon" aria-hidden="true"><use href="#utCrescent"/></svg><span data-i18n="util.clock">World clock</span><span class="ut-tchev" aria-hidden="true">&#9658;</span></summary>
           <div class="ut-tool-body">
             <div class="ut-clock-list" id="utClockList"></div>
             <div class="ut-clock-add">
               <select class="ut-sel" id="utClockZone" aria-label="add time zone"></select>
-              <button class="ut-btn ut-btn-ghost" id="utClockAdd">Add</button>
+              <button class="ut-btn ut-btn-ghost" id="utClockAdd" data-i18n="util.clock.add">Add</button>
             </div>
-            <div class="ut-clock-note" id="utClockNote">Local &amp; UTC always shown · up to 3 added zones</div>
+            <div class="ut-clock-note" id="utClockNote" data-i18n-html="util.clock.note">Local &amp; UTC always shown · up to 3 added zones</div>
           </div>
         </details>
       </div>
@@ -1266,16 +1266,16 @@
   <!-- CHAT -->
   <section id="paneChat" class="pane">
     <div class="chat-wrap">
-      <div class="chat-title">Conversation</div>
+      <div class="chat-title" data-i18n="chat.conversation">Conversation</div>
       <div class="chat-hist" id="chatHist"></div>
       <div class="audio-row" id="audioRow">
         <div class="bars"><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>
-        Alba speaking…
+        <span data-i18n="chat.speaking">Alba speaking…</span>
       </div>
       <div class="chat-foot">
-        <input class="cin" id="cin" type="text" placeholder="Message Ph3b3…" autocomplete="off" autocorrect="off" spellcheck="true">
-        <button class="btn-send" id="sendBtn">Send</button>
-        <button class="btn-mic" id="micBtn" title="Hold to speak">
+        <input class="cin" id="cin" type="text" placeholder="Message Ph3b3…" data-i18n-ph="chat.placeholder" autocomplete="off" autocorrect="off" spellcheck="true">
+        <button class="btn-send" id="sendBtn" data-i18n="chat.send">Send</button>
+        <button class="btn-mic" id="micBtn" title="Hold to speak" data-i18n-title="chat.mic">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
         </button>
       </div>
@@ -1296,35 +1296,35 @@
         <circle cx="22" cy="22" r="17" fill="var(--cyan)" opacity=".88" mask="url(#kmask)"/>
       </svg>
       <div>
-        <div class="kar-title">KARAOKE</div>
-        <div class="kar-tagline">she's a world karaoke machine</div>
+        <div class="kar-title" data-i18n="karaoke.title">KARAOKE</div>
+        <div class="kar-tagline" data-i18n="karaoke.tagline">she's a world karaoke machine</div>
       </div>
     </div>
 
     <div class="card">
       <div class="card-title kar-disc-toggle" id="karDiscToggle" tabindex="0" role="button"
            aria-expanded="true" aria-controls="karDiscBody">
-        Discover
+        <span data-i18n="karaoke.discover">Discover</span>
         <span class="kar-disc-chev open" id="karDiscChev" aria-hidden="true">&#9658;</span>
       </div>
       <div id="karDiscBody">
-        <button class="kar-disc-surprise" id="karSurprise">&#10022;&ensp;Surprise me</button>
+        <button class="kar-disc-surprise" id="karSurprise" data-i18n-html="karaoke.surprise">&#10022;&ensp;Surprise me</button>
         <div class="kar-disc-row">
           <input class="kar-disc-qin" id="karDiscQuery" type="text"
-                 placeholder="mood, genre or title…" autocomplete="off"
+                 placeholder="mood, genre or title…" data-i18n-ph="karaoke.search.ph" autocomplete="off"
                  aria-label="Search Jamendo tracks">
-          <button class="kar-disc-sbtn" id="karDiscSearch">Search</button>
+          <button class="kar-disc-sbtn" id="karDiscSearch" data-i18n="karaoke.search">Search</button>
         </div>
         <div id="karDiscResults" aria-live="polite">
-          <div class="kar-disc-hint">Tap 'Surprise me' to begin.</div>
+          <div class="kar-disc-hint" data-i18n="karaoke.disc.hint">Tap 'Surprise me' to begin.</div>
         </div>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-title">Prep</div>
+      <div class="card-title" data-i18n="karaoke.prep">Prep</div>
       <div class="kar-drop" id="karDrop">
-        <div class="kar-drop-lbl">🎵&ensp;Drop a track here · or Browse</div>
+        <div class="kar-drop-lbl" data-i18n-html="karaoke.drop">🎵&ensp;Drop a track here · or Browse</div>
         <div class="kar-file-name" id="karFileName"></div>
         <input type="file" id="karFile" accept="audio/*">
       </div>
@@ -1332,14 +1332,14 @@
         <button class="kar-preset-btn" data-preset="voice">VOICE&ensp;16kHz mono</button>
         <button class="kar-preset-btn active" data-preset="cd">CD&ensp;44.1kHz stereo</button>
       </div>
-      <button class="kar-convert" id="karConvert">Convert + Prep</button>
+      <button class="kar-convert" id="karConvert" data-i18n="karaoke.convert">Convert + Prep</button>
       <div class="kar-log" id="karLog"></div>
     </div>
 
     <div class="card">
-      <div class="card-title">Library</div>
+      <div class="card-title" data-i18n="karaoke.library">Library</div>
       <div class="kar-sd" id="karSd"></div>
-      <div id="karLibrary"><div class="kar-empty">Loading…</div></div>
+      <div id="karLibrary"><div class="kar-empty" data-i18n="common.loading">Loading…</div></div>
     </div>
 
   </section>
@@ -1348,15 +1348,15 @@
   <section id="paneMorpheus" class="pane">
 
     <div class="morph-mode-tabs">
-      <button class="morph-mode-tab active" data-mode="gen">✦ Generate</button>
-      <button class="morph-mode-tab" data-mode="edit">✎ Edit</button>
+      <button class="morph-mode-tab active" data-mode="gen" data-i18n-html="morpheus.mode.gen">✦ Generate</button>
+      <button class="morph-mode-tab" data-mode="edit" data-i18n-html="morpheus.mode.edit">✎ Edit</button>
     </div>
 
     <div id="morphGenMode">
     <div class="card">
-      <div class="card-title">Generate</div>
+      <div class="card-title" data-i18n="morpheus.generate">Generate</div>
       <div class="sr">
-        <span class="sr-l">Mode</span>
+        <span class="sr-l" data-i18n="morpheus.modelbl">Mode</span>
         <select id="morphModeSel" class="morph-eng-sel">
           <option value="image">Image — SDXL</option>
           <option value="ltx-fast">Clip · Fast — LTX (~1.5 min)</option>
@@ -1364,7 +1364,7 @@
         </select>
       </div>
       <div class="sr" id="morphEngRow">
-        <span class="sr-l">Engine</span>
+        <span class="sr-l" data-i18n="morpheus.engine">Engine</span>
         <select id="morphEngSel" class="morph-eng-sel">
           <option value="sdxl">SDXL — sd_xl_base_1.0</option>
           <option value="flux" disabled>FLUX — not installed</option>
@@ -1374,41 +1374,41 @@
       <div id="morphVidWarn" class="morph-vid-warn" style="display:none"></div>
       <div id="morphSrcRow" class="morph-src-row" style="display:none">
         <img id="morphSrcThumb" alt="source still">
-        <span id="morphSrcLabel">Animating a still</span>
+        <span id="morphSrcLabel" data-i18n="morpheus.animating">Animating a still</span>
         <button id="morphSrcClear" type="button" title="Clear source">&#10005;</button>
       </div>
       <textarea id="morphPrompt" class="morph-textarea" rows="1"
-        placeholder="Describe the image…" autocomplete="off" autocorrect="off" autocapitalize="none"
+        placeholder="Describe the image…" data-i18n-ph="morpheus.prompt.ph" autocomplete="off" autocorrect="off" autocapitalize="none"
         spellcheck="true"></textarea>
       <textarea id="morphNegative" class="morph-textarea" rows="1"
-        placeholder="Negative — things to avoid (optional)" autocomplete="off" autocorrect="off" autocapitalize="none"
+        placeholder="Negative — things to avoid (optional)" data-i18n-ph="morpheus.negative.ph" autocomplete="off" autocorrect="off" autocapitalize="none"
         spellcheck="true"></textarea>
       <details class="morph-adv">
         <summary class="morph-adv-sum">
-          <span class="morph-adv-chev">&#9658;</span> Advanced
+          <span class="morph-adv-chev">&#9658;</span> <span data-i18n="morpheus.advanced">Advanced</span>
         </summary>
         <div class="morph-adv-grid">
-          <label class="morph-adv-lbl">Steps
+          <label class="morph-adv-lbl"><span data-i18n="morpheus.steps">Steps</span>
             <input class="morph-adv-in" id="morphSteps" type="number" value="20" min="1" max="100">
           </label>
-          <label class="morph-adv-lbl">Width
+          <label class="morph-adv-lbl"><span data-i18n="morpheus.width">Width</span>
             <input class="morph-adv-in" id="morphWidth" type="number" value="1024" min="512" max="2048" step="64">
           </label>
-          <label class="morph-adv-lbl">Height
+          <label class="morph-adv-lbl"><span data-i18n="morpheus.height">Height</span>
             <input class="morph-adv-in" id="morphHeight" type="number" value="1024" min="512" max="2048" step="64">
           </label>
-          <label class="morph-adv-lbl">Seed (−1 = random)
+          <label class="morph-adv-lbl"><span data-i18n="morpheus.seed">Seed (−1 = random)</span>
             <input class="morph-adv-in" id="morphSeed" type="number" value="-1" min="-1">
           </label>
         </div>
       </details>
-      <button class="morph-gen-btn" id="morphGenBtn">
+      <button class="morph-gen-btn" id="morphGenBtn" data-i18n-html="morpheus.genbtn">
         ✦ Generate
       </button>
     </div>
 
     <div class="card" id="morphStateCard" style="display:none">
-      <div class="card-title">Generation</div>
+      <div class="card-title" data-i18n="morpheus.generation">Generation</div>
       <div class="morph-state-row">
         <svg id="morphCrescent" class="morph-crescent" width="22" height="22"
              viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -1422,14 +1422,14 @@
         </svg>
         <span id="morphStatePill" class="badge morph-state-pill state-queued">Queued</span>
         <span id="morphVidTimer" class="morph-vid-timer" style="display:none"></span>
-        <button id="morphCancelBtn" class="morph-cancel-btn" style="display:none" type="button">Cancel</button>
+        <button id="morphCancelBtn" class="morph-cancel-btn" style="display:none" type="button" data-i18n="morpheus.cancel">Cancel</button>
       </div>
       <div id="morphError" class="morph-error" style="display:none"></div>
     </div>
 
     <div class="card">
-      <div class="card-title">Output</div>
-      <div id="morphOutputEmpty" class="morph-output-empty">Nothing yet — hit Generate.</div>
+      <div class="card-title" data-i18n="morpheus.output">Output</div>
+      <div id="morphOutputEmpty" class="morph-output-empty" data-i18n="morpheus.output.empty">Nothing yet — hit Generate.</div>
       <img id="morphOutput" class="morph-output" style="display:none" alt="Generated image">
       <video id="morphOutputVid" class="morph-output" style="display:none" controls loop playsinline></video>
       <div id="morphDlRow" class="morph-dl-row" style="display:none">
@@ -1438,63 +1438,63 @@
           <option value="jpeg">JPEG</option>
           <option value="webp">WEBP</option>
         </select>
-        <button id="morphDlBtn" class="morph-dl-btn">&#8595; Download</button>
+        <button id="morphDlBtn" class="morph-dl-btn" data-i18n-html="morpheus.download">&#8595; Download</button>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-title">Gallery
+      <div class="card-title"><span data-i18n="morpheus.gallery">Gallery</span>
         <div style="margin-left:auto;display:flex;gap:.35rem">
-          <button class="btn-sm" id="morphGalRefresh" style="margin-left:0">Refresh</button>
-          <button class="btn-sm" id="morphDelAllBtn" style="margin-left:0;color:var(--err);border-color:rgba(248,113,113,.35)">Delete All</button>
+          <button class="btn-sm" id="morphGalRefresh" style="margin-left:0" data-i18n="morpheus.refresh">Refresh</button>
+          <button class="btn-sm" id="morphDelAllBtn" style="margin-left:0;color:var(--err);border-color:rgba(248,113,113,.35)" data-i18n="morpheus.delall">Delete All</button>
         </div>
       </div>
       <div id="morphGallery" class="morph-gallery">
-        <div class="morph-gal-empty">Loading…</div>
+        <div class="morph-gal-empty" data-i18n="common.loading">Loading…</div>
       </div>
     </div>
     </div><!-- /morphGenMode -->
 
     <div id="morphEditMode" style="display:none">
       <div class="card">
-        <div class="card-title">Edit — img2img</div>
-        <div id="editClipNote" class="morph-vid-warn" style="display:none">
+        <div class="card-title" data-i18n="morpheus.edit.title">Edit — img2img</div>
+        <div id="editClipNote" class="morph-vid-warn" style="display:none" data-i18n="morpheus.edit.clipnote">
           Clip editing isn't supported yet — Edit works on stills only. Pick an image, or drop one below.
         </div>
         <div class="edit-drop" id="editDrop" tabindex="0" role="button" aria-label="Upload an image">
           <input type="file" id="editFile" accept="image/png,image/jpeg,image/webp" hidden>
-          <div class="edit-drop-lbl" id="editDropLbl">🖼️&ensp;Drop an image · or Browse</div>
+          <div class="edit-drop-lbl" id="editDropLbl" data-i18n-html="morpheus.edit.drop">🖼️&ensp;Drop an image · or Browse</div>
           <img id="editPreview" class="edit-preview" style="display:none" alt="Upload preview">
         </div>
         <textarea id="editPrompt" class="morph-textarea" rows="1"
-          placeholder="Describe the edit…" autocomplete="off" autocorrect="off" autocapitalize="none"
+          placeholder="Describe the edit…" data-i18n-ph="morpheus.edit.prompt.ph" autocomplete="off" autocorrect="off" autocapitalize="none"
           spellcheck="true"></textarea>
         <textarea id="editNegative" class="morph-textarea" rows="1"
-          placeholder="Negative — things to avoid (optional)" autocomplete="off" autocorrect="off" autocapitalize="none"
+          placeholder="Negative — things to avoid (optional)" data-i18n-ph="morpheus.negative.ph" autocomplete="off" autocorrect="off" autocapitalize="none"
           spellcheck="true"></textarea>
         <div class="edit-strength">
           <div class="edit-strength-head">
-            <span>Strength</span><span class="edit-strength-val" id="editStrengthVal">0.45</span>
+            <span data-i18n="morpheus.strength">Strength</span><span class="edit-strength-val" id="editStrengthVal">0.45</span>
           </div>
           <input type="range" id="editStrength" class="edit-strength-range"
                  min="0.15" max="0.9" step="0.05" value="0.45">
-          <div class="edit-strength-ends"><span>touch-up</span><span>transform</span></div>
+          <div class="edit-strength-ends"><span data-i18n="morpheus.strength.min">touch-up</span><span data-i18n="morpheus.strength.max">transform</span></div>
         </div>
         <details class="morph-adv">
           <summary class="morph-adv-sum">
-            <span class="morph-adv-chev">&#9658;</span> Advanced
+            <span class="morph-adv-chev">&#9658;</span> <span data-i18n="morpheus.advanced">Advanced</span>
           </summary>
           <div class="morph-adv-grid">
-            <label class="morph-adv-lbl">Seed (−1 = random)
+            <label class="morph-adv-lbl"><span data-i18n="morpheus.seed">Seed (−1 = random)</span>
               <input class="morph-adv-in" id="editSeed" type="number" value="-1" min="-1">
             </label>
           </div>
         </details>
-        <button class="morph-gen-btn" id="editRunBtn" disabled>✎ Edit image</button>
+        <button class="morph-gen-btn" id="editRunBtn" disabled data-i18n-html="morpheus.edit.run">✎ Edit image</button>
       </div>
 
       <div class="card" id="editStateCard" style="display:none">
-        <div class="card-title">Edit job</div>
+        <div class="card-title" data-i18n="morpheus.edit.job">Edit job</div>
         <div class="morph-state-row">
           <svg id="editCrescent" class="morph-crescent" width="22" height="22"
                viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -1511,11 +1511,11 @@
       </div>
 
       <div class="card">
-        <div class="card-title">Before / After</div>
-        <div id="editOutputEmpty" class="morph-output-empty">Upload an image and hit Edit.</div>
+        <div class="card-title" data-i18n="morpheus.edit.ba">Before / After</div>
+        <div id="editOutputEmpty" class="morph-output-empty" data-i18n="morpheus.edit.empty">Upload an image and hit Edit.</div>
         <div id="editBA" class="edit-ba" style="display:none">
-          <figure class="edit-ba-fig"><img id="editBefore" class="edit-ba-img" alt="Before"><figcaption>Before</figcaption></figure>
-          <figure class="edit-ba-fig"><img id="editAfter" class="edit-ba-img" alt="After"><figcaption>After</figcaption></figure>
+          <figure class="edit-ba-fig"><img id="editBefore" class="edit-ba-img" alt="Before"><figcaption data-i18n="morpheus.before">Before</figcaption></figure>
+          <figure class="edit-ba-fig"><img id="editAfter" class="edit-ba-img" alt="After"><figcaption data-i18n="morpheus.after">After</figcaption></figure>
         </div>
         <div id="editDlRow" class="morph-dl-row" style="display:none">
           <select id="editFmtSel" class="morph-dl-sel">
@@ -1523,7 +1523,7 @@
             <option value="jpeg">JPEG</option>
             <option value="webp">WEBP</option>
           </select>
-          <button id="editDlBtn" class="morph-dl-btn">&#8595; Download</button>
+          <button id="editDlBtn" class="morph-dl-btn" data-i18n-html="morpheus.download">&#8595; Download</button>
         </div>
       </div>
     </div>
@@ -1533,60 +1533,60 @@
   <!-- ARGUS — fleet observability (this slot was the Devices tab) -->
   <section id="paneArgus" class="pane">
     <div class="card">
-      <div class="card-title">Fleet</div>
-      <div class="fleet-list" id="fleetList"><div class="dev-empty">Loading…</div></div>
+      <div class="card-title" data-i18n="argus.fleet">Fleet</div>
+      <div class="fleet-list" id="fleetList"><div class="dev-empty" data-i18n="common.loading">Loading…</div></div>
     </div>
     <div class="card">
-      <div class="card-title">Captures
+      <div class="card-title"><span data-i18n="argus.captures">Captures</span>
         <span class="cap-filters">
-          <select class="cap-sel" id="capDevice"><option value="">all devices</option></select>
+          <select class="cap-sel" id="capDevice"><option value="" data-i18n="argus.filter.alldevices">all devices</option></select>
           <select class="cap-sel" id="capType">
-            <option value="">all types</option>
-            <option value="audio">audio</option>
-            <option value="image">images</option>
+            <option value="" data-i18n="argus.filter.alltypes">all types</option>
+            <option value="audio" data-i18n="argus.filter.audio">audio</option>
+            <option value="image" data-i18n="argus.filter.images">images</option>
           </select>
         </span>
       </div>
-      <div class="cap-feed" id="capFeed"><div class="dev-empty">Loading…</div></div>
+      <div class="cap-feed" id="capFeed"><div class="dev-empty" data-i18n="common.loading">Loading…</div></div>
     </div>
     <div class="card">
-      <div class="card-title">Chats</div>
-      <div class="chats-feed" id="chatsFeed"><div class="dev-empty">Loading…</div></div>
+      <div class="card-title" data-i18n="argus.chats">Chats</div>
+      <div class="chats-feed" id="chatsFeed"><div class="dev-empty" data-i18n="common.loading">Loading…</div></div>
     </div>
     <div class="ts" id="argusTs"></div>
   </section>
 
   <section id="paneAriadne" class="pane">
     <div class="card">
-      <div class="card-title">Ariadne — résumé ATS</div>
-      <div class="ari-note">Aligns your <b>truthful</b> experience to ATS vocabulary — it <b>never invents qualifications</b>. Missing keywords you genuinely evidence get surfaced; ones you don't are flagged for you to earn, never added. Your résumé is analyzed <b>locally and never leaves this machine</b> — the only outbound call is fetching a job-post URL you paste.</div>
+      <div class="card-title" data-i18n="ariadne.title">Ariadne — résumé ATS</div>
+      <div class="ari-note" data-i18n-html="ariadne.note">Aligns your <b>truthful</b> experience to ATS vocabulary — it <b>never invents qualifications</b>. Missing keywords you genuinely evidence get surfaced; ones you don't are flagged for you to earn, never added. Your résumé is analyzed <b>locally and never leaves this machine</b> — the only outbound call is fetching a job-post URL you paste.</div>
     </div>
 
     <div class="card">
-      <div class="card-title">Your résumé</div>
-      <textarea id="ariResume" class="ari-ta" rows="8" placeholder="Paste your résumé text…" autocomplete="off" spellcheck="false"></textarea>
+      <div class="card-title" data-i18n="ariadne.yourresume">Your résumé</div>
+      <textarea id="ariResume" class="ari-ta" rows="8" placeholder="Paste your résumé text…" data-i18n-ph="ariadne.resume.ph" autocomplete="off" spellcheck="false"></textarea>
       <label class="ari-file">
         <input type="file" id="ariResumeFile" accept=".txt,.docx,.pdf" hidden>
-        <span id="ariResumeFileLbl">📄&ensp;…or upload .txt / .docx / .pdf</span>
+        <span id="ariResumeFileLbl" data-i18n-html="ariadne.upload">📄&ensp;…or upload .txt / .docx / .pdf</span>
       </label>
     </div>
 
     <div class="card">
-      <div class="card-title">Job description <span class="ari-opt">— optional, enables the keyword gap</span></div>
-      <textarea id="ariJd" class="ari-ta" rows="5" placeholder="Paste the job description…" autocomplete="off" spellcheck="false"></textarea>
-      <div class="ari-or">— or —</div>
-      <input type="url" id="ariJdUrl" class="ari-url" placeholder="https://…  (Greenhouse / Lever / Workday / career page)" autocomplete="off">
-      <div class="ari-hint">LinkedIn &amp; Indeed are login-walled — paste their text instead.</div>
+      <div class="card-title"><span data-i18n="ariadne.jd">Job description</span> <span class="ari-opt" data-i18n="ariadne.jd.opt">— optional, enables the keyword gap</span></div>
+      <textarea id="ariJd" class="ari-ta" rows="5" placeholder="Paste the job description…" data-i18n-ph="ariadne.jd.ph" autocomplete="off" spellcheck="false"></textarea>
+      <div class="ari-or" data-i18n="ariadne.or">— or —</div>
+      <input type="url" id="ariJdUrl" class="ari-url" placeholder="https://…  (Greenhouse / Lever / Workday / career page)" data-i18n-ph="ariadne.url.ph" autocomplete="off">
+      <div class="ari-hint" data-i18n-html="ariadne.hint">LinkedIn &amp; Indeed are login-walled — paste their text instead.</div>
     </div>
 
     <div class="ari-actions">
-      <button class="btn-send ari-btn" id="ariAnalyze">Analyze</button>
-      <button class="btn-send ari-btn" id="ariBuild">Build ATS résumé</button>
+      <button class="btn-send ari-btn" id="ariAnalyze" data-i18n="ariadne.analyze">Analyze</button>
+      <button class="btn-send ari-btn" id="ariBuild" data-i18n="ariadne.build">Build ATS résumé</button>
     </div>
 
     <div class="card" id="ariOutCard" style="display:none">
-      <div class="card-title">Result</div>
-      <a id="ariDownload" class="ari-dl" style="display:none" download>⬇&ensp;Download ATS .docx</a>
+      <div class="card-title" data-i18n="ariadne.result">Result</div>
+      <a id="ariDownload" class="ari-dl" style="display:none" download data-i18n-html="ariadne.download">⬇&ensp;Download ATS .docx</a>
       <pre class="ari-out" id="ariOut"></pre>
     </div>
   </section>
@@ -1596,27 +1596,27 @@
 <nav class="tabs">
   <button class="tab active" data-pane="Status">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-    Status
+    <span data-i18n="tab.status">Status</span>
   </button>
   <button class="tab" data-pane="Chat">
     <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-    Chat
+    <span data-i18n="tab.chat">Chat</span>
   </button>
   <button class="tab" data-pane="Karaoke">
     <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-    Karaoke
+    <span data-i18n="tab.karaoke">Karaoke</span>
   </button>
   <button class="tab" data-pane="Argus">
     <svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
-    Argus
+    <span data-i18n="tab.argus">Argus</span>
   </button>
   <button class="tab" data-pane="Morpheus">
     <svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-    Morpheus
+    <span data-i18n="tab.morpheus">Morpheus</span>
   </button>
   <button class="tab" data-pane="Ariadne">
     <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
-    Ariadne
+    <span data-i18n="tab.ariadne">Ariadne</span>
   </button>
 </nav>
 
@@ -1646,6 +1646,32 @@ const SID = (() => {
   if (!id) { id = 'panel-' + Math.random().toString(36).slice(2,10); localStorage.setItem('ph3b3_sid', id); }
   return id;
 })();
+
+// ── i18n (lightweight, no framework; English fallback for any missing key) ──────
+// Static strings carry data-i18n / data-i18n-ph / data-i18n-title / data-i18n-html.
+// JS-generated strings call t('key'). en.json is the source of truth; other locales
+// are machine-drafted then human-reviewed. Missing key → English, then the key
+// itself — never a blank label. UI language follows the one LANGUAGE setting.
+const I18N = { locale: 'en', dict: {}, en: {} };
+function t(key) { const v = I18N.dict[key] ?? I18N.en[key]; return (v === undefined || v === null) ? key : v; }
+function applyI18n(root) {
+  const r = root || document;
+  r.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  r.querySelectorAll('[data-i18n-html]').forEach(el => { el.innerHTML = t(el.dataset.i18nHtml); });
+  r.querySelectorAll('[data-i18n-ph]').forEach(el => { el.setAttribute('placeholder', t(el.dataset.i18nPh)); });
+  r.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); });
+}
+async function loadLocale(lang) {
+  if (!Object.keys(I18N.en).length) {
+    try { I18N.en = await fetch('/static/locales/en.json').then(r => r.json()); } catch {}
+  }
+  if (lang && lang !== 'en') {
+    try { I18N.dict = await fetch('/static/locales/' + lang + '.json').then(r => r.json()); I18N.locale = lang; }
+    catch { I18N.dict = I18N.en; I18N.locale = 'en'; }        // missing locale file → English
+  } else { I18N.dict = I18N.en; I18N.locale = 'en'; }
+  document.documentElement.lang = I18N.locale;
+  applyI18n();
+}
 
 // ── tab nav ───────────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
@@ -1690,6 +1716,7 @@ async function langInit(force) {
   _renderNote(_langData.voice);
   document.getElementById('lvOffer').hidden = true;
   reviewLoad();
+  loadLocale(_langData.language);          // localize the whole portal to the setting
 }
 // ── Voice review: unreviewed candidates, gated out of the dropdown ─────────────
 async function reviewLoad() {
@@ -1746,6 +1773,7 @@ async function reviewReject(code, name) {
 async function langSet(code) {
   const r = await fetch('/language', { method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ language: code }) }).then(r => r.json());
+  loadLocale(code);                        // switch the portal UI language immediately
   // Offer (not force) the matching voice.
   const offer = document.getElementById('lvOffer');
   const voiceSel = document.getElementById('voiceSel');
@@ -1909,7 +1937,7 @@ async function refreshFleet() {
   try {
     const data = await fetch('/argus/fleet').then(r => r.json());
     const fleet = data.fleet || [];
-    if (!fleet.length) { fleetList.innerHTML = '<div class="dev-empty">No devices known yet.</div>'; return; }
+    if (!fleet.length) { fleetList.innerHTML = '<div class="dev-empty">'+t('argus.empty.devices')+'</div>'; return; }
     fleetList.innerHTML = fleet.map(d => {
       const dot = FLEET_DOT[d.state] || 'err';
       const meta = [];
@@ -1923,7 +1951,7 @@ async function refreshFleet() {
       return `<div class="fleet-row">
         <span class="fleet-dot ${dot}"></span>
         <span class="fleet-name">${d.device_id}</span>
-        <span class="fleet-state ${dot}">${d.state}</span>
+        <span class="fleet-state ${dot}">${t('argus.state.'+d.state.toLowerCase())}</span>
         <span class="fleet-meta">${meta.join(' · ')}</span>
         <span class="fleet-last">${last}</span>
         ${drift}
