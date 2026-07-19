@@ -109,6 +109,7 @@ from translation_module import TranslationModule
 from memory_module import MemoryModule
 from wake_gate import wake_match
 from tts_chunker import split_for_tts
+import voices
 from occult_module import OccultModule
 from jokes_module import JokesModule
 from vision_module import VisionModule
@@ -162,7 +163,15 @@ async def lifespan(app):
     log.info(f"Boot greeting (#{boot_count}): {text}")
     def _greet():
         time.sleep(4)  # wait for ALSA to be ready under systemd
-        tts.speak(text, blocking=False)
+        # The boot greeting is INVARIANT: always Alba, always this English line
+        # (maker's mark — the standing ruling on the greeting + Alba), regardless
+        # of the selected primary voice/language.
+        tts.speak(text, blocking=False, voice="en")
+        # Honest fallback note if the selected primary voice can't load.
+        if voices.voice_fell_back():
+            _vn = voices.LANG_NAMES.get(voices.get_setting()["voice"], "that language")
+            tts.speak(f"I don't have a working voice for {_vn} right now, so I'm using Alba.",
+                      blocking=False, voice="en")
         reminder_msg = reminders.on_boot()
         if reminder_msg:
             tts.speak(reminder_msg, blocking=False)
@@ -928,6 +937,48 @@ async def skills_log():
             pass
     return {"entries": entries, "total": len(lines)}
 
+
+# ── Language + voice (one setting localizes response language + voice) ─────────
+# Registry = config/voices.yaml (installed voices only). Setting persists in
+# ~/ph3b3_data/language.json and applies to ALL output paths — portal, Dio, Iris.
+# Language and voice stay INDEPENDENT underneath; changing language OFFERS the
+# matching voice, never forces it. Alba is the invariant fallback.
+@app.get("/language")
+async def language_get():
+    s = voices.get_setting()
+    return {"language": s["language"], "voice": s["voice"],
+            "voices": voices.list_for_ui(), "lang_names": voices.LANG_NAMES,
+            "voice_fell_back": voices.voice_fell_back()}
+
+@app.post("/language")
+async def language_set(body: dict):
+    code = (body.get("language") or "en").strip()
+    if code not in voices.LANG_NAMES:
+        raise HTTPException(400, f"unknown language {code!r}")
+    voices.set_language(code)
+    match = voices.resolve_voice(code)          # a matching native voice to OFFER?
+    return {"ok": True, "language": code,
+            "voice_available": match is not None,
+            "voice_display": (match or {}).get("display_name")}
+
+@app.post("/voice/primary")
+async def voice_set(body: dict):
+    code = (body.get("voice") or "en").strip()
+    voices.set_voice(code)
+    return {"ok": True, "voice": code, "fell_back": voices.voice_fell_back()}
+
+@app.post("/voice/preview")
+async def voice_preview(body: dict):
+    """Speak one short sample line in a given voice (before committing). Returns a
+    base64 WAV the browser plays — same synth path as everything else."""
+    code = (body.get("voice") or "en").strip()
+    reg  = voices.load_registry()
+    entry = (reg.get("voices") or {}).get(code) or {}
+    sample = (body.get("text") or entry.get("sample_text") or "Hello, this is a preview.")
+    b64 = await asyncio.to_thread(tts.synthesize_to_b64, sample, code)
+    return {"audio": b64 or "", "text": sample, "voice": code}
+
+
 def _triage_context(prior_messages) -> str:
     """Prior conversation turns (excluding the persona/system prompt) as plain text."""
     turns = [m for m in prior_messages if m.get("role") in ("user", "assistant")]
@@ -1060,6 +1111,13 @@ async def _run_chat_pipeline(body: dict, request: Request):
 
     session.add("user", user_msg)
     messages = session.messages()
+
+    # ── Response language (additive, ephemeral — read the setting fresh) ──────
+    # Injected into the system-prompt LAYER, never the soul file. Empty for the
+    # default 'en' setting → zero behavior change. Safety gating is unaffected.
+    _lang_dir = voices.language_directive()
+    if _lang_dir:
+        messages.insert(1, {"role": "system", "content": _lang_dir})
 
     # ── Live datetime (additive, ephemeral — read fresh every request) ────────
     _now = datetime.now().astimezone()

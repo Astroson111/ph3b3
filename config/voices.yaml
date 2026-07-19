@@ -1,0 +1,52 @@
+# Ph3b3 voice + language registry.
+#
+# Only INSTALLED, TESTED Piper models appear here — the honest-gap rule: a
+# language with no good native voice must NOT get an entry (it falls back to Alba
+# + a spoken note, never a wrong-accent read presented as native).
+#
+# Alba (en) is Phoebe's INVARIANT voice — it is an entry here, chosen by the
+# selector, but its model/config is NEVER edited. Models live in
+# ~/ph3b3_data/voices/ (downloaded once by setup.sh; zero runtime network fetches).
+#
+# Fields:
+#   model        — filename in ~/ph3b3_data/voices/
+#   display_name — shown in the picker (native name + language)
+#   script       — 'latin' (safe to strip for Piper) | 'native' (pass through; the
+#                  voice's own model handles its script — never strip it)
+#   tier         — 'strong' | 'functional'  (honest-capability note in the UI: small
+#                  local models vary in fluency by language)
+#   sample_text  — one short line spoken by the Preview button
+
+default: en          # Phoebe's default primary voice = Alba
+
+voices:
+  en:
+    model: en_GB-alba-medium.onnx
+    display_name: "Alba — English (Scottish)"
+    script: latin
+    tier: strong
+    sample_text: "Hello, I'm Phoebe. This is my voice."
+  es:
+    model: es_ES-davefx-medium.onnx
+    display_name: "Español (España)"
+    script: latin
+    tier: strong
+    sample_text: "Hola, soy Phoebe. Esta es mi voz."
+  fr:
+    model: fr_FR-siwis-medium.onnx
+    display_name: "Français (France)"
+    script: latin
+    tier: strong
+    sample_text: "Bonjour, je suis Phoebe. Voici ma voix."
+  de:
+    model: de_DE-thorsten-medium.onnx
+    display_name: "Deutsch (Deutschland)"
+    script: latin
+    tier: strong
+    sample_text: "Guten Tag, ich bin Phoebe. Das ist meine Stimme."
+  zh:
+    model: zh_CN-huayan-medium.onnx
+    display_name: "中文 (普通话) — Mandarin"
+    script: native
+    tier: functional
+    sample_text: "你好，我是 Phoebe，这是我的声音。"

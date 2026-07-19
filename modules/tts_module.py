@@ -13,6 +13,11 @@ from pathlib import Path
 
 from tts_chunker import split_for_tts
 
+try:
+    import voices as _voices
+except ImportError:                       # pragma: no cover
+    from modules import voices as _voices
+
 
 def trim_silence_b64(b64, thr=350, keep_ms=40):
     """Trim leading/trailing near-silence from a base64 WAV (22050/mono/16-bit),
@@ -129,6 +134,29 @@ def _resolve_sink() -> str | None:
         return None
 
 
+# ── Multi-voice resolution ────────────────────────────────────────────────────
+# The selected primary voice (voices.current_voice) drives EVERY synthesis; it
+# resolves to Alba on any miss, so with the default 'en' setting this is
+# bit-for-bit the old Alba path. A 'native'-script voice (e.g. Mandarin) speaks
+# its own script — never run _strip_for_piper on it, which would delete the Hanzi.
+def _resolve_voice(code=None):
+    """(model_path, script) for `code`, or the current primary voice if None.
+    Falls back to Alba (VOICE_MODEL / latin) on any failure."""
+    try:
+        v = _voices.resolve_voice(code) if code else _voices.current_voice()
+        if v:
+            return v["model_path"], v.get("script", "latin")
+    except Exception as e:
+        log.warning("[TTS] voice resolve failed (%s) → Alba", e)
+    return VOICE_MODEL, "latin"
+
+
+def _prep(text: str, script: str) -> str:
+    """Latin voices: strip to Piper's speakable range. Native voices: pass through
+    (their model handles their own script)."""
+    return (text or "").strip() if script == "native" else _strip_for_piper(text)
+
+
 class TTSModule:
     def __init__(self):
         self._lock      = threading.Lock()
@@ -138,19 +166,20 @@ class TTSModule:
         else:
             log.warning(f"Voice model not found at {VOICE_MODEL}")
 
-    def speak(self, text, blocking=True):
+    def speak(self, text, blocking=True, voice=None):
         if not self._available:
             log.info(f"[TTS silent] {text[:80]}")
             return "TTS not available."
         if not text or not text.strip():
             return "Nothing to say."
-        tts_text = _strip_for_piper(text)
+        model, script = _resolve_voice(voice)
+        tts_text = _prep(text, script)
         if not tts_text:
             return "Nothing to say."
         if blocking:
-            self._speak_now(tts_text)
+            self._speak_now(tts_text, model)
         else:
-            t = threading.Thread(target=self._speak_now, args=(tts_text,), daemon=True)
+            t = threading.Thread(target=self._speak_now, args=(tts_text, model), daemon=True)
             t.start()
         return f"Speaking: {text[:60]}"
 
@@ -162,10 +191,11 @@ class TTSModule:
     # chunk's synth regardless of story length and no timer spans the whole reply.
     _SPEAK_MAX_CHARS = 200        # run-on cap; ~<1 s synth, ~15 s audio per chunk
 
-    def _piper_raw(self, text: str) -> bytes | None:
+    def _piper_raw(self, text: str, model: str | None = None) -> bytes | None:
         """Synthesise one chunk to raw s16le/22050/mono PCM (headerless), or None."""
+        model = model or VOICE_MODEL
         try:
-            cmd = f'echo {subprocess.list2cmdline([text])} | {PIPER_BIN} --model {VOICE_MODEL} --output-raw'
+            cmd = f'echo {subprocess.list2cmdline([text])} | {PIPER_BIN} --model {model} --output-raw'
             proc = subprocess.run(
                 cmd, shell=True, capture_output=True, timeout=20,
                 env={**os.environ, **_XDG_ENV},
@@ -200,7 +230,7 @@ class TTSModule:
             log.error(f"[TTS] chunk playback error: {e}")
             return False
 
-    def _speak_now(self, text):
+    def _speak_now(self, text, model=None):
         chunks = split_for_tts(text, max_chars=self._SPEAK_MAX_CHARS)
         if not chunks:
             return
@@ -218,7 +248,7 @@ class TTSModule:
                 for ch in chunks:
                     if stop.is_set():
                         break
-                    pcm = self._piper_raw(ch)
+                    pcm = self._piper_raw(ch, model)
                     if not pcm:
                         continue          # skip a failed chunk, keep the stream alive
                     while not stop.is_set():
@@ -248,16 +278,18 @@ class TTSModule:
                     pass
                 prod.join(timeout=2)
 
-    def synthesize_to_b64(self, text: str) -> str | None:
-        """Run Piper and return base64-encoded WAV, or None if unavailable."""
+    def synthesize_to_b64(self, text: str, voice=None) -> str | None:
+        """Run Piper and return base64-encoded WAV, or None if unavailable. `voice`
+        is a registry code (e.g. 'es'); default = the selected primary voice."""
         if not self._available or not text or not text.strip():
             return None
-        tts_text = _strip_for_piper(text)
+        model, script = _resolve_voice(voice)
+        tts_text = _prep(text, script)
         if not tts_text:
             return None
         with self._lock:
             try:
-                cmd = f'echo {subprocess.list2cmdline([tts_text])} | {PIPER_BIN} --model {VOICE_MODEL} --output-raw'
+                cmd = f'echo {subprocess.list2cmdline([tts_text])} | {PIPER_BIN} --model {model} --output-raw'
                 proc = subprocess.run(cmd, shell=True, capture_output=True, timeout=30)
                 raw_pcm = proc.stdout
                 if not raw_pcm:

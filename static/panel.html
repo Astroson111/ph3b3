@@ -356,6 +356,24 @@
     }
 
 
+    /* ── Language & Voice card ── */
+    .lv-row { display:flex; align-items:center; gap:.6rem; margin:.4rem 0; }
+    .lv-label { flex:0 0 4.5rem; font-size:.82rem; color:var(--dim); }
+    .lv-sel { flex:1; padding:.35rem .5rem; border-radius:.4rem; background:var(--bg2,#1a1626);
+      color:var(--text); border:1px solid var(--dim); font-size:.85rem; }
+    .lv-prev { flex:0 0 auto; width:2rem; height:2rem; border-radius:.4rem; cursor:pointer;
+      background:transparent; color:var(--accent,#c060e0); border:1px solid var(--accent,#c060e0); font-size:.7rem; }
+    .lv-prev:hover { background:var(--accent,#c060e0); color:#fff; }
+    .lv-note { font-size:.74rem; color:var(--dim); margin-top:.3rem; line-height:1.4; }
+    .lv-note .lv-tier-strong { color:#5fbf7f; }
+    .lv-note .lv-tier-functional { color:#d8a24a; }
+    .lv-offer { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; font-size:.8rem;
+      background:rgba(192,96,224,.12); border:1px solid var(--accent,#c060e0); border-radius:.4rem;
+      padding:.4rem .55rem; margin:.2rem 0; }
+    .lv-offer button { font-size:.75rem; padding:.2rem .5rem; border-radius:.35rem; cursor:pointer;
+      border:1px solid var(--dim); background:transparent; color:var(--text); }
+    .lv-offer button.lv-yes { border-color:var(--accent,#c060e0); color:var(--accent,#c060e0); }
+
     /* ── WireGuard tunnel toggle ── */
     .wg-badge { font-size:.65rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
       padding:.2rem .55rem; border-radius:100px; }
@@ -1022,6 +1040,23 @@
       <div class="card-title">Runtime</div>
       <div id="readyRows"><div class="sr"><span class="sr-l">Model</span><span class="sr-v">—</span></div></div>
     </div>
+
+    <!-- ══ Language & Voice — one setting localizes Phoebe (response + voice) ══ -->
+    <div class="card">
+      <div class="card-title">Language &amp; Voice</div>
+      <div class="lv-row">
+        <label class="lv-label" for="langSel">Language</label>
+        <select id="langSel" class="lv-sel"><option>…</option></select>
+      </div>
+      <div class="lv-offer" id="lvOffer" hidden></div>
+      <div class="lv-row">
+        <label class="lv-label" for="voiceSel">Voice</label>
+        <select id="voiceSel" class="lv-sel"><option>…</option></select>
+        <button class="lv-prev" id="lvPreviewBtn" title="Preview voice" aria-label="Preview voice">▶</button>
+      </div>
+      <div class="lv-note" id="lvNote"></div>
+      <audio id="lvAudio" hidden></audio>
+    </div>
     <div class="card">
       <div class="card-title">
         Remote Tunnel (WireGuard)
@@ -1595,8 +1630,81 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
   document.getElementById('pane' + t.dataset.pane).classList.add('active');
-  if (t.dataset.pane === 'Status') wgRefresh();
+  if (t.dataset.pane === 'Status') { wgRefresh(); langInit(); }
 }));
+
+// ── Language & Voice card ──────────────────────────────────────────────────────
+// One LANGUAGE setting localizes Phoebe's response + voice. Language and voice are
+// independent underneath; changing language OFFERS the matching voice, never forces.
+let _langData = null, _langLoaded = false;
+function _voiceName(code) {
+  const v = (_langData?.voices || []).find(x => x.code === code);
+  return v ? v.display_name : code;
+}
+function _renderNote(voiceCode) {
+  const v = (_langData?.voices || []).find(x => x.code === voiceCode);
+  const note = document.getElementById('lvNote');
+  if (!v) { note.textContent = ''; return; }
+  const tier = v.tier === 'strong'
+    ? '<span class="lv-tier-strong">strong</span>'
+    : '<span class="lv-tier-functional">functional</span> — small local models vary in fluency by language';
+  note.innerHTML = `Voice model installed. Fluency: ${tier}.`;
+}
+async function langInit(force) {
+  if (_langLoaded && !force) return;
+  try {
+    _langData = await fetch('/language').then(r => r.json());
+  } catch { return; }
+  _langLoaded = true;
+  const langSel = document.getElementById('langSel');
+  const voiceSel = document.getElementById('voiceSel');
+  const names = _langData.lang_names || {};
+  langSel.innerHTML = Object.keys(names).map(c => `<option value="${c}">${names[c]}</option>`).join('');
+  voiceSel.innerHTML = (_langData.voices || []).map(v =>
+    `<option value="${v.code}"${v.has_model ? '' : ' disabled'}>${v.display_name}${v.has_model ? '' : ' (not installed)'}</option>`).join('');
+  langSel.value = _langData.language;
+  voiceSel.value = _langData.voice;
+  _renderNote(_langData.voice);
+  document.getElementById('lvOffer').hidden = true;
+}
+async function langSet(code) {
+  const r = await fetch('/language', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ language: code }) }).then(r => r.json());
+  // Offer (not force) the matching voice.
+  const offer = document.getElementById('lvOffer');
+  const voiceSel = document.getElementById('voiceSel');
+  if (r.voice_available && voiceSel.value !== code) {
+    offer.hidden = false;
+    offer.innerHTML = `Also switch voice to <strong>${r.voice_display}</strong>? `
+      + `<button class="lv-yes" id="lvYes">Yes</button><button id="lvNo">Keep current</button>`;
+    document.getElementById('lvYes').onclick = async () => {
+      voiceSel.value = code;
+      await voiceSet(code); offer.hidden = true;
+    };
+    document.getElementById('lvNo').onclick = () => { offer.hidden = true; };
+  } else { offer.hidden = true; }
+}
+async function voiceSet(code) {
+  await fetch('/voice/primary', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ voice: code }) });
+  _renderNote(code);
+}
+async function voicePreview() {
+  const code = document.getElementById('voiceSel').value;
+  const btn = document.getElementById('lvPreviewBtn'); btn.disabled = true;
+  try {
+    const r = await fetch('/voice/preview', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ voice: code }) }).then(r => r.json());
+    if (r.audio) {
+      const a = document.getElementById('lvAudio');
+      a.src = 'data:audio/wav;base64,' + r.audio; a.play();
+    }
+  } finally { btn.disabled = false; }
+}
+document.getElementById('langSel').addEventListener('change', e => langSet(e.target.value));
+document.getElementById('voiceSel').addEventListener('change', e => voiceSet(e.target.value));
+document.getElementById('lvPreviewBtn').addEventListener('click', voicePreview);
+langInit();   // Status is the default-active pane on load
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 const hPulse = document.getElementById('hPulse');
