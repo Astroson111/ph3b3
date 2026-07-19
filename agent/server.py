@@ -86,7 +86,7 @@ sys.path.insert(0, str(MODULES_DIR))
 from spotify_module import SpotifyModule
 from dnd_module import DnDModule
 from film_module import FilmModule
-from translation_module import TranslationModule
+from translation_module import TranslationModule, LANG_NAMES
 from memory_module import MemoryModule
 from occult_module import OccultModule
 from jokes_module import JokesModule
@@ -712,6 +712,81 @@ async def power_off():
     threading.Thread(target=_stop, daemon=True).start()
     log.info("[power/off] shutdown requested via panel")
     return {"status": "stopping", "message": "Ph3b3 is shutting down."}
+
+
+# ── Voice / language (thin-client TTS controls; state lives here, not client) ─
+def _base_lang(code: str) -> str:
+    return (code or "").replace("-", "_").split("_")[0].lower()
+
+
+def _language_state():
+    """Strong = installed native Piper voice; functional = translation-only."""
+    voices = tts.list_voices()
+    strong = {}
+    for v in voices:
+        base = _base_lang(v.get("language_code"))
+        if base and base not in strong:
+            strong[base] = {"code": base, "label": v.get("language") or base,
+                            "tier": "strong", "voice_id": v["id"]}
+    current = None
+    for v in voices:
+        if v.get("current"):
+            current = _base_lang(v.get("language_code"))
+            break
+    langs = list(strong.values())
+    for code, name in LANG_NAMES.items():
+        base = _base_lang(code)
+        if base and base not in strong and not any(l["code"] == base for l in langs):
+            langs.append({"code": base, "label": name, "tier": "functional"})
+    langs.sort(key=lambda l: (0 if l["tier"] == "strong" else 1, l["label"]))
+    return {"languages": langs, "current": current}
+
+
+@app.get("/voice")
+async def voice_list():
+    return {"voices": tts.list_voices(), "current": tts.current_voice_id()}
+
+
+@app.post("/voice")
+async def voice_set(body: dict):
+    vid = ((body or {}).get("id") or "").strip()
+    if not tts.set_voice(vid):
+        return Response(content="Unknown voice", status_code=400)
+    return {"ok": True, "current": tts.current_voice_id(), "voices": tts.list_voices()}
+
+
+@app.post("/voice/preview")
+async def voice_preview(body: dict):
+    vid = ((body or {}).get("id") or tts.current_voice_id()).strip()
+    audio = await asyncio.to_thread(tts.preview_b64, vid, (body or {}).get("text"))
+    if not audio:
+        return Response(content="Preview unavailable", status_code=400)
+    return {"ok": True, "id": vid, "audio": audio}
+
+
+@app.get("/language")
+async def language_list():
+    return _language_state()
+
+
+@app.post("/language")
+async def language_set(body: dict):
+    code = _base_lang((body or {}).get("code") or "")
+    if not code:
+        return Response(content="Unknown language", status_code=400)
+    for v in tts.list_voices():
+        if _base_lang(v.get("language_code")) == code:
+            tts.set_voice(v["id"])
+            return {"ok": True, "voice": tts.current_voice_id(), **_language_state()}
+    if code in {_base_lang(c) for c in LANG_NAMES}:
+        try:
+            translation.set_default_language(code)
+        except Exception:
+            pass
+        return {"ok": True, "tier": "functional",
+                "note": "No native voice installed; replies are translated and spoken with the current voice.",
+                **_language_state()}
+    return Response(content="Unknown language", status_code=400)
 
 
 @app.get("/")
