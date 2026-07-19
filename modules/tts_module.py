@@ -16,7 +16,10 @@ log = logging.getLogger("ph3b3.tts")
 _EXTRA_SCRIPT = {
     'zh': lambda o: 0x3000 <= o <= 0x9FFF or 0xF900 <= o <= 0xFAFF or 0xFF00 <= o <= 0xFFEF,  # CJK
     'ru': lambda o: 0x0400 <= o <= 0x04FF,   # Cyrillic
-    'uk': lambda o: 0x0400 <= o <= 0x04FF,
+    'uk': lambda o: 0x0400 <= o <= 0x04FF,   # Cyrillic
+    'ar': lambda o: 0x0600 <= o <= 0x06FF or 0x0750 <= o <= 0x077F or 0x08A0 <= o <= 0x08FF
+                    or 0xFB50 <= o <= 0xFDFF or 0xFE70 <= o <= 0xFEFF,   # Arabic
+    'hi': lambda o: 0x0900 <= o <= 0x097F or 0xA8E0 <= o <= 0xA8FF,   # Devanagari
 }
 
 # Language-appropriate preview sentence (server picks by the voice's language).
@@ -29,6 +32,14 @@ _PREVIEW_SAMPLE = {
     'pl': "Cześć, tak brzmi mój głos.",
     'zh': "你好，这是我的声音预览。",
     'ru': "Привет, вот как звучит мой голос.",
+    'pt': "Olá, é assim que a minha voz soa.",
+    'nl': "Hallo, zo klink ik.",
+    'uk': "Привіт, ось як звучить мій голос.",
+    'tr': "Merhaba, benim sesim böyle.",
+    'ar': "مرحباً، هكذا يبدو صوتي.",
+    'hi': "नमस्ते, मेरी आवाज़ ऐसी सुनाई देती है।",
+    'sv': "Hej, så här låter min röst.",
+    'vi': "Xin chào, đây là giọng nói của tôi.",
 }
 
 
