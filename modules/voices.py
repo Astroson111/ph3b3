@@ -240,12 +240,28 @@ def voices_for_language_ui(lang: str) -> list:
     return out
 
 
-def voices_missing_sample_text() -> list:
-    """Voice codes whose sample_text is absent/blank. sample_text is REQUIRED —
-    a voice without it cannot be previewed or synth-checked, so it fails review
-    rather than emitting silence. Logged at startup; enforced in the synth check."""
-    return [code for code, e in (load_registry().get("voices") or {}).items()
-            if not (e.get("sample_text") or "").strip()]
+# Fields every voice MUST carry. A voice missing any of these fails the install
+# synth check (it is never offered for review) rather than rendering a raw model
+# id or emitting silence. Enforced in the /voice/review synth check + logged at
+# startup.
+REQUIRED_FIELDS = ("display_name", "sample_text")
+
+
+def voice_installable(code: str) -> bool:
+    """True iff the voice carries every REQUIRED_FIELDS entry (non-blank)."""
+    e = (load_registry().get("voices") or {}).get(code) or {}
+    return all((e.get(f) or "").strip() for f in REQUIRED_FIELDS)
+
+
+def voices_missing_required() -> dict:
+    """{code: [missing_field, ...]} for voices lacking any REQUIRED field. Such a
+    voice fails the synth check (install time), never renders a raw model id."""
+    out = {}
+    for code, e in (load_registry().get("voices") or {}).items():
+        miss = [f for f in REQUIRED_FIELDS if not (e.get(f) or "").strip()]
+        if miss:
+            out[code] = miss
+    return out
 
 
 def active_voice_display() -> str:

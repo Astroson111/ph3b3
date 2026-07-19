@@ -14,7 +14,12 @@
 #                  LANG_NAMES). Multiple voices may serve one language
 #                  (e.g. es_ES + es_MX both serve 'es'); the entry whose id
 #                  equals the lang code is that language's primary.
-#   display_name — shown in the picker (native name + language)
+#   display_name — REQUIRED. Shown everywhere a voice appears (picker, "Speaking
+#                  with:" banner, review flow). Format: "<Name> — <Language>
+#                  (<Region/accent>)" where Name is the voice's dataset name,
+#                  capitalized — Alba's colleagues, by name (e.g. "Sharvard —
+#                  Español (España)"). A voice with no display_name fails the
+#                  install synth check rather than rendering a raw model id.
 #   script       — 'latin' (safe to strip for Piper) | 'native' (pass through; the
 #                  voice's own model handles its script — never strip it)
 #   tier         — 'strong' | 'functional'  (honest-capability note in the UI: small
@@ -50,7 +55,7 @@ voices:
   es:
     model: es_ES-davefx-medium.onnx
     lang: es
-    display_name: "Español (España)"
+    display_name: "Davefx — Español (España)"
     script: latin
     tier: strong
     sample_text: "¡Hola! Soy Phoebe."
@@ -58,7 +63,7 @@ voices:
   fr:
     model: fr_FR-siwis-medium.onnx
     lang: fr
-    display_name: "Français (France)"
+    display_name: "Siwis — Français (France)"
     script: latin
     tier: strong
     sample_text: "Bonjour ! Je suis Phoebe."
@@ -66,7 +71,7 @@ voices:
   de:
     model: de_DE-thorsten-medium.onnx
     lang: de
-    display_name: "Deutsch (Deutschland)"
+    display_name: "Thorsten — Deutsch (Deutschland)"
     script: latin
     tier: strong
     sample_text: "Hallo! Ich bin Phoebe."
@@ -74,7 +79,7 @@ voices:
   zh:
     model: zh_CN-huayan-medium.onnx
     lang: zh
-    display_name: "中文 (普通话) — Mandarin"
+    display_name: "Huayan — 中文 (普通话)"
     script: native
     tier: functional
     sample_text: "你好！我是 Phoebe。"
@@ -86,7 +91,7 @@ voices:
   es_MX:
     model: es_MX-ald-medium.onnx
     lang: es
-    display_name: "Español (México)"
+    display_name: "Ald — Español (México)"
     script: latin
     tier: functional
     sample_text: "¡Hola! Soy Phoebe."
@@ -94,7 +99,7 @@ voices:
   es_sharvard:
     model: es_ES-sharvard-medium.onnx
     lang: es
-    display_name: "Español (España) — Sharvard"
+    display_name: "Sharvard — Español (España)"
     script: latin
     tier: strong
     sample_text: "¡Hola! Soy Phoebe."
@@ -102,7 +107,7 @@ voices:
   es_MX_high:
     model: es_MX-claude-high.onnx
     lang: es
-    display_name: "Español (México) — alta calidad"
+    display_name: "Claude — Español (México)"
     script: latin
     tier: strong
     sample_text: "¡Hola! Soy Phoebe."
@@ -110,7 +115,7 @@ voices:
   de_high:
     model: de_DE-thorsten-high.onnx
     lang: de
-    display_name: "Deutsch (Deutschland) — hohe Qualität"
+    display_name: "Thorsten HD — Deutsch (Deutschland)"
     script: latin
     tier: strong
     sample_text: "Hallo! Ich bin Phoebe."

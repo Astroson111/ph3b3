@@ -151,9 +151,9 @@ class _DioStateProtocol(asyncio.DatagramProtocol):
 @asynccontextmanager
 async def lifespan(app):
     memory.confirm_boot()
-    _missing_st = voices.voices_missing_sample_text()
-    if _missing_st:                     # sample_text is required — say so loudly
-        log.error("Voices missing REQUIRED sample_text (will fail synth check): %s", _missing_st)
+    _missing_req = voices.voices_missing_required()
+    if _missing_req:                    # display_name + sample_text are required
+        log.error("Voices missing REQUIRED fields (will fail synth check): %s", _missing_req)
     boot_count = memory.memory.get("boot_count", 1)
     greetings = [
         "Soul online.",
@@ -1027,10 +1027,12 @@ async def voice_review_list():
     voices_ = voices.list_for_review()
 
     def _synth_ok(code, text):
-        # Required-field enforcement: a voice with no sample line fails the check
-        # here (install/review time), never silently at preview time.
+        # Required-field enforcement: a voice missing display_name or sample_text
+        # fails the check here (install/review time), never at render/preview time.
+        if not voices.voice_installable(code):
+            log.warning("review: voice %r missing required field(s) — synth check fails", code)
+            return False
         if not (text or "").strip():
-            log.warning("review: voice %r has no sample_text — synth check fails", code)
             return False
         try:
             b64 = tts.synthesize_to_b64(text, code)
