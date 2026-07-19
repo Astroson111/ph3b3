@@ -1,9 +1,11 @@
 # Native review — Polish (`pl`) & Russian (`ru`) portal UI
 
 These portal-chrome strings were **drafted offline by Claude Code** (hand-translated,
-no external translation service — the local-only rule). Italian was the most
-confident; **Polish and Russian want a native pass** on tone and the longer strings
-before a public demo. 128 keys each, 1:1 with `en.json`.
+no external translation service — the local-only rule). A first linguistic review
+pass has been applied (part-of-speech parallelism on slider endpoints, de-calquing,
+naturalness on the disclaimer). This sheet reflects the **current** drafts and is
+open for a **native final polish** on tone and the longer strings before a public
+demo. 128 keys each, 1:1 with `en.json`.
 
 ## How to review
 - Put your fix in the **Correction** column *only where the draft is wrong or
@@ -84,7 +86,7 @@ before a public demo. 128 keys each, 1:1 with `en.json`.
 | `util.clock.add` | `Add` | `Dodaj` |  | |
 | `util.clock.note` | `Local &amp; UTC always shown · up to 3 added zones` | `Lokalny &amp; UTC zawsze widoczne · do 3 dodanych stref` |  | |
 | `karaoke.title` | `KARAOKE` | `KARAOKE` |  | |
-| `karaoke.tagline` | `she's a world karaoke machine` | `to światowa maszyna karaoke` | 🚩 | |
+| `karaoke.tagline` | `she's a world karaoke machine` | `to światowej klasy maszyna do karaoke` | 🚩 | |
 | `karaoke.discover` | `Discover` | `Odkrywaj` | 🚩 | |
 | `karaoke.surprise` | `&#10022;&ensp;Surprise me` | `&#10022;&ensp;Zaskocz mnie` |  | |
 | `karaoke.search.ph` | `mood, genre or title…` | `nastrój, gatunek lub tytuł…` |  | |
@@ -122,7 +124,7 @@ before a public demo. 128 keys each, 1:1 with `en.json`.
 | `morpheus.edit.prompt.ph` | `Describe the edit…` | `Opisz edycję…` |  | |
 | `morpheus.strength` | `Strength` | `Siła` |  | |
 | `morpheus.strength.min` | `touch-up` | `retusz` | 🚩 | |
-| `morpheus.strength.max` | `transform` | `przekształć` |  | |
+| `morpheus.strength.max` | `transform` | `przekształcenie` |  | |
 | `morpheus.edit.run` | `✎ Edit image` | `✎ Edytuj obraz` |  | |
 | `morpheus.edit.job` | `Edit job` | `Zadanie edycji` |  | |
 | `morpheus.edit.ba` | `Before / After` | `Przed / Po` |  | |
@@ -141,12 +143,12 @@ before a public demo. 128 keys each, 1:1 with `en.json`.
 | `argus.state.silent` | `SILENT` | `CICHY` | 🚩 | |
 | `argus.empty.devices` | `No devices known yet.` | `Brak znanych urządzeń.` |  | |
 | `ariadne.title` | `Ariadne — résumé ATS` | `Ariadne — CV ATS` |  | |
-| `ariadne.note` | `Aligns your <b>truthful</b> experience to ATS vocabulary — it <b>never invents qualifications</b>. Missing keywords you genuinely evidence get surfaced; ones you don't are flagged for you to earn, never added. Your résumé is analyzed <b>locally and never leaves this machine</b> — the only outbound call is fetching a job-post URL you paste.` | `Dopasowuje Twoje <b>prawdziwe</b> doświadczenie do słownictwa ATS — <b>nigdy nie wymyśla kwalifikacji</b>. Brakujące słowa kluczowe, które faktycznie potwierdzasz, są uwidaczniane; te, których nie masz, są oznaczane, abyś je zdobył, nigdy nie dodawane. Twoje CV jest analizowane <b>lokalnie i nigdy nie opuszcza tego urządzenia</b> — jedynym połączeniem wychodzącym jest pobranie adresu URL ogłoszenia, który wkleisz.` | 🚩 | |
+| `ariadne.note` | `Aligns your <b>truthful</b> experience to ATS vocabulary — it <b>never invents qualifications</b>. Missing keywords you genuinely evidence get surfaced; ones you don't are flagged for you to earn, never added. Your résumé is analyzed <b>locally and never leaves this machine</b> — the only outbound call is fetching a job-post URL you paste.` | `Dopasowuje Twoje <b>prawdziwe</b> doświadczenie do słownictwa ATS — <b>nigdy nie wymyśla kwalifikacji</b>. Brakujące słowa kluczowe, które faktycznie potwierdzasz, są wyróżniane; te, których nie masz, są oznaczane, abyś je zdobył, nigdy nie dodawane. Twoje CV jest analizowane <b>lokalnie i nigdy nie opuszcza tego urządzenia</b> — jedynym połączeniem wychodzącym jest pobranie adresu URL ogłoszenia, który wkleisz.` | 🚩 | |
 | `ariadne.yourresume` | `Your résumé` | `Twoje CV` |  | |
 | `ariadne.resume.ph` | `Paste your résumé text…` | `Wklej tekst swojego CV…` |  | |
 | `ariadne.upload` | `📄&ensp;…or upload .txt / .docx / .pdf` | `📄&ensp;…lub prześlij .txt / .docx / .pdf` |  | |
 | `ariadne.jd` | `Job description` | `Opis stanowiska` |  | |
-| `ariadne.jd.opt` | `— optional, enables the keyword gap` | `— opcjonalnie, włącza lukę słów kluczowych` | 🚩 | |
+| `ariadne.jd.opt` | `— optional, enables the keyword gap` | `— opcjonalnie, włącza analizę słów kluczowych` | 🚩 | |
 | `ariadne.jd.ph` | `Paste the job description…` | `Wklej opis stanowiska…` |  | |
 | `ariadne.or` | `— or —` | `— lub —` |  | |
 | `ariadne.url.ph` | `https://…  (Greenhouse / Lever / Workday / career page)` | `https://…  (Greenhouse / Lever / Workday / strona kariery)` |  | |
@@ -257,7 +259,7 @@ before a public demo. 128 keys each, 1:1 with `en.json`.
 | `morpheus.edit.prompt.ph` | `Describe the edit…` | `Опишите изменение…` |  | |
 | `morpheus.strength` | `Strength` | `Интенсивность` |  | |
 | `morpheus.strength.min` | `touch-up` | `ретушь` | 🚩 | |
-| `morpheus.strength.max` | `transform` | `преобразовать` |  | |
+| `morpheus.strength.max` | `transform` | `преобразование` |  | |
 | `morpheus.edit.run` | `✎ Edit image` | `✎ Редактировать изображение` |  | |
 | `morpheus.edit.job` | `Edit job` | `Задача редактирования` |  | |
 | `morpheus.edit.ba` | `Before / After` | `До / После` |  | |
@@ -276,7 +278,7 @@ before a public demo. 128 keys each, 1:1 with `en.json`.
 | `argus.state.silent` | `SILENT` | `МОЛЧИТ` | 🚩 | |
 | `argus.empty.devices` | `No devices known yet.` | `Устройства пока не известны.` |  | |
 | `ariadne.title` | `Ariadne — résumé ATS` | `Ariadne — резюме ATS` |  | |
-| `ariadne.note` | `Aligns your <b>truthful</b> experience to ATS vocabulary — it <b>never invents qualifications</b>. Missing keywords you genuinely evidence get surfaced; ones you don't are flagged for you to earn, never added. Your résumé is analyzed <b>locally and never leaves this machine</b> — the only outbound call is fetching a job-post URL you paste.` | `Согласует ваш <b>правдивый</b> опыт со словарём ATS — <b>никогда не выдумывает квалификации</b>. Недостающие ключевые слова, которые вы действительно подтверждаете, выделяются; те, которых у вас нет, отмечаются, чтобы вы их заслужили, но никогда не добавляются. Ваше резюме анализируется <b>локально и никогда не покидает эту машину</b> — единственный исходящий запрос — это загрузка URL вакансии, который вы вставили.` | 🚩 | |
+| `ariadne.note` | `Aligns your <b>truthful</b> experience to ATS vocabulary — it <b>never invents qualifications</b>. Missing keywords you genuinely evidence get surfaced; ones you don't are flagged for you to earn, never added. Your résumé is analyzed <b>locally and never leaves this machine</b> — the only outbound call is fetching a job-post URL you paste.` | `Согласует ваш <b>правдивый</b> опыт со словарём ATS — <b>никогда не выдумывает квалификации</b>. Недостающие ключевые слова, которые вы действительно подтверждаете, выделяются; те, которых у вас нет, отмечаются, чтобы вы их заслужили, но никогда не добавляются. Ваше резюме анализируется <b>локально и никогда не покидает это устройство</b> — единственный исходящий запрос — это загрузка URL вакансии, который вы вставили.` | 🚩 | |
 | `ariadne.yourresume` | `Your résumé` | `Ваше резюме` |  | |
 | `ariadne.resume.ph` | `Paste your résumé text…` | `Вставьте текст вашего резюме…` |  | |
 | `ariadne.upload` | `📄&ensp;…or upload .txt / .docx / .pdf` | `📄&ensp;…или загрузите .txt / .docx / .pdf` |  | |
