@@ -1,0 +1,36 @@
+{
+  "tab.status": "Status",
+  "tab.chat": "Chat",
+  "tab.karaoke": "Karaoke",
+  "tab.argus": "Argus",
+  "tab.morpheus": "Morpheus",
+  "tab.ariadne": "Ariadne",
+
+  "status.health": "Health",
+  "status.runtime": "Runtime",
+  "status.langvoice": "Language & Voice",
+  "status.language": "Language",
+  "status.voice": "Voice",
+  "status.tunnel": "Remote Tunnel (WireGuard)",
+  "status.checking": "checking…",
+  "status.tunnel.down": "Tunnel is <strong>down</strong> — zero exposure at home",
+  "status.tunnel.enable": "Enable",
+  "voice.note.installed": "Voice model installed.",
+  "voice.tier.strong": "strong",
+  "voice.tier.functional": "functional — small local models vary in fluency by language",
+  "voice.offer.prefix": "Also switch voice to",
+  "voice.offer.yes": "Yes",
+  "voice.offer.keep": "Keep current",
+
+  "chat.placeholder": "Talk to Phoebe…",
+  "chat.send": "Send",
+
+  "util.title": "Utilities",
+  "util.timer": "Timer",
+  "util.calc": "Calculator",
+  "util.converter": "Converter",
+  "util.scratchpad": "Scratchpad",
+  "util.qr": "QR code",
+  "util.dice": "Dice & RNG",
+  "util.clock": "World clock"
+}
