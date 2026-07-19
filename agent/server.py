@@ -989,11 +989,22 @@ async def voice_preview(body: dict):
     silence a client hears is downstream of a verified-audible payload."""
     code = (body.get("voice") or "en").strip()
     reg  = voices.load_registry()
-    entry = (reg.get("voices") or {}).get(code) or {}
-    sample = (body.get("text") or entry.get("sample_text") or "").strip()
-    if not sample:                      # no line to speak — never synth silence
-        log.warning("preview: empty sample text for voice %r", code)
+    entry = (reg.get("voices") or {}).get(code)
+    if entry is None:
+        raise HTTPException(404, f"unknown voice {code!r}")
+    # Per-voice lookup ONLY — the sample is THIS voice's own registry sample_text.
+    # No global default and no client-supplied text override: a preview always
+    # speaks the selected voice's own line, so a Spanish voice can never be handed
+    # English text. (A blank sample_text fails the install synth check, so the
+    # lookup can assume presence; we still guard rather than synthesize silence.)
+    sample = (entry.get("sample_text") or "").strip()
+    if not sample:
+        log.warning("preview: voice %r has no sample_text", code)
         raise HTTPException(422, f"no sample text for voice {code!r}")
+    # (voice, text) pair for each synthesis — grep 'preview synth:' to spot any
+    # mismatch. INFO (not debug): the service logs at INFO, and preview is a rare
+    # user action, so this stays greppable rather than silently disabled.
+    log.info("preview synth: voice=%r text=%r", code, sample)
     b64 = await asyncio.to_thread(tts.synthesize_to_b64, sample, code)
     if not b64:
         log.error("preview: synthesis returned no audio (voice=%r text=%r)", code, sample)

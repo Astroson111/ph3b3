@@ -1772,7 +1772,11 @@ async function reviewLoad() {
 //      strict browsers → autoplay rejected. We catch the rejection and leave the
 //      visible <audio controls> as a manual-play fallback (never silent-fail).
 //   2) synth returned no audio → we SAY so instead of doing nothing.
+//   3) two rapid previews of different voices → a "latest wins" token so a slow
+//      earlier fetch can't stomp the newer one's audio into the shared player.
+let _prevSeq = 0;
 async function playVoice(code, btn) {
+  const seq = ++_prevSeq;
   const a = document.getElementById('lvAudio');
   const err = document.getElementById('lvPrevErr');
   err.hidden = true; err.textContent = '';
@@ -1780,12 +1784,14 @@ async function playVoice(code, btn) {
   try {
     const r = await fetch('/voice/preview', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ voice: code }) });
+    if (seq !== _prevSeq) return;    // superseded by a newer preview — drop this result
     if (!r.ok) {                     // server rejects silence/empty as an error, not a 200
       let msg = 'HTTP ' + r.status;
       try { const d = await r.json(); if (d.detail) msg = d.detail; } catch {}
       throw new Error(msg);
     }
     const j = await r.json();
+    if (seq !== _prevSeq) return;    // superseded while parsing
     if (!j.audio) { err.className = 'lv-prev-err'; err.hidden = false; err.textContent = 'No audio — this voice failed to synthesize.'; a.hidden = true; return; }
     a.src = 'data:audio/wav;base64,' + j.audio;
     a.hidden = false;
