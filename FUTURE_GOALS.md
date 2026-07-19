@@ -8,6 +8,7 @@ What's shipped, what's active, what's next. Only things that actually run on `ma
 
 ## Shipped
 
+- **Metis — web search.** Phoebe's first deliberate step outside the machine — and it stays *off* until you flip it on in the Status tab. When on, every search is announced with the query shown, and answers are cited from the *actual* result URLs, so a search-shaped answer can never come from the model's imagination. Web pages are untrusted input: summarized with no tools (a page can't make Phoebe *do* anything), safety holds on both the query and the summary, and a dead backend says so out loud instead of inventing an answer. SearXNG runs in a localhost-only container with a DuckDuckGo fallback; watched by Argus, drilled for container death.
 - **Rhea — backup & restore.** Nightly encrypted, deduplicated snapshots to a dedicated external drive; a fire-drilled restore script; watched by Argus so a failed backup is *visible*, not silent.
 - **Argus — fleet observability.** Per-device heartbeats with cadence contracts (sleep-aware, so battery devices aren't false alarms), authenticated check-ins, a captures feed, chat history, and firmware-hash drift detection.
 - **Photo tools — `take_photo` / `describe_view`.** Explicit-ask only; every capture announced and logged to Argus.
