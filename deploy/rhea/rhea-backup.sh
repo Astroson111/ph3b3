@@ -66,6 +66,11 @@ done
 [ "${#SYS_PATHS[@]}" -gt 0 ] && log "system configs: ${SYS_PATHS[*]}"
 
 log "restic backup..."
+# EXCLUDED ON PURPOSE (re-downloadable bulk, not identity data):
+#   voices/  — ~1.3 GB of Piper .onnx models, re-fetched hash-pinned by setup.sh.
+#              The voice REGISTRY that describes them (config/voices.yaml) IS backed
+#              up via "$PH3B3_DIR/config" below, so the choice of voices survives; the
+#              weights don't need to.
 "$RESTIC_BIN" backup --tag nightly --exclude-caches \
   --exclude "$DATA_DIR"/'*.db' --exclude "$DATA_DIR"/'*.db-wal' --exclude "$DATA_DIR"/'*.db-shm' \
   --exclude "$V2DATA_DIR"/'*.db' --exclude "$V2DATA_DIR"/'*.db-wal' --exclude "$V2DATA_DIR"/'*.db-shm' \
@@ -74,6 +79,7 @@ log "restic backup..."
   --exclude "$DATA_DIR/RecipeNLG_paper.pdf" \
   --exclude "$DATA_DIR/RecipeNLG_license.png" \
   --exclude "$DATA_DIR/edit_scratch" \
+  --exclude "$DATA_DIR/voices" \
   "$DATA_DIR" \
   "$V2DATA_DIR" \
   "$PH3B3_DIR/.env" \
