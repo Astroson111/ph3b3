@@ -88,6 +88,27 @@ def query_gate(text: str) -> str | None:
     return "dangerous-instructions" if _DANGER_RE.search(text or "") else None
 
 
+# ── Search-intent detection (server-side, pre-LLM) ─────────────────────────────
+# A flagged query is answered ONLY from real retrieval (forced web_search,
+# fail-closed) — the model never free-forms a cited answer for it. Tuned for
+# PRECISION: false negatives are acceptable (they degrade to a normal, uncited
+# model answer), false positives (forcing normal chat into search) are not.
+_SEARCH_INTENT_RE = re.compile(
+    r"\bsearch (?:the web|online|for|up|it)\b|\bweb search\b|\bgoogle (?:it|that|for)\b|"
+    r"\blook (?:it|this|that|them) up\b|\blook up\b|\bfind (?:me )?(?:online|on the web)\b|"
+    r"\bwhat'?s (?:happening|the latest|going on|new)\b|"
+    r"\b(?:latest|current|recent|today'?s|this week'?s|breaking) (?:news|weather|forecast|"
+    r"price|prices|headlines?|scores?|updates?|events?|releases?|results?)\b|"
+    r"\b(?:weather|forecast|news|price|score|stock|headlines?) (?:today|right now|this week|currently|now)\b",
+    re.I,
+)
+
+
+def is_search_intent(text: str) -> bool:
+    """True if `text` clearly wants live/current info — force web_search for it."""
+    return bool(_SEARCH_INTENT_RE.search(text or ""))
+
+
 # ── Egress master switch (default OFF — the first egress ships dark) ───────────
 def egress_enabled() -> bool:
     try:
