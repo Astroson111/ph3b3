@@ -4,9 +4,19 @@
 # the drive (alongside a bundled restic binary), so it runs on a bare machine with
 # zero dependencies. You supply the OFFLINE passphrase; it is never stored here.
 #
-#   ./restore.sh                 # full restore to real locations (/)
-#   ./restore.sh --scratch DIR   # fire-drill: restore under DIR, touch nothing live
+#   sudo ./restore.sh                 # full restore to real locations (/)
+#   sudo ./restore.sh --scratch DIR   # fire-drill: restore under DIR, touch nothing live
+#
+# RUN WITH sudo. The nightly backup runs as root (to capture /etc/wireguard), so
+# restic writes its repo files mode 400 root-owned — only root can read them. Root
+# is also needed to write /etc/wireguard and /home on a real restore. A full
+# restore chowns the recovered user data back to astroson at the end.
 set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "FATAL: run with sudo — the repo is root-owned (backup runs as root for /etc/wireguard)." >&2
+  exit 1
+fi
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"     # RHEA drive root (this script lives on the drive)
 RESTIC_BIN="$SELF_DIR/bin/restic"
@@ -63,9 +73,16 @@ if [ "$SCRATCH" = 1 ]; then
   exit 0
 fi
 
-# ── FULL restore: data is back. Code lives on GitHub; rebuild the environment. ──
+# ── FULL restore: data is back. Restored as root → hand the user's data back. ──
+echo "── restoring ownership of recovered user data to astroson ──"
+for d in /home/astroson/ph3b3_data /home/astroson/Desktop/ph3b3_v2_data \
+         /home/astroson/.config/rhea; do
+  [ -e "$d" ] && chown -R astroson:astroson "$d" 2>/dev/null || true
+done
+# WireGuard / system units were restored under /etc — correctly root-owned; leave them.
+
 echo ""
-echo "✔ DATA + secrets restored to real locations."
+echo "✔ DATA + secrets restored to real locations (WireGuard → /etc/wireguard)."
 echo ""
 echo "REMAINING STEPS (code + models + services — machine-specific, do by hand):"
 echo "  1. Clone the code:"

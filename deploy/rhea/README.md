@@ -38,11 +38,14 @@ fleet panel within its 26h contract. Disk **> 80% used → `rhea` SICK** (space 
 The watchtower (Argus) watches the ark — no new alert plumbing.
 
 ## Restore (manual only — never auto-runs)
-On a fresh Ubuntu box with the RHEA drive attached:
+On a fresh Ubuntu box with the RHEA drive attached — **run with `sudo`** (the backup
+runs as root to capture `/etc/wireguard`, so the repo is root-owned; root also writes
+`/etc/wireguard` + `/home` on restore):
 ```
-/mnt/rhea/restore.sh              # full restore to real locations
-/mnt/rhea/restore.sh --scratch /tmp/firedrill   # dry fire-drill, touches nothing live
+sudo /mnt/rhea/restore.sh              # full restore to real locations
+sudo /mnt/rhea/restore.sh --scratch /tmp/firedrill   # dry fire-drill, touches nothing live
 ```
+A full restore chowns the recovered user data back to `astroson` at the end.
 It prompts for the OFFLINE passphrase, restores the data + secrets + consistent SQLite
 snapshots, then prints the remaining machine-specific steps (clone the code from GitHub,
 `python -m venv` + `pip install`, `ollama pull` the models, re-link the systemd services).
