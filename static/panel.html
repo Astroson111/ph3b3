@@ -407,6 +407,23 @@
     .wg-toggle:hover     { background:var(--violet-l); }
     .wg-toggle.wg-danger { background:var(--magenta); }
     .wg-toggle.wg-danger:hover { background:#c0306a; }
+    .wg-toggle:disabled { opacity:.5; cursor:default; }
+
+    /* ── Account (change credentials) ── */
+    .acct-desc { font-size:.85rem; color:var(--dim); margin:.15rem 0 .7rem; }
+    .acct-form { display:flex; flex-direction:column; gap:.35rem; }
+    .acct-l    { font-size:.72rem; font-weight:600; letter-spacing:.04em; text-transform:uppercase;
+      color:var(--dim); margin-top:.45rem; }
+    .acct-opt  { text-transform:none; letter-spacing:0; font-weight:400; color:var(--dim); opacity:.8; }
+    .acct-in   { background:rgba(15,6,36,.6); border:1px solid var(--border); border-radius:8px;
+      color:var(--text); font-size:.9rem; padding:.5rem .65rem; width:100%; transition:border-color .15s; }
+    .acct-in:focus { outline:none; border-color:var(--magenta); }
+    .acct-warn { font-size:.78rem; color:var(--warn); background:rgba(251,191,36,.08);
+      border:1px solid rgba(251,191,36,.25); border-radius:8px; padding:.5rem .65rem; margin-top:.7rem; }
+    .acct-msg  { font-size:.82rem; border-radius:8px; padding:.5rem .65rem; margin-top:.55rem; }
+    .acct-msg.ok  { color:var(--ok);  background:rgba(74,222,128,.1); border:1px solid rgba(74,222,128,.3); }
+    .acct-msg.err { color:var(--err); background:rgba(248,113,113,.1); border:1px solid rgba(248,113,113,.3); }
+    #acctSaveBtn { margin-top:.75rem; align-self:flex-start; }
 
     /* ── Karaoke ── */
     .kar-hero { display:flex; align-items:center; gap:.9rem;
@@ -1108,6 +1125,32 @@
       </div>
     </div>
 
+    <!-- ══ Account — change the portal username / password ══════════════════════ -->
+    <div class="card">
+      <div class="card-title"><span data-i18n="status.account">Account</span></div>
+      <div class="acct-desc" data-i18n="status.account.desc">Change the username and password you use to sign in to this portal.</div>
+      <form id="acctForm" class="acct-form" autocomplete="off">
+        <label class="acct-l" for="acctCurrent" data-i18n="status.account.current">Current password</label>
+        <input class="acct-in" id="acctCurrent" type="password" autocomplete="current-password" required>
+
+        <label class="acct-l" for="acctUser" data-i18n="status.account.newuser">New username</label>
+        <input class="acct-in" id="acctUser" type="text" autocomplete="username" minlength="2" maxlength="64">
+
+        <label class="acct-l" for="acctPass">
+          <span data-i18n="status.account.newpass">New password</span>
+          <span class="acct-opt" data-i18n="status.account.blank">(leave blank to keep current)</span>
+        </label>
+        <input class="acct-in" id="acctPass" type="password" autocomplete="new-password">
+
+        <label class="acct-l" for="acctConfirm" data-i18n="status.account.confirm">Confirm new password</label>
+        <input class="acct-in" id="acctConfirm" type="password" autocomplete="new-password">
+
+        <div class="acct-warn" data-i18n="status.account.warn">⚠ Devices that sign in with these credentials (Iris, Dio) must be re-flashed with the new password before they can reconnect.</div>
+        <div class="acct-msg" id="acctMsg" role="status" hidden></div>
+        <button class="wg-toggle" id="acctSaveBtn" type="submit" data-i18n="status.account.save">Save changes</button>
+      </form>
+    </div>
+
     <!-- ══ Utility Tray — Timer + Calculator (portable component) ══════════════
          Markup half of the self-contained tray. Pairs with the .ut-* CSS block
          and the utilTray IIFE. Collapsed by default (no `open` on <details>). -->
@@ -1702,7 +1745,7 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
   document.getElementById('pane' + t.dataset.pane).classList.add('active');
-  if (t.dataset.pane === 'Status') { wgRefresh(); egressRefresh(); langInit(); }
+  if (t.dataset.pane === 'Status') { wgRefresh(); egressRefresh(); langInit(); acctInit(); }
 }));
 
 // ── Language & Voice card ──────────────────────────────────────────────────────
@@ -1916,7 +1959,7 @@ async function refreshStatus() {
   }
 }
 refreshStatus();
-wgRefresh(); egressRefresh();                       // WireGuard card lives in Status (default pane)
+wgRefresh(); egressRefresh(); acctInit();           // WireGuard + Account cards live in Status (default pane)
 setInterval(refreshStatus, 10_000);
 
 // ── chat + audio ──────────────────────────────────────────────────────────────
@@ -2292,6 +2335,49 @@ async function egressToggle() {
   await egressRefresh();
 }
 document.getElementById('egToggleBtn')?.addEventListener('click', egressToggle);
+
+// ── Account — change portal username / password (Status pane) ──────────────────
+async function acctInit() {
+  try {
+    const d = await fetch('/account').then(r => r.json());
+    const u = document.getElementById('acctUser');
+    if (u && d.username && !u.value) u.value = d.username;   // prefill, don't clobber edits
+  } catch (e) { /* non-fatal — form still works */ }
+}
+document.getElementById('acctForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById('acctMsg');
+  const btn = document.getElementById('acctSaveBtn');
+  const show = (cls, text) => { msg.hidden = false; msg.className = 'acct-msg ' + cls; msg.textContent = text; };
+  const body = {
+    current_password: document.getElementById('acctCurrent').value,
+    new_username:     document.getElementById('acctUser').value.trim(),
+    new_password:     document.getElementById('acctPass').value,
+    confirm:          document.getElementById('acctConfirm').value,
+  };
+  if (!body.current_password) { show('err', 'Enter your current password to make changes.'); return; }
+  btn.disabled = true;
+  show('', 'Saving…');
+  try {
+    const r = await fetch('/account/credentials', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.ok) {
+      show('ok', d.password_changed
+        ? 'Saved. Password changed — re-flash any devices (Iris, Dio) with the new password.'
+        : 'Saved. Username updated.');
+      // clear the secret fields; keep the (possibly new) username visible
+      ['acctCurrent', 'acctPass', 'acctConfirm'].forEach(id => { document.getElementById(id).value = ''; });
+    } else {
+      show('err', d.error || 'Could not save changes.');
+    }
+  } catch (err) {
+    show('err', 'Network error — try again.');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 async function wgToggle() {
   const btn    = document.getElementById('wgToggleBtn');

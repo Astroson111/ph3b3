@@ -23,7 +23,7 @@ import uuid
 from io import BytesIO
 from PIL import Image  # Morpheus edit-mode upload validation / re-encode
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 from dotenv import load_dotenv, set_key
@@ -2546,6 +2546,77 @@ async def logout(request: Request):
     _sessions.pop(token, None)
     resp = RedirectResponse(url="/login", status_code=303)
     resp.delete_cookie(_SESSION_COOKIE)
+    return resp
+
+
+@app.get("/account")
+async def account_get():
+    """Current portal username, so the Status-tab form can prefill it. (This route
+    is behind the auth middleware — only a signed-in caller reaches it.)"""
+    return {"username": AUTH_USER}
+
+
+@app.post("/account/credentials")
+async def change_credentials(request: Request):
+    """Change the portal username / password from the Status tab. Requires the
+    CURRENT password (re-auth) even for an already-authenticated session, so a
+    borrowed cookie can't silently take over the account. The new password is
+    OPTIONAL — leaving it blank renames without rotating the secret.
+
+    NOTE: devices (Iris, Dio) sign in with this same shared Basic-auth credential
+    (server.py has no separate device token), so rotating the password means
+    updating those devices with the new one — surfaced in the UI warning.
+    """
+    global AUTH_USER, AUTH_PASS
+    if not AUTH_PASS:
+        return JSONResponse({"ok": False, "error": "Not configured yet."}, status_code=503)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    current  = str(body.get("current_password", ""))
+    new_user = str(body.get("new_username", "")).strip()
+    new_pass = str(body.get("new_password", ""))
+    confirm  = str(body.get("confirm", ""))
+
+    # 1. Re-auth with the CURRENT password (constant-time) — a live session is not
+    #    enough to change the account's credentials.
+    if not secrets.compare_digest(current.encode(), AUTH_PASS.encode()):
+        return JSONResponse({"ok": False, "error": "Current password is incorrect."}, status_code=403)
+
+    # 2. Validate the new username (same floor as first-run setup).
+    if len(new_user) < 2:
+        return JSONResponse({"ok": False, "error": "Username must be at least 2 characters."}, status_code=400)
+
+    # 3. Password is optional; validate only when the user is actually changing it.
+    changing_pw = bool(new_pass)
+    if changing_pw:
+        strength_err = _check_password_strength(new_pass)
+        if strength_err:
+            return JSONResponse({"ok": False, "error": strength_err}, status_code=400)
+        if new_pass != confirm:
+            return JSONResponse({"ok": False, "error": "New passwords don't match — give it another go."}, status_code=400)
+
+    final_pass = new_pass if changing_pw else AUTH_PASS
+
+    # 4. Persist to .env (preserves other settings), then flip in-memory state.
+    env_file = ROOT / ".env"
+    env_file.touch()
+    set_key(str(env_file), "PH3B3_USER", new_user)
+    set_key(str(env_file), "PH3B3_PASSWORD", final_pass)
+    AUTH_USER = new_user
+    AUTH_PASS = final_pass
+
+    # 5. Credentials changed → invalidate EVERY session, then re-issue one for THIS
+    #    caller so they stay signed in instead of bouncing to /login.
+    _sessions.clear()
+    token = secrets.token_hex(32)
+    _sessions[token] = new_user
+    resp = JSONResponse({"ok": True, "username": new_user, "password_changed": changing_pw})
+    resp.set_cookie(_SESSION_COOKIE, token, max_age=_SESSION_MAX_AGE,
+                    httponly=True, secure=bool(SSL_CERT), samesite="lax")
+    log.info("Portal credentials updated (username=%s, password_changed=%s) — other sessions invalidated.",
+             new_user, changing_pw)
     return resp
 
 
