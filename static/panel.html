@@ -434,7 +434,19 @@
     .dg-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
     .dg-dot.on  { background:var(--ok);  box-shadow:0 0 6px var(--ok); }
     .dg-dot.off { background:var(--dim); }
+    .dg-dev { border-bottom:1px solid var(--border); padding-bottom:.5rem; margin-bottom:.15rem; }
+    .dg-dev:last-child { border-bottom:none; padding-bottom:0; margin-bottom:0; }
+    .dg-act { margin-top:.4rem; display:flex; flex-wrap:wrap; align-items:center; gap:.45rem; }
+    .dg-btn { background:transparent; color:var(--cyan); border:1px solid var(--border); border-radius:6px;
+      font-size:.72rem; padding:.28rem .55rem; cursor:pointer; white-space:nowrap; transition:border-color .15s,color .15s; }
+    .dg-btn:hover { border-color:var(--cyan); }
+    .dg-btn:disabled { opacity:.5; cursor:default; }
+    .dg-keyout { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:.45rem; margin-top:.15rem; }
+    .dg-key { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.8rem; color:var(--text);
+      background:rgba(15,6,36,.6); border:1px solid var(--border); border-radius:6px; padding:.3rem .5rem;
+      word-break:break-all; flex:1; min-width:12rem; }
     .dg-note { font-size:.72rem; color:var(--dim); margin-top:.6rem; line-height:1.45; }
+    .dg-note.warn { color:var(--warn); flex-basis:100%; margin-top:.15rem; }
 
     /* ── Account modal ── */
     .acct-line { display:flex; align-items:center; justify-content:space-between; gap:.8rem; }
@@ -2468,6 +2480,7 @@ function _dgAgo(iso) {
   return Math.round(s / 86400) + 'd ago';
 }
 function _esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+const _dgGenKey = {};   // device -> freshly generated key (for copy)
 async function dgInit() {
   const list = document.getElementById('devGlance');
   if (!list) return;
@@ -2477,12 +2490,45 @@ async function dgInit() {
   list.innerHTML = devices.map(d => {
     const on = !!d.configured;
     const state = d.last_seen ? `seen ${_dgAgo(d.last_seen)}` : (on ? 'paired' : 'not paired');
-    return `<div class="dg-row">
-        <span class="dg-name"><span class="dg-dot ${on ? 'on' : 'off'}"></span>${_esc(d.label)}</span>
-        <span class="dg-state">${_esc(state)}</span>
+    return `<div class="dg-dev">
+        <div class="dg-row">
+          <span class="dg-name"><span class="dg-dot ${on ? 'on' : 'off'}"></span>${_esc(d.label)}</span>
+          <span class="dg-state">${_esc(state)}</span>
+        </div>
+        <div class="dg-act">
+          <button class="dg-btn" data-dgen="${_esc(d.device)}" data-label="${_esc(d.label)}">${t('status.devices.genkey', 'Generate new key')}</button>
+          <div class="dg-keyout" id="dgKeyout-${_esc(d.device)}" hidden></div>
+        </div>
       </div>`;
   }).join('');
 }
+document.getElementById('devGlance')?.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-dgen], [data-dgcopy]');
+  if (!btn) return;
+  if (btn.dataset.dgcopy !== undefined) {                    // copy the shown key
+    const key = _dgGenKey[btn.dataset.dgcopy] || '';
+    try { await navigator.clipboard.writeText(key); btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); } catch (_) {}
+    return;
+  }
+  const dev = btn.dataset.dgen, label = btn.dataset.label || dev;
+  if (!confirm(`Generate a new key for ${label}?\n\n${label} will be DISCONNECTED until you enter the new key in its Wi-Fi setup screen. It keeps working on its current key until then only if you cancel.`)) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/devices/keys/${dev}/generate`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    const out = document.getElementById('dgKeyout-' + dev);
+    if (r.ok && d.ok && d.secret) {
+      _dgGenKey[dev] = d.secret;
+      out.hidden = false;
+      out.innerHTML = `<code class="dg-key">${_esc(d.secret)}</code>` +
+        `<button class="dg-btn" data-dgcopy="${_esc(dev)}">Copy</button>` +
+        `<div class="dg-note warn">Enter this in ${_esc(label)}'s Wi-Fi setup screen to reconnect it. The old key no longer works.</div>`;
+    } else if (out) {
+      out.hidden = false;
+      out.innerHTML = `<div class="dg-note warn">${_esc(d.error || 'Could not generate a key.')}</div>`;
+    }
+  } finally { btn.disabled = false; }
+});
 
 async function wgToggle() {
   const btn    = document.getElementById('wgToggleBtn');

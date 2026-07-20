@@ -26,6 +26,7 @@
   "status.account.save": "Save changes",
   "status.devices": "Paired Devices",
   "status.devices.loading": "Loading…",
+  "status.devices.genkey": "Generate new key",
   "status.devices.note": "Each device keeps its own pairing key, so changing your password won't disconnect them. Set or change a key from that device's Wi-Fi setup screen.",
   "voice.note.installed": "Voice model installed.",
   "voice.tier.strong": "strong",
