@@ -139,6 +139,7 @@ from screenshot_module import ScreenshotModule
 from recipes import RecipeStore
 import morpheus
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
+import intent_registry           # dedicated-module intent claims (precedence over Metis)
 from triage import triage_gate   # clarification guard before main inference
 
 # ── Dio state telemetry (UDP) ────────────────────────────────────────────────
@@ -865,6 +866,69 @@ async def _tool_web_search(query: str, session_id: str = "") -> str:
     return f'I looked up "{query}" on the web.\n\n{summary}\n\nSources:\n{srcs}'   # 8. announce + real cites
 
 
+# ── Dedicated-module dispatch (intent-registry precedence over Metis) ──────────
+# A GENUINE weather-source failure (curl/network/backend), distinct from the
+# "tell me where you are" location prompt — only a real failure earns the
+# announced Metis fallback.
+_WEATHER_FAIL_RE = re.compile(r"weather error|could not get (?:weather|forecast)", re.I)
+
+# Pull a place name out of "... in/for/at/near <place>". Stop-words guard the
+# common non-locations ("for me", "right now") so we fall back to the configured
+# default instead of querying wttr.in for "me".
+_LOC_RE = re.compile(
+    r"\b(?:in|for|at|near|around)\s+([a-zA-Z][a-zA-Z0-9 .,'\-]{1,40})", re.I)
+_LOC_STOP = {"me", "us", "you", "today", "tomorrow", "tonight", "now", "please",
+             "right now", "this week", "the week", "a sec", "a second", "a moment",
+             "real quick", "here", "there", "outside", "out there", "my area"}
+
+
+def _extract_location(msg: str):
+    m = _LOC_RE.search(msg or "")
+    if not m:
+        return None
+    loc = m.group(1).strip().rstrip(".,!?")
+    # cut trailing filler after the place name ("... in Chicago right now")
+    loc = re.split(r"\b(?:today|tomorrow|tonight|right now|now|please|this week|for me)\b",
+                   loc, flags=re.I)[0].strip().rstrip(".,")
+    if not loc or loc.lower() in _LOC_STOP:
+        return None
+    return loc
+
+
+async def _answer_weather(user_msg: str, session_id: str = "") -> str:
+    """Answer a weather-claimed turn from the LIVE weather module. On a GENUINE
+    source failure, fall back to Metis — but ANNOUNCE the substitution; never
+    silently serve a search result as if it were the weather source. No apology
+    language either way."""
+    loc = _extract_location(user_msg)
+    m = (user_msg or "").lower()
+    want_forecast = any(w in m for w in ("forecast", "tomorrow", "this week", "next few days"))
+    fn = weather.forecast if want_forecast else weather.current
+    try:
+        result = await asyncio.to_thread(fn, loc)
+    except Exception as e:
+        log.warning("[weather] module raised: %s", e)
+        result = f"Weather error: {e}"
+    if not _WEATHER_FAIL_RE.search(result or ""):
+        return result                                    # live data (or the location prompt) — done
+    # Genuine weather-source failure → announced Metis fallback, never silent.
+    log.warning("[weather] source failed (%r)", (result or "")[:120])
+    if metis.egress_enabled():
+        fb = await _tool_web_search(user_msg, session_id)
+        return f"My weather source failed, so here's what a web search turned up instead:\n\n{fb}"
+    return ("My weather source failed and web access is off, so I can't get live conditions "
+            "right now — turn on web access in the Status tab and I'll route around it.")
+
+
+async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
+    """Route a claimed turn to its owning module. Grows by module key, never by a
+    branch inside the request path."""
+    if claim.module == "weather":
+        return await _answer_weather(user_msg, session_id)
+    log.error("[intent] claim %r has no dispatch — falling through", claim.module)
+    return None
+
+
 async def chat_with_tools(messages, device="nyx", session_id=""):
     async with httpx.AsyncClient(timeout=120) as client:
         payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":TOOLS,"options":{"temperature":0.7,"num_ctx":8192}}
@@ -1303,6 +1367,23 @@ async def _run_chat_pipeline(body: dict, request: Request):
         return _q
 
     session.add("user", user_msg)
+
+    # ── Dedicated-module precedence (BEFORE Metis forced routing) ─────────────
+    # A dedicated module (weather, …) may CLAIM this intent. A claimed turn is
+    # answered by that module and Metis NEVER engages — so "search the weather for
+    # me" / "look up the forecast" reach the live weather module, not the open web
+    # (which returned stale or empty results). "Who owns what" lives in the intent
+    # registry (config), not here; the router just asks which claim wins. Metis is
+    # the fallback ONLY if the module itself errors, and that is announced inside
+    # the dispatch — never a silent substitution.
+    _claim = intent_registry.resolve(user_msg)
+    if _claim:
+        log.info("[intent] %s claims this turn — dedicated module wins, Metis stands down", _claim.module)
+        answer = await _dispatch_claim(_claim, user_msg, body.get("session_id", ""))
+        if answer is not None:
+            session.add("assistant", answer)
+            return answer
+        # dispatch declined (no handler) — fall through to normal routing below
 
     # ── Search-intent forced routing (Metis #2) — fail-CLOSED ─────────────────
     # A search-intent query is answered ONLY from real retrieval this turn: force

@@ -3,7 +3,38 @@ import os
 import subprocess
 import logging
 
+try:
+    import intent_registry
+except ImportError:
+    from modules import intent_registry
+
 log = logging.getLogger("ph3b3.weather")
+
+# ── Intent claim (precedence over Metis forced search) ────────────────────────
+# The weather module OWNS weather/forecast/temperature phrasing. A claimed turn is
+# answered here, full stop — even worded as "search the weather" / "look up the
+# forecast", which Metis's search-intent detector would otherwise hijack to the
+# open web. `exclude` steps this claim aside for HARDWARE temperature (cpu/gpu/
+# system temps → system_module), which shares the word but not the domain.
+_WEATHER_INTENT_RE = re.compile(
+    r"\bweather\b|\bforecast\b|\bhumidity\b|"
+    r"\bhow (?:hot|cold|warm|windy) (?:is|will|does|it)\b|"
+    r"\bis it (?:going to |gonna )?(?:rain|snow|sleet|storm|hail)\w*\b|"
+    r"\bis it (?:hot|cold|sunny|cloudy|windy|raining|snowing|freezing|chilly|warm)\b|"
+    r"\b(?:temperature|temp) (?:outside|out there|today|tomorrow|tonight|right now|out)\b|"
+    r"\bwhat'?s the (?:temperature|temp)\b|"
+    r"\bhow'?s the weather\b",
+    re.I,
+)
+# Hardware temperature is a DIFFERENT domain (system_module). Don't let the weather
+# claim swallow "cpu temp" / "gpu temperature" / "system temps".
+_HARDWARE_TEMP_RE = re.compile(
+    r"\b(?:cpu|gpu|processor|graphics card|system|server|nyx|drive|disk|nvme|battery)\b"
+    r"[\w\s]*\btemp\w*\b|\btemp\w*\b[\w\s]*\b(?:cpu|gpu|processor|system|nvme)\b",
+    re.I,
+)
+intent_registry.register("weather", "weather_current", _WEATHER_INTENT_RE,
+                         exclude=_HARDWARE_TEMP_RE)
 
 # Uses wttr.in — no API key, curl-based, works offline-friendly
 # Also supports OpenWeatherMap if you have a free key
