@@ -141,6 +141,7 @@ from recipes import RecipeStore
 import morpheus
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
 import intent_registry           # dedicated-module intent claims (precedence over Metis)
+import device_auth               # per-device auth keys (Iris/Dio), decoupled from the human login
 from triage import triage_gate   # clarification guard before main inference
 
 # ── Dio state telemetry (UDP) ────────────────────────────────────────────────
@@ -258,13 +259,32 @@ async def basic_auth(request: Request, call_next):
         )
 
     authed = False
+    auth_kind = None                      # "human" (owner) | "device" (Iris/Dio key)
+    dev_name = request.headers.get("X-Ph3b3-Device", "")
 
-    # 1. Session cookie — browser clients that went through /login.
+    def _basic_pw() -> str | None:
+        h = request.headers.get("Authorization", "")
+        if not h.startswith("Basic "):
+            return None
+        try:
+            return base64.b64decode(h[6:]).decode("utf-8", errors="replace").partition(":")[2]
+        except Exception:
+            return None
+
+    # 1. Session cookie — browser clients that went through /login. (human)
     token = request.cookies.get(_SESSION_COOKIE, "")
     if token and token in _sessions:
-        authed = True
+        authed, auth_kind = True, "human"
 
-    # 2. HTTP Basic Auth — curl / device / API clients.
+    # 2. Device key — a KNOWN device presenting ITS own key as the Basic password,
+    #    independent of the human login. Checked before human Basic so a device is
+    #    always classified as a device, and so a rotated human password no longer
+    #    locks it out. Username is irrelevant here; only the per-device key matters.
+    if not authed and dev_name in device_auth.KNOWN_DEVICES:
+        if device_auth.verify(dev_name, _basic_pw() or ""):
+            authed, auth_kind = True, "device"
+
+    # 3. HTTP Basic Auth — the account owner via curl / API. (human)
     if not authed:
         auth_hdr = request.headers.get("Authorization", "")
         if auth_hdr.startswith("Basic "):
@@ -273,7 +293,7 @@ async def basic_auth(request: Request, call_next):
                 user, _, pw = creds.partition(":")
                 if (secrets.compare_digest(user.encode(), AUTH_USER.encode()) and
                         secrets.compare_digest(pw.encode(), AUTH_PASS.encode())):
-                    authed = True
+                    authed, auth_kind = True, "human"
             except Exception:
                 pass
 
@@ -288,7 +308,11 @@ async def basic_auth(request: Request, call_next):
         # unauthenticated JS fetch from the panel — the "second auth screen."
         return Response(content="Unauthorized", status_code=401)
 
-    device = request.headers.get("X-Ph3b3-Device", "unidentified")
+    # Account-management routes trust this to tell an owner from a device.
+    request.state.auth_kind = auth_kind
+    request.state.device = dev_name if auth_kind == "device" else None
+
+    device = dev_name or "unidentified"
     _device_roster[device] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     # Learn Dio's LAN IP from her calls so vision can reach her camera (Phase 2).
     # Part C: only adopt a NEW IP after verifying it actually runs Dio's camera
@@ -322,6 +346,11 @@ reminders = RemindersModule()
 calendar = CalendarModule()
 weather = WeatherModule()
 clock = TimeModule()
+# Seed per-device keys (Iris/Dio) from the CURRENT portal password so devices
+# already flashed with it keep authenticating after a human password change —
+# no reflash. Idempotent: never overwrites a key the owner has since rotated.
+if _SETUP_COMPLETE and AUTH_PASS:
+    device_auth.grandfather(AUTH_PASS)
 resume = ResumeModule()
 network = NetworkModule()
 bluetooth = BluetoothModule()
@@ -2504,6 +2533,7 @@ async def setup_submit(request: Request):
     _SETUP_COMPLETE = True
     AUTH_USER = username
     AUTH_PASS = password
+    device_auth.grandfather(password)      # seed Iris/Dio keys from the just-set password
 
     log.info("First-run setup complete — /setup is now closed.")
     return HTMLResponse(content=_setup_done_html(username))
@@ -2550,24 +2580,25 @@ async def logout(request: Request):
 
 
 @app.get("/account")
-async def account_get():
-    """Current portal username, so the Status-tab form can prefill it. (This route
-    is behind the auth middleware — only a signed-in caller reaches it.)"""
+async def account_get(request: Request):
+    """Current portal username, so the Status-tab form can prefill it. OWNER-only —
+    a device authenticating with its own key must not read/manage the account."""
+    _require_human(request)
     return {"username": AUTH_USER}
 
 
 @app.post("/account/credentials")
 async def change_credentials(request: Request):
-    """Change the portal username / password from the Status tab. Requires the
-    CURRENT password (re-auth) even for an already-authenticated session, so a
-    borrowed cookie can't silently take over the account. The new password is
-    OPTIONAL — leaving it blank renames without rotating the secret.
+    """Change the portal username / password from the Status tab. OWNER-only, and
+    additionally requires the CURRENT password (re-auth) so a borrowed cookie can't
+    silently take over the account. The new password is OPTIONAL — leaving it blank
+    renames without rotating the secret.
 
-    NOTE: devices (Iris, Dio) sign in with this same shared Basic-auth credential
-    (server.py has no separate device token), so rotating the password means
-    updating those devices with the new one — surfaced in the UI warning.
+    Devices (Iris, Dio) authenticate with their OWN per-device keys now, so a
+    password change no longer disconnects them (see /devices/keys).
     """
     global AUTH_USER, AUTH_PASS
+    _require_human(request)
     if not AUTH_PASS:
         return JSONResponse({"ok": False, "error": "Not configured yet."}, status_code=503)
     try:
@@ -2618,6 +2649,67 @@ async def change_credentials(request: Request):
     log.info("Portal credentials updated (username=%s, password_changed=%s) — other sessions invalidated.",
              new_user, changing_pw)
     return resp
+
+
+# ── Per-device auth keys (Iris, Dio) ──────────────────────────────────────────
+def _require_human(request: Request) -> None:
+    """Guard: only the account OWNER (session cookie or human Basic) may manage
+    device keys — a device authenticating with its own key must not be able to
+    read/rotate keys."""
+    if getattr(request.state, "auth_kind", None) != "human":
+        raise HTTPException(status_code=403, detail="Sign in as the account owner to manage device keys.")
+
+
+@app.get("/devices/keys")
+async def device_keys_list(request: Request):
+    """Read-only device status for the Status-tab 'Paired Devices' glance. Does NOT
+    return secrets — key reveal/rotate lives in each device's own Wi-Fi setup flow."""
+    _require_human(request)
+    items = device_auth.listing(reveal=False)
+    for it in items:
+        it["last_seen"] = _device_roster.get(it["device"])   # in-memory, from the auth middleware
+    return {"devices": items}
+
+
+@app.post("/devices/keys/{device}/set")
+async def device_key_set(device: str, request: Request):
+    """Set an explicit key for a device (owner types it, then enters the same value
+    in the device's setup screen to connect)."""
+    _require_human(request)
+    if device not in device_auth.KNOWN_DEVICES:
+        raise HTTPException(status_code=404, detail="Unknown device.")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        device_auth.set_key(device, str(body.get("secret", "")))
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    log.info("[device_auth] key SET for %s by owner", device)
+    return {"ok": True, "device": device}
+
+
+@app.post("/devices/keys/{device}/generate")
+async def device_key_generate(device: str, request: Request):
+    """Generate a fresh random key and return it (must be entered on the device)."""
+    _require_human(request)
+    if device not in device_auth.KNOWN_DEVICES:
+        raise HTTPException(status_code=404, detail="Unknown device.")
+    secret = device_auth.rotate(device)
+    log.info("[device_auth] key GENERATED for %s by owner", device)
+    return {"ok": True, "device": device, "secret": secret}
+
+
+@app.post("/devices/keys/{device}/revoke")
+async def device_key_revoke(device: str, request: Request):
+    """Remove a device's key — it can't reconnect until a new key is set + entered."""
+    _require_human(request)
+    if device not in device_auth.KNOWN_DEVICES:
+        raise HTTPException(status_code=404, detail="Unknown device.")
+    revoked = device_auth.revoke(device)
+    log.info("[device_auth] key REVOKED for %s by owner (existed=%s)", device, revoked)
+    return {"ok": True, "device": device, "revoked": revoked}
 
 
 @app.get("/panel")
