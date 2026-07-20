@@ -210,6 +210,20 @@ async def lifespan(app):
             await asyncio.sleep(60)
     _metis_hb = asyncio.create_task(_metis_heartbeat())
 
+    async def _comfyui_heartbeat():
+        # 'comfyui' fleet member = ComfyUI / video-gen backend health. Up → beat
+        # (HEALTHY); down → no beat → Argus shows comfyui SILENT past contract, so a
+        # backend that failed to launch is VISIBLE on the panel instead of being
+        # discovered when a render is attempted. Same plumbing as metis.
+        while True:
+            try:
+                if await asyncio.to_thread(morpheus.comfy_up):
+                    argus_store.record_heartbeat("comfyui")
+            except Exception as e:
+                log.debug("[comfyui] heartbeat skip: %s", e)
+            await asyncio.sleep(60)
+    _comfyui_hb = asyncio.create_task(_comfyui_heartbeat())
+
     _dio_state_transport = None
     try:
         _loop = asyncio.get_running_loop()

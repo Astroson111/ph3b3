@@ -506,6 +506,15 @@ _COMFY_POLL_INTERVAL = 3.0   # seconds between readiness probes
 _COMFY_START_TIMEOUT = 120   # max seconds to wait for ComfyUI to serve
 
 
+def comfy_up() -> bool:
+    """True if the ComfyUI backend answers on /system_stats. Sync + fast-failing —
+    for the Argus 'comfyui' heartbeat (down → SILENT on the fleet panel)."""
+    try:
+        return httpx.get(f"{COMFY_HOST}/system_stats", timeout=3.0).status_code == 200
+    except Exception:
+        return False
+
+
 async def ensure_comfy_up(http: httpx.AsyncClient) -> None:
     """Start ComfyUI on demand and wait until it is actually serving.
 
