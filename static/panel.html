@@ -16,6 +16,8 @@
       --surface:  rgba(43, 15, 95, 0.75);
       --border:   rgba(124, 58, 237, 0.32);
       --purple:   #7c3aed;
+      --violet:   #7c3aed;   /* .wg-toggle fill (was undefined → buttons rendered transparent) */
+      --violet-l: #9d5cf5;   /* .wg-toggle hover */
       --magenta:  #e91e8c;
       --cyan:     #00e5ff;
       --text:     #e8d5ff;
@@ -418,12 +420,39 @@
     .acct-in   { background:rgba(15,6,36,.6); border:1px solid var(--border); border-radius:8px;
       color:var(--text); font-size:.9rem; padding:.5rem .65rem; width:100%; transition:border-color .15s; }
     .acct-in:focus { outline:none; border-color:var(--magenta); }
-    .acct-warn { font-size:.78rem; color:var(--warn); background:rgba(251,191,36,.08);
-      border:1px solid rgba(251,191,36,.25); border-radius:8px; padding:.5rem .65rem; margin-top:.7rem; }
     .acct-msg  { font-size:.82rem; border-radius:8px; padding:.5rem .65rem; margin-top:.55rem; }
     .acct-msg.ok  { color:var(--ok);  background:rgba(74,222,128,.1); border:1px solid rgba(74,222,128,.3); }
     .acct-msg.err { color:var(--err); background:rgba(248,113,113,.1); border:1px solid rgba(248,113,113,.3); }
     #acctSaveBtn { margin-top:.75rem; align-self:flex-start; }
+
+    /* ── Paired devices (read-only glance) ── */
+    .dg-list { display:flex; flex-direction:column; gap:.35rem; }
+    .dg-row { display:flex; align-items:center; justify-content:space-between; gap:.6rem;
+      font-size:.85rem; color:var(--text); padding:.15rem 0; }
+    .dg-name { font-weight:600; display:flex; align-items:center; gap:.5rem; }
+    .dg-state { font-size:.7rem; color:var(--dim); display:flex; align-items:center; gap:.4rem; }
+    .dg-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+    .dg-dot.on  { background:var(--ok);  box-shadow:0 0 6px var(--ok); }
+    .dg-dot.off { background:var(--dim); }
+    .dg-note { font-size:.72rem; color:var(--dim); margin-top:.6rem; line-height:1.45; }
+
+    /* ── Account modal ── */
+    .acct-line { display:flex; align-items:center; justify-content:space-between; gap:.8rem; }
+    .acct-who { font-size:.85rem; color:var(--dim); }
+    .acct-who strong { color:var(--text); }
+    .modal-backdrop { position:fixed; inset:0; z-index:50; display:flex; align-items:center;
+      justify-content:center; padding:1rem; background:rgba(6,2,16,.72); backdrop-filter:blur(3px);
+      -webkit-backdrop-filter:blur(3px); }
+    .modal-backdrop[hidden] { display:none; }
+    .modal { width:100%; max-width:22rem; background:var(--surface); border:1px solid var(--border);
+      border-radius:14px; padding:1.1rem 1.1rem 1.2rem; box-shadow:0 20px 60px rgba(0,0,0,.5);
+      animation:modalIn .15s ease-out; }
+    @keyframes modalIn { from { transform:translateY(8px); opacity:0; } to { transform:none; opacity:1; } }
+    @media (prefers-reduced-motion:reduce) { .modal { animation:none; } }
+    .modal-hd { display:flex; align-items:center; justify-content:space-between; gap:.6rem; margin-bottom:.4rem; }
+    .modal-hd span { font-size:.95rem; font-weight:700; color:var(--text); }
+    .modal-x { background:transparent; border:none; color:var(--dim); font-size:1.3rem; line-height:1;
+      cursor:pointer; padding:0 .2rem; } .modal-x:hover { color:var(--text); }
 
     /* ── Karaoke ── */
     .kar-hero { display:flex; align-items:center; gap:.9rem;
@@ -1125,30 +1154,51 @@
       </div>
     </div>
 
-    <!-- ══ Account — change the portal username / password ══════════════════════ -->
+    <!-- ══ Account — compact; opens a modal to change username / password ═════════ -->
     <div class="card">
       <div class="card-title"><span data-i18n="status.account">Account</span></div>
-      <div class="acct-desc" data-i18n="status.account.desc">Change the username and password you use to sign in to this portal.</div>
-      <form id="acctForm" class="acct-form" autocomplete="off">
-        <label class="acct-l" for="acctCurrent" data-i18n="status.account.current">Current password</label>
-        <input class="acct-in" id="acctCurrent" type="password" autocomplete="current-password" required>
+      <div class="acct-line">
+        <span class="acct-who"><span data-i18n="status.account.signedin">Signed in as</span> <strong id="acctWhoami">…</strong></span>
+        <button class="wg-toggle" id="acctOpenBtn" type="button" data-i18n="status.account.change">Change…</button>
+      </div>
+    </div>
 
-        <label class="acct-l" for="acctUser" data-i18n="status.account.newuser">New username</label>
-        <input class="acct-in" id="acctUser" type="text" autocomplete="username" minlength="2" maxlength="64">
+    <!-- Account modal — hidden until "Change…" -->
+    <div class="modal-backdrop" id="acctModal" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="acctModalTitle">
+        <div class="modal-hd">
+          <span id="acctModalTitle" data-i18n="status.account.change">Change account</span>
+          <button class="modal-x" id="acctCloseBtn" type="button" aria-label="Close">&times;</button>
+        </div>
+        <div class="acct-desc" data-i18n="status.account.desc">Change the username and password you use to sign in to this portal.</div>
+        <form id="acctForm" class="acct-form" autocomplete="off">
+          <label class="acct-l" for="acctCurrent" data-i18n="status.account.current">Current password</label>
+          <input class="acct-in" id="acctCurrent" type="password" autocomplete="current-password" required>
 
-        <label class="acct-l" for="acctPass">
-          <span data-i18n="status.account.newpass">New password</span>
-          <span class="acct-opt" data-i18n="status.account.blank">(leave blank to keep current)</span>
-        </label>
-        <input class="acct-in" id="acctPass" type="password" autocomplete="new-password">
+          <label class="acct-l" for="acctUser" data-i18n="status.account.newuser">New username</label>
+          <input class="acct-in" id="acctUser" type="text" autocomplete="username" minlength="2" maxlength="64">
 
-        <label class="acct-l" for="acctConfirm" data-i18n="status.account.confirm">Confirm new password</label>
-        <input class="acct-in" id="acctConfirm" type="password" autocomplete="new-password">
+          <label class="acct-l" for="acctPass">
+            <span data-i18n="status.account.newpass">New password</span>
+            <span class="acct-opt" data-i18n="status.account.blank">(leave blank to keep current)</span>
+          </label>
+          <input class="acct-in" id="acctPass" type="password" autocomplete="new-password">
 
-        <div class="acct-warn" data-i18n="status.account.warn">⚠ Devices that sign in with these credentials (Iris, Dio) must be re-flashed with the new password before they can reconnect.</div>
-        <div class="acct-msg" id="acctMsg" role="status" hidden></div>
-        <button class="wg-toggle" id="acctSaveBtn" type="submit" data-i18n="status.account.save">Save changes</button>
-      </form>
+          <label class="acct-l" for="acctConfirm" data-i18n="status.account.confirm">Confirm new password</label>
+          <input class="acct-in" id="acctConfirm" type="password" autocomplete="new-password">
+
+          <div class="acct-msg" id="acctMsg" role="status" hidden></div>
+          <button class="wg-toggle" id="acctSaveBtn" type="submit" data-i18n="status.account.save">Save changes</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- ══ Paired devices — read-only glance. Key entry / reveal / rotate lives in
+         each device's own Wi-Fi setup screen, NOT here. ══════════════════════════ -->
+    <div class="card">
+      <div class="card-title"><span data-i18n="status.devices">Paired Devices</span></div>
+      <div id="devGlance" class="dg-list"><div class="dg-row" data-i18n="status.devices.loading">Loading…</div></div>
+      <div class="dg-note" data-i18n="status.devices.note">Each device keeps its own pairing key, so changing your password won't disconnect them. Set or change a key from that device's Wi-Fi setup screen.</div>
     </div>
 
     <!-- ══ Utility Tray — Timer + Calculator (portable component) ══════════════
@@ -1713,13 +1763,20 @@ const SID = (() => {
 // are machine-drafted then human-reviewed. Missing key → English, then the key
 // itself — never a blank label. UI language follows the one LANGUAGE setting.
 const I18N = { locale: 'en', dict: {}, en: {} };
-function t(key) { const v = I18N.dict[key] ?? I18N.en[key]; return (v === undefined || v === null) ? key : v; }
+// Translation lookup: current locale → English → null. NEVER returns the raw key.
+function tr(key) { const v = I18N.dict[key] ?? I18N.en[key]; return (v === undefined || v === null) ? null : v; }
+// JS-generated strings: translated value, else the caller's authored fallback,
+// else '' — the raw key name is never shown to a user.
+function t(key, fallback) { const v = tr(key); return v !== null ? v : (fallback !== undefined ? fallback : ''); }
 function applyI18n(root) {
   const r = root || document;
-  r.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
-  r.querySelectorAll('[data-i18n-html]').forEach(el => { el.innerHTML = t(el.dataset.i18nHtml); });
-  r.querySelectorAll('[data-i18n-ph]').forEach(el => { el.setAttribute('placeholder', t(el.dataset.i18nPh)); });
-  r.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); });
+  // Only overwrite when a translation EXISTS; otherwise leave the element's authored
+  // English (already in the HTML) untouched — so a missing key can never render as
+  // its raw "status.foo.bar" key string, including before en.json has loaded.
+  r.querySelectorAll('[data-i18n]').forEach(el => { const v = tr(el.dataset.i18n); if (v !== null) el.textContent = v; });
+  r.querySelectorAll('[data-i18n-html]').forEach(el => { const v = tr(el.dataset.i18nHtml); if (v !== null) el.innerHTML = v; });
+  r.querySelectorAll('[data-i18n-ph]').forEach(el => { const v = tr(el.dataset.i18nPh); if (v !== null) el.setAttribute('placeholder', v); });
+  r.querySelectorAll('[data-i18n-title]').forEach(el => { const v = tr(el.dataset.i18nTitle); if (v !== null) el.title = v; });
 }
 async function loadLocale(lang) {
   if (!Object.keys(I18N.en).length) {
@@ -1745,7 +1802,7 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
   document.getElementById('pane' + t.dataset.pane).classList.add('active');
-  if (t.dataset.pane === 'Status') { wgRefresh(); egressRefresh(); langInit(); acctInit(); }
+  if (t.dataset.pane === 'Status') { wgRefresh(); egressRefresh(); langInit(); acctInit(); dgInit(); }
 }));
 
 // ── Language & Voice card ──────────────────────────────────────────────────────
@@ -1959,7 +2016,7 @@ async function refreshStatus() {
   }
 }
 refreshStatus();
-wgRefresh(); egressRefresh(); acctInit();           // WireGuard + Account cards live in Status (default pane)
+wgRefresh(); egressRefresh(); acctInit(); dgInit();  // WireGuard + Account + Paired-devices cards live in Status (default pane)
 setInterval(refreshStatus, 10_000);
 
 // ── chat + audio ──────────────────────────────────────────────────────────────
@@ -2340,10 +2397,30 @@ document.getElementById('egToggleBtn')?.addEventListener('click', egressToggle);
 async function acctInit() {
   try {
     const d = await fetch('/account').then(r => r.json());
+    const who = document.getElementById('acctWhoami');
+    if (who && d.username) who.textContent = d.username;
     const u = document.getElementById('acctUser');
     if (u && d.username && !u.value) u.value = d.username;   // prefill, don't clobber edits
   } catch (e) { /* non-fatal — form still works */ }
 }
+// ── Account modal open/close ──────────────────────────────────────────────────
+function acctModal(open) {
+  const m = document.getElementById('acctModal');
+  if (!m) return;
+  m.hidden = !open;
+  if (open) {
+    const msg = document.getElementById('acctMsg'); if (msg) msg.hidden = true;
+    setTimeout(() => document.getElementById('acctCurrent')?.focus(), 30);
+  }
+}
+document.getElementById('acctOpenBtn')?.addEventListener('click', () => acctModal(true));
+document.getElementById('acctCloseBtn')?.addEventListener('click', () => acctModal(false));
+document.getElementById('acctModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'acctModal') acctModal(false);      // click the backdrop to close
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !document.getElementById('acctModal')?.hidden) acctModal(false);
+});
 document.getElementById('acctForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const msg = document.getElementById('acctMsg');
@@ -2378,6 +2455,34 @@ document.getElementById('acctForm')?.addEventListener('submit', async (e) => {
     btn.disabled = false;
   }
 });
+
+// ── Paired devices — READ-ONLY glance (Status pane) ───────────────────────────
+// Key entry / reveal / rotate deliberately lives in each device's own Wi-Fi setup
+// screen, not here. This only shows whether a device is paired + when last seen.
+function _dgAgo(iso) {
+  if (!iso) return '';
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+function _esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+async function dgInit() {
+  const list = document.getElementById('devGlance');
+  if (!list) return;
+  let devices;
+  try { devices = (await fetch('/devices/keys').then(r => r.json())).devices; }
+  catch (e) { list.innerHTML = '<div class="dg-row">Could not load device status.</div>'; return; }
+  list.innerHTML = devices.map(d => {
+    const on = !!d.configured;
+    const state = d.last_seen ? `seen ${_dgAgo(d.last_seen)}` : (on ? 'paired' : 'not paired');
+    return `<div class="dg-row">
+        <span class="dg-name"><span class="dg-dot ${on ? 'on' : 'off'}"></span>${_esc(d.label)}</span>
+        <span class="dg-state">${_esc(state)}</span>
+      </div>`;
+  }).join('');
+}
 
 async function wgToggle() {
   const btn    = document.getElementById('wgToggleBtn');
