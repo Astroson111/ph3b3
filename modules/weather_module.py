@@ -26,15 +26,20 @@ _WEATHER_INTENT_RE = re.compile(
     r"\bhow'?s the weather\b",
     re.I,
 )
-# Hardware temperature is a DIFFERENT domain (system_module). Don't let the weather
-# claim swallow "cpu temp" / "gpu temperature" / "system temps".
-_HARDWARE_TEMP_RE = re.compile(
+# Steps the weather claim aside for words it SHARES with other domains:
+#  - hardware temperature ("cpu temp", "gpu temperature", "system temps" → system_module)
+#  - business "forecast" ("sales/economic/revenue forecast" → not weather). Bare
+#    "forecast" and "the forecast" STILL claim weather (the brief requires "look up
+#    the forecast" to hit weather) — only these explicit non-weather collocations opt out.
+_WEATHER_EXCLUDE_RE = re.compile(
     r"\b(?:cpu|gpu|processor|graphics card|system|server|nyx|drive|disk|nvme|battery)\b"
-    r"[\w\s]*\btemp\w*\b|\btemp\w*\b[\w\s]*\b(?:cpu|gpu|processor|system|nvme)\b",
+    r"[\w\s]*\btemp\w*\b|\btemp\w*\b[\w\s]*\b(?:cpu|gpu|processor|system|nvme)\b"
+    r"|\b(?:sales|economic|economy|financial|revenue|budget|market|stock|earnings|"
+    r"demand|traffic|business|growth) forecast\b",
     re.I,
 )
 intent_registry.register("weather", "weather_current", _WEATHER_INTENT_RE,
-                         exclude=_HARDWARE_TEMP_RE)
+                         exclude=_WEATHER_EXCLUDE_RE)
 
 # Uses wttr.in — no API key, curl-based, works offline-friendly
 # Also supports OpenWeatherMap if you have a free key

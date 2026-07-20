@@ -145,6 +145,27 @@ def test_hardware_temperature_not_stolen_by_weather():
         assert claim is None or claim.module != "weather", f"weather stole hardware temp: {p!r}"
 
 
+def test_time_does_not_steal_date_of_an_event():
+    # "what's the date OF X" is a lookup, not a clock read — must NOT be time.
+    for p in ("what's the date of the next SpaceX launch",
+              "what is the date of independence day",
+              "what's the date of the concert",
+              "what's the date for the deadline"):
+        claim = intent_registry.resolve(p)
+        assert claim is None or claim.module != "time", f"time returned today for a 'date of' query: {p!r}"
+
+
+def test_business_forecast_not_stolen_by_weather():
+    # "forecast" is shared with business/finance; those collocations opt out...
+    for p in ("sales forecast for Q3", "economic forecast", "revenue forecast next year"):
+        claim = intent_registry.resolve(p)
+        assert claim is None or claim.module != "weather", f"weather stole business forecast: {p!r}"
+    # ...but bare / weather "forecast" still claims weather (brief requirement).
+    for p in ("look up the forecast", "what's the forecast", "the forecast for tomorrow"):
+        claim = intent_registry.resolve(p)
+        assert claim is not None and claim.module == "weather", f"weather forecast regressed: {p!r}"
+
+
 def test_weather_output_carries_both_units():
     # °F primary, °C derived numerically at the data layer — not left to the model.
     dual = weather_module._dual_units

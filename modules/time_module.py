@@ -34,7 +34,9 @@ _TIME_INTENT_RE = re.compile(
     r"\bcurrent time\b|"
     r"\btell me the time\b|"
     r"\btime is it (?:right )?now\b|"
-    r"\bwhat(?:'?s| is) (?:the |today'?s )?date\b|"
+    # bare "what's the date" is TODAY — but NOT "what's the date OF/FOR <event>"
+    # (that's a factual/lookup question, not a clock read), so guard with a lookahead.
+    r"\bwhat(?:'?s| is) (?:the |today'?s )?date\b(?!\s+(?:of|for)\b)|"
     r"\btoday'?s date\b|"
     r"\bwhat day is it(?: today)?\b|"
     r"\bwhat(?:'?s| is) the date today\b",
