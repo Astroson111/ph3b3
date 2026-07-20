@@ -17,6 +17,7 @@ sys.path.insert(0, str(REPO / "modules"))
 
 import intent_registry          # noqa: E402
 import weather_module           # noqa: E402  (import → registers the weather claim)
+import time_module              # noqa: E402  (import → registers the time claim)
 import metis                    # noqa: E402
 
 
@@ -79,6 +80,62 @@ def test_forced_search_gate_not_regressed():
     for p in FORCED_SEARCH_PHRASES:
         assert intent_registry.resolve(p) is None, f"forced-search query wrongly claimed: {p!r}"
         assert metis.is_search_intent(p), f"forced-search gate regressed for {p!r}"
+
+
+# ── Time module ───────────────────────────────────────────────────────────────
+TIME_PHRASES = [
+    "what time is it",
+    "what's the time",
+    "what is the current time",
+    "what time is it right now",
+    "tell me the time",
+    "what's the date",
+    "what is today's date",
+    "today's date",
+    "what day is it",
+    "what day is it today",
+]
+
+# Shares the word "time"/"date" but belongs to another module — time must NOT claim.
+NOT_TIME_PHRASES = [
+    "set a timer for 5 minutes",
+    "how much time is left on my timer",
+    "what time is my meeting",
+    "how long until dinner",
+    "when is my next appointment",
+    "remind me in 10 minutes",
+    "what time does the store open",
+]
+
+
+def test_all_time_phrasings_claimed_by_time():
+    for p in TIME_PHRASES:
+        claim = intent_registry.resolve(p)
+        assert claim is not None, f"time phrasing not claimed: {p!r}"
+        assert claim.module == "time", f"{p!r} claimed by {claim.module}, expected time"
+
+
+def test_time_does_not_steal_timer_calendar_or_durations():
+    for p in NOT_TIME_PHRASES:
+        claim = intent_registry.resolve(p)
+        assert claim is None or claim.module != "time", f"time wrongly claimed: {p!r}"
+
+
+def test_time_module_answers_deterministically_with_no_apology():
+    out = time_module.TimeModule().now()
+    assert out.startswith("It's ") and " on " in out, f"unexpected time output: {out!r}"
+    for bad in ("sorry", "apolog", "unfortunately", "i think", "probably"):
+        assert bad not in out.lower(), f"non-deterministic/apology language: {bad!r}"
+
+
+def test_weather_and_time_do_not_overlap():
+    # The two dedicated claims must not fight over any of each other's phrasings.
+    for p in TIME_PHRASES:
+        c = intent_registry.resolve(p)
+        assert c and c.module == "time", f"weather leaked into time phrasing: {p!r}"
+    for p in WEATHER_PHRASES:
+        c = intent_registry.resolve(p)
+        assert c and c.module == "weather", f"time leaked into weather phrasing: {p!r}"
 
 
 def test_hardware_temperature_not_stolen_by_weather():

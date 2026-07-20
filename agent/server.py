@@ -126,6 +126,7 @@ from timer_module import TimerModule
 from reminders_module import RemindersModule
 from calendar_module import CalendarModule
 from weather_module import WeatherModule
+from time_module import TimeModule
 from resume_module import ResumeModule
 from network_module import NetworkModule
 from bluetooth_module import BluetoothModule
@@ -320,6 +321,7 @@ timer = TimerModule()
 reminders = RemindersModule()
 calendar = CalendarModule()
 weather = WeatherModule()
+clock = TimeModule()
 resume = ResumeModule()
 network = NetworkModule()
 bluetooth = BluetoothModule()
@@ -925,6 +927,8 @@ async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
     branch inside the request path."""
     if claim.module == "weather":
         return await _answer_weather(user_msg, session_id)
+    if claim.module == "time":
+        return clock.now()                               # host clock, deterministic, no model
     log.error("[intent] claim %r has no dispatch — falling through", claim.module)
     return None
 
