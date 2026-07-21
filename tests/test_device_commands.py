@@ -21,6 +21,18 @@ def test_wake_word_and_punctuation_stripped():
     assert dc.parse("  play track 9!  ") == {"action": "play_track", "index": 9}
 
 
+def test_natural_polite_phrasing():
+    # Polite framing around the command must not defeat the match (live-voice cases).
+    assert dc.parse("Hey Phoebe, can you play track one please?") == {"action": "play_track", "index": 1}
+    assert dc.parse("Hey, can you play track one, please?") == {"action": "play_track", "index": 1}
+    assert dc.parse("Could you play track 3 for me") == {"action": "play_track", "index": 3}
+    assert dc.parse("please play track two") == {"action": "play_track", "index": 2}
+    assert dc.parse("just play track five thanks") == {"action": "play_track", "index": 5}
+    assert dc.parse("could you stop the music please") == {"action": "stop"}
+    assert dc.parse("can you turn it up") == {"action": "volume_up"}
+    assert dc.parse("would you turn it down please") == {"action": "volume_down"}
+
+
 def test_stop():
     for u in ("stop the music", "stop playing", "pause the track", "stop", "pause the audio", "stop the song"):
         assert dc.parse(u) == {"action": "stop"}, u

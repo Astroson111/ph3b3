@@ -49,13 +49,34 @@ def _to_int(token: str):
     return _NUM_WORDS.get(token)
 
 
+# Polite request framing around a command. Stripped (repeatedly) so natural speech
+# — "can you play track one please" — reduces to the bare command, WITHOUT loosening
+# the whole-utterance anchor (so "tell me a story about a play track" and
+# "play track three after dinner" still don't match — their extra words aren't
+# framing and survive the strip, breaking the anchor).
+_LEADIN_RE = re.compile(
+    r"^(?:can you|could you|would you|will you|can u|"
+    r"go ahead and|i want(?: you)? to|i'?d like(?: you)? to|i would like(?: you)? to|"
+    r"please|hey|ok|okay|um+|uh+|just|kindly|let'?s|now)\b[\s,]*", re.I)
+_TRAIL_RE = re.compile(
+    r"[\s,]*\b(?:please|thanks|thank you|now|for me|for us|real quick|ok|okay)\b[.?!]*$", re.I)
+
+
 def _normalize(text: str) -> str:
-    """Lowercase, strip a leading wake word, drop surrounding punctuation, collapse
-    whitespace. What remains must be the command and nothing else."""
+    """Lowercase-ish, strip a leading wake word + polite request framing (lead-in and
+    trailing), drop surrounding punctuation, collapse whitespace. What remains must be
+    the command and nothing else."""
     t = (text or "").strip()
     t = _WAKE_RE.sub("", t)
     t = t.strip().strip(".,!?;:\"' ")
-    return re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"\s+", " ", t).strip()
+    for _ in range(4):                                   # peel repeated framing
+        n = _LEADIN_RE.sub("", t).strip().strip(".,!?;:\"' ")
+        n = _TRAIL_RE.sub("", n).strip().strip(".,!?;:\"' ")
+        if n == t:
+            break
+        t = n
+    return t
 
 
 def parse(text: str):
