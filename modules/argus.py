@@ -115,21 +115,25 @@ class ArgusStore:
                     rssi          INTEGER,                -- dBm, nullable
                     uptime        INTEGER,                -- seconds, nullable
                     firmware_hash TEXT,
-                    free_heap     INTEGER                 -- bytes, nullable
+                    free_heap     INTEGER,                -- bytes, nullable
+                    charging      INTEGER                 -- 1=charging, 0=discharging, NULL=unknown
                 )""")
             c.execute("CREATE INDEX IF NOT EXISTS idx_hb_device_ts ON heartbeats(device_id, ts)")
+            # Migration: add `charging` to a pre-existing table (older DBs).
+            if "charging" not in {r[1] for r in c.execute("PRAGMA table_info(heartbeats)")}:
+                c.execute("ALTER TABLE heartbeats ADD COLUMN charging INTEGER")
             # Argus's own liveness — its gap is visible here if the daemon dies.
             c.execute("CREATE TABLE IF NOT EXISTS argus_self (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL)")
 
     # ── writes ──
     def record_heartbeat(self, device_id: str, *, battery=None, rssi=None,
-                         uptime=None, firmware_hash=None, free_heap=None, ts=None) -> None:
+                         uptime=None, firmware_hash=None, free_heap=None, charging=None, ts=None) -> None:
         ts = int(ts if ts is not None else time.time())
         with self._conn() as c:
             c.execute(
-                "INSERT INTO heartbeats(device_id,ts,battery,rssi,uptime,firmware_hash,free_heap) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (device_id, ts, battery, rssi, uptime, firmware_hash, free_heap),
+                "INSERT INTO heartbeats(device_id,ts,battery,rssi,uptime,firmware_hash,free_heap,charging) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (device_id, ts, battery, rssi, uptime, firmware_hash, free_heap, charging),
             )
 
     def record_self(self, ts=None) -> None:
@@ -189,7 +193,7 @@ class ArgusStore:
         if row is None:
             return {"device_id": device_id, "state": SILENT, "reason": "never reported",
                     "last_seen": None, "age_s": None, "firmware_drift": drift, "contract": contract,
-                    "battery": None, "rssi": None, "free_heap": None, "firmware_hash": None}
+                    "battery": None, "charging": None, "rssi": None, "free_heap": None, "firmware_hash": None}
 
         age = now - row["ts"]
         sick_reason = _is_sick(row, contract)
@@ -205,7 +209,8 @@ class ArgusStore:
         return {
             "device_id": device_id, "state": state, "reason": reason,
             "last_seen": row["ts"], "age_s": int(age), "firmware_drift": drift,
-            "battery": row.get("battery"), "rssi": row.get("rssi"),
+            "battery": row.get("battery"), "charging": row.get("charging"),
+            "rssi": row.get("rssi"),
             "free_heap": row.get("free_heap"), "uptime": row.get("uptime"),
             "firmware_hash": row.get("firmware_hash"), "contract": contract,
         }

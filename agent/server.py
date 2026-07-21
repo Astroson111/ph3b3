@@ -5,6 +5,7 @@ import base64
 import subprocess
 from contextlib import asynccontextmanager
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import json
 import logging
 import os
@@ -450,6 +451,7 @@ TOOLS = [
     {"type":"function","function":{"name":"calendar_today","description":"Get today calendar events","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"calendar_week","description":"Get this weeks calendar","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"weather_current","description":"Get current weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}},
+    {"type":"function","function":{"name":"get_time","description":"Get the CURRENT date and time (weekday, date, clock time, timezone). CALL THIS for 'what time is it', 'what's today's date', 'what day is it' — never answer time/date from memory.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"weather_ghost_hunting","description":"Weather field notes for ghost hunting","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}},
     {"type":"function","function":{"name":"extract_job_posting","description":"Analyze a job posting from a URL or pasted text. Returns structured breakdown: job title, company, location, salary (only if stated — never hallucinated), hard requirements, soft requirements, red flags, culture signals, and a one-line verdict. Use whenever the user shares a job link or pastes a job description.","parameters":{"type":"object","properties":{"source":{"type":"string","description":"A URL to the job posting page, or the full pasted text of the posting"}},"required":["source"]}}},
     {"type":"function","function":{"name":"profile_get","description":"Read the candidate's full stored profile: skills, experience, certifications, projects, notes. Call this before match_candidate_to_job to confirm the profile has data.","parameters":{"type":"object","properties":{}}}},
@@ -685,6 +687,7 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "calendar_today": result = calendar.today()
         elif name == "calendar_week": result = calendar.week()
         elif name == "weather_current": result = weather.current(args.get("location"))
+        elif name == "get_time": result = f"It is {_now_full()}."
         elif name == "weather_ghost_hunting": result = weather.good_for_ghost_hunting(args.get("location"))
         elif name == "extract_job_posting": result = resume.extract_job_posting(args["source"])
         elif name == "profile_get": result = resume.profile_get()
@@ -973,6 +976,8 @@ async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
         return await _answer_weather(user_msg, session_id)
     if claim.module == "time":
         return clock.now()                               # host clock, deterministic, no model
+    if claim.module == "fleet":
+        return _answer_fleet(user_msg)                   # Argus latest, freshness always attached
     log.error("[intent] claim %r has no dispatch — falling through", claim.module)
     return None
 
@@ -1350,6 +1355,17 @@ def _vision_intercept(msg: str, device: str = "nyx"):
     return "take_photo"
 
 
+_TZ = ZoneInfo("America/New_York")
+
+
+def _now_full() -> str:
+    """Current local timestamp, constructed FRESH on every call — weekday, date,
+    clock time, TZ abbrev, e.g. 'Tuesday, July 21, 2026, 3:42 PM EDT'. tz-aware
+    (ZoneInfo, no naive now()) so DST is correct. Shared by the ambient context
+    injection and the get_time tool so both always agree."""
+    return datetime.now(_TZ).strftime("%A, %B %-d, %Y, %-I:%M %p %Z")
+
+
 async def _run_chat_pipeline(body: dict, request: Request):
     """Shared /chat brain: wake-gate → recitation → triage → inference.
 
@@ -1455,10 +1471,9 @@ async def _run_chat_pipeline(body: dict, request: Request):
     if _lang_dir:
         messages.insert(1, {"role": "system", "content": _lang_dir})
 
-    # ── Live datetime (additive, ephemeral — read fresh every request) ────────
-    _now = datetime.now().astimezone()
-    _dt_str = _now.strftime("%A, %B %-d, %Y, %-I:%M %p")
-    _dt_note = {"role": "system", "content": f"Current date and time: {_dt_str}."}
+    # ── Live datetime (additive, ephemeral — constructed FRESH every request) ──
+    # Full timestamp incl. weekday + TZ abbrev, tz-aware (ZoneInfo, DST-correct).
+    _dt_note = {"role": "system", "content": f"Current date and time: {_now_full()}."}
     messages.insert(1, _dt_note)
 
     # ── Web-search discipline (Metis) — anti-fabrication, system-layer, ephemeral ─
@@ -2759,23 +2774,89 @@ async def devices():
     return {"devices": dict(_device_roster)}
 
 # ── Argus: read-only fleet observability ──────────────────────────────────────
+def _fleet_ago(age_s) -> str:
+    """Human freshness for a heartbeat age. 'never' if never seen."""
+    if age_s is None:
+        return "never"
+    a = int(age_s)
+    if a < 15:    return "just now"
+    if a < 60:    return f"{a}s ago"
+    if a < 3600:  return f"{a // 60} min ago"
+    if a < 86400: return f"{a // 3600}h ago"
+    return f"{a // 86400}d ago"
+
+
 def _fleet_status_summary() -> str:
-    """Concise fleet summary for the fleet_status tool (values audited: state +
-    last-seen + battery/RSSI + drift, nothing Argus could act on)."""
+    """Concise fleet summary for the fleet_status tool. Freshness is ALWAYS attached
+    to every reading (so a stale/silent value can never be spoken as current), and a
+    missing/absent value is stated plainly — Phoebe never invents a number. Values
+    audited: state + last-seen + battery/charging/RSSI + drift, nothing actionable."""
     contracts = load_contracts()
     lines = []
     for ev in argus_store.fleet(contracts):
         d, s = ev["device_id"], ev["state"]
+        seen = _fleet_ago(ev.get("age_s"))
+        batt = ev.get("battery")
+        chg  = ev.get("charging")
+        batt_s = ""
+        if batt is not None:
+            batt_s = f", battery {batt}%" + (" (charging)" if chg == 1 else "")
         if s == "SILENT":
-            lines.append(f"{d}: SILENT (last seen {_argus_iso(ev['last_seen']) or 'never'}"
-                         + (f", last state before silence follows contract" if ev['last_seen'] else "") + ")")
+            # Report last-known, clearly labelled STALE — never as a live number.
+            last = f", last battery {batt}% (STALE)" if batt is not None else ""
+            lines.append(f"{d}: SILENT — last seen {seen}{last}")
         else:
             extra = []
-            if ev.get("battery") is not None: extra.append(f"battery {ev['battery']}%")
-            if ev.get("rssi") is not None:    extra.append(f"RSSI {ev['rssi']}dBm")
-            if ev.get("firmware_drift"):      extra.append("FIRMWARE DRIFT")
-            lines.append(f"{d}: {s}" + (f" ({', '.join(extra)})" if extra else ""))
+            if ev.get("rssi") is not None: extra.append(f"RSSI {ev['rssi']}dBm")
+            if ev.get("firmware_drift"):   extra.append("FIRMWARE DRIFT")
+            tail = (f" — {', '.join(extra)}" if extra else "")
+            lines.append(f"{d}: {s}{batt_s} — as of {seen}{tail}")
     return "Fleet status:\n" + "\n".join(lines) if lines else "Fleet status: no devices known yet."
+
+
+# ── Fleet/battery intent (deterministic, pre-LLM) — the weak model won't reliably
+# call the fleet_status tool, so battery/fleet questions route here for a factual
+# answer with freshness ALWAYS attached; the tool stays as an LLM fallback. ───────
+_FLEET_LABEL = {"stackchan": "Dio", "iris": "Iris", "nyx": "Nyx", "rhea": "Rhea",
+                "argus": "Argus", "metis": "Metis", "comfyui": "ComfyUI"}
+_FLEET_ALIASES = {
+    "stackchan": ("dio", "stackchan", "stack-chan", "stack chan"), "iris": ("iris",),
+    "nyx": ("nyx",), "rhea": ("rhea", "backup drive"), "argus": ("argus",),
+    "metis": ("metis",), "comfyui": ("comfyui", "morpheus"),
+}
+_FLEET_INTENT_RE = re.compile(
+    r"\bfleet\b|\bdevice(?:s)? (?:status|health|online|awake|breathing|up)\b|"
+    r"\b(?:battery|charge|charging|power) (?:level|status|percent|left|remaining)\b|"
+    r"\bhow much (?:battery|charge|power)\b|\bwhat'?s? [\w' ]*\bbattery\b|"
+    r"\b(?:iris|dio|stackchan|nyx|rhea)'?s?\s+battery\b|"
+    r"\bis (?:iris|dio|stackchan|nyx|rhea|argus|metis|comfyui) (?:online|awake|up|there|breathing|charging|alive|charged)\b|"
+    r"\bare the (?:devices|badges) (?:online|up|awake|breathing)\b",
+    re.I,
+)
+
+
+def _fleet_one(name: str, ev: dict) -> str:
+    """One device, spoken — freshness always attached; stale/absent stated plainly."""
+    state, seen = ev["state"], _fleet_ago(ev.get("age_s"))
+    batt, chg = ev.get("battery"), ev.get("charging")
+    if state == "SILENT":
+        base = f"{name} is silent — last checked in {seen}."
+        return base + (f" Its last-known battery was {batt}%, but that's stale, not a current reading." if batt is not None else "")
+    if batt is None:
+        return f"{name} is {state.lower()} as of {seen}, but it doesn't report a battery level."
+    return f"{name} is at {batt}%{', charging' if chg == 1 else ''}, as of {seen}."
+
+
+def _answer_fleet(msg: str) -> str:
+    m = (msg or "").lower()
+    fleet = {ev["device_id"]: ev for ev in argus_store.fleet(load_contracts())}
+    for dev, names in _FLEET_ALIASES.items():           # a specific device named?
+        if dev in fleet and any(n in m for n in names):
+            return _fleet_one(_FLEET_LABEL.get(dev, dev), fleet[dev])
+    return _fleet_status_summary()                       # else the whole fleet
+
+
+intent_registry.register("fleet", "fleet_status", _FLEET_INTENT_RE)
 
 @app.post("/argus/heartbeat")
 async def argus_heartbeat(request: Request):
@@ -2805,11 +2886,13 @@ async def argus_heartbeat(request: Request):
         try: return int(v)
         except (TypeError, ValueError): return None
     fw = data.get("firmware_hash")
+    _c = data.get("charging")                 # JSON bool | null → 1 | 0 | None (never a guess)
     argus_store.record_heartbeat(
         device,
         battery=_i(data.get("battery")), rssi=_i(data.get("rssi")),
         uptime=_i(data.get("uptime")), free_heap=_i(data.get("free_heap")),
         firmware_hash=(str(fw)[:64] if fw else None),
+        charging=(None if _c is None else (1 if _c else 0)),
     )
     return {"ok": True}
 

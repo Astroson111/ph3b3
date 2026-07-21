@@ -2125,7 +2125,7 @@ async function refreshFleet() {
     fleetList.innerHTML = fleet.map(d => {
       const dot = FLEET_DOT[d.state] || 'err';
       const meta = [];
-      if (d.battery != null) meta.push(d.battery + '%');
+      if (d.battery != null) meta.push(d.battery + '%' + (d.charging === 1 ? ' ⚡' : ''));
       if (d.rssi != null)    meta.push(d.rssi + ' dBm');
       // SILENT shows "last seen …"; others show freshness of the last report.
       const last = d.state === 'SILENT'

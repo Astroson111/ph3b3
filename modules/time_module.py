@@ -16,6 +16,9 @@ project; this is just correct time-telling.
 import re
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_TZ = ZoneInfo("America/New_York")
 
 try:
     import intent_registry
@@ -59,7 +62,7 @@ class TimeModule:
     def now(self, _ignored=None) -> str:
         """Current local date + time as a plain sentence, straight from the host
         clock. No apology language, no model involvement — always exact."""
-        n = datetime.now().astimezone()
+        n = datetime.now(_TZ)   # tz-aware (ZoneInfo), DST-correct — no naive now()
         clock = n.strftime("%-I:%M %p")
         stamp = n.strftime("%A, %B %-d, %Y")
         tz = n.strftime("%Z")
