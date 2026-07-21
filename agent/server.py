@@ -142,6 +142,7 @@ import morpheus
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
 import intent_registry           # dedicated-module intent claims (precedence over Metis)
 import device_auth               # per-device auth keys (Iris/Dio), decoupled from the human login
+import device_commands           # Iris track-playback voice-command gate (pre-LLM intercept)
 from triage import triage_gate   # clarification guard before main inference
 
 # ── Dio state telemetry (UDP) ────────────────────────────────────────────────
@@ -1833,6 +1834,17 @@ async def transcribe_audio(request: Request, body: dict):
             return {"text": "", "error": None}
         log.warning("[DBG-MIC] dev=%s transcript=%r err=%s", _device, _text[:80], result.get("error"))
         _persist_capture(_device, audio_bytes, _text)   # Argus captures feed (read-only)
+        # ── Device-command gate (Iris track playback) — pre-LLM intercept ─────
+        # Iris only. A matched utterance returns a structured command for the
+        # firmware to drive its AudioPlayer instead of a conversational reply — the
+        # LLM is skipped entirely. Additive: no device_command = unchanged behavior.
+        # play_track range-validation is firmware-side (it knows the SD track count).
+        if _device == "iris":
+            _cmd = device_commands.parse(_text)
+            if _cmd:
+                log.info("[device-cmd] iris %r → %s", _text[:60], _cmd)
+                return {"text": _text, "error": None, "device_command": _cmd,
+                        "speak": device_commands.confirmation(_cmd)}
         # Native photo loop: tell Dio (and only Dio) to run her on-device capture
         # loop when this utterance is a vision request routed to HER camera. The
         # firmware branches on "camera":"dio"; absent/other → normal chat.
