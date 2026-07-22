@@ -30,3 +30,7 @@ trafilatura
 # Mnemosyne — shared persistent memory spine (in-process, CPU-only, no GPU)
 sqlite-vec>=0.1.9
 sentence-transformers>=5.0.0
+# Audio monitor — Silero VAD voice-endpointing + level meter (CPU, no torch).
+# Model file models/silero_vad.onnx is gitignored; fetch with:
+#   curl -sSL -o models/silero_vad.onnx https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx
+onnxruntime>=1.20

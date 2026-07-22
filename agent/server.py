@@ -144,6 +144,7 @@ import metis                      # web-search egress (SearXNG); first deliberat
 import intent_registry           # dedicated-module intent claims (precedence over Metis)
 import device_auth               # per-device auth keys (Iris/Dio), decoupled from the human login
 import device_commands           # Iris track-playback voice-command gate (pre-LLM intercept)
+import audio_monitor             # Silero VAD endpointing + level meter (chat cutoff / ghost readout)
 from triage import triage_gate   # clarification guard before main inference
 
 # ── Dio state telemetry (UDP) ────────────────────────────────────────────────
@@ -1682,6 +1683,44 @@ async def _tts_chunk_b64(sid, n):
     return st["audio"][n]
 
 
+# ── Goodbye expression judge (server-driven face reaction, LLM, fail-safe) ─────
+# On a farewell turn (firmware sends X-Ph3b3-Farewell:1), NYX — not the firmware's
+# crude keyword match — decides how Ph3b3 FEELS signing off, judged from how the
+# whole chat went. One isolated, tightly-constrained Hermes3 call with a hard
+# fallback to 'warm', so a goodbye is never unkind and a model flub never shows.
+# Scoped to goodbye only; non-farewell turns never call this.
+_GOODBYE_EXPRS = ("warm", "neutral", "amused", "excited")
+
+async def _judge_goodbye_expression(session) -> str:
+    try:
+        msgs = [m for m in session.messages() if m.get("role") in ("user", "assistant")][-8:]
+        if not msgs:
+            return "warm"
+        convo = "\n".join(
+            f"{'User' if m['role'] == 'user' else 'Ph3b3'}: {str(m.get('content', ''))[:200]}"
+            for m in msgs)
+        sysp = ("Choose ONE facial expression for the assistant Ph3b3 as she says goodbye, "
+                "based on how the conversation felt overall. Reply with EXACTLY ONE lowercase "
+                "word and nothing else, chosen from: warm, neutral, amused, excited. "
+                "warm = friendly, kind, or caring chat; amused = playful, teasing, or funny; "
+                "excited = energizing, fascinating, or enthusiastic; neutral = brief, flat, or "
+                "businesslike. When in doubt, answer warm.")
+        payload = {"model": LIGHT_MODEL, "stream": False,
+                   "messages": [{"role": "system", "content": sysp},
+                                {"role": "user", "content": f"Conversation:\n{convo}\n\nOne word:"}],
+                   "options": {"temperature": 0.2, "num_predict": 4, "num_ctx": 2048}}
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
+            r.raise_for_status()
+            raw = (r.json().get("message", {}) or {}).get("content", "") or ""
+        toks = raw.strip().lower().split()
+        word = toks[0].strip('.,!?"\'`*') if toks else ""
+        return word if word in _GOODBYE_EXPRS else "warm"
+    except Exception as e:
+        log.info("[goodbye-expr] judge failed (%s) → warm", e)
+        return "warm"
+
+
 @app.post("/chat/stream")
 async def chat_stream_endpoint(body: dict, request: Request):
     """Chunked-TTS variant of /chat — same brain via _run_chat_pipeline, but
@@ -1692,12 +1731,20 @@ async def chat_stream_endpoint(body: dict, request: Request):
         return {"response": "", "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}
     _LAST_REPLY[body.get("session_id", "default")] = reply   # echo-guard memory
+    # Goodbye reaction (farewell turns only): let Nyx judge how she FEELS signing
+    # off, from how the chat went — not the firmware keyword match. Isolated + fail-
+    # safe; skipped entirely on normal turns so it never adds latency there.
+    _expr = ""
+    if request.headers.get("X-Ph3b3-Farewell", "") == "1":
+        _expr = await _judge_goodbye_expression(get_session(body.get("session_id", "default")))
+        log.info("[goodbye-expr] chose %r", _expr)
     # Text-only language: return the reply text and synthesize nothing (no stream,
     # no Alba). Devices render the text and attempt no audio.
     plan = voices.output_for_response()
     if plan["text_only"]:
         return {"response": reply, "stream_id": "", "chunk_count": 0,
-                "chunk_index": -1, "audio": "", "last": True, "text_only": True}
+                "chunk_index": -1, "audio": "", "last": True, "text_only": True,
+                "expression": _expr}
     chunks, out_voice = split_for_tts(reply), plan["voice"]
     if not chunks:
         return {"response": reply, "stream_id": "", "chunk_count": 0,
@@ -1710,8 +1757,8 @@ async def chat_stream_endpoint(body: dict, request: Request):
     # firmware can always peek it in its 6 KB head buffer, however long the reply
     # is — Dio shows each chunk's text while that chunk plays, syncing to her voice.
     return {"stream_id": sid, "chunk_count": len(chunks), "chunk_index": 0,
-            "text": chunks[0], "audio": audio0 or "", "last": len(chunks) == 1,
-            "response": reply}
+            "text": chunks[0], "expression": _expr, "audio": audio0 or "",
+            "last": len(chunks) == 1, "response": reply}
 
 
 @app.get("/tts/chunk/{stream_id}/{n}")
@@ -1777,6 +1824,77 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str = "default"):
             await websocket.send_json({"response":response,"emotion":emotion})
     except WebSocketDisconnect:
         log.info(f"Stack-chan disconnected: {session_id}")
+
+
+def _ws_authed(ws: WebSocket) -> bool:
+    """Authenticate a WebSocket handshake the same way the HTTP middleware does:
+    a device presenting ITS OWN key (X-Ph3b3-Device + device_auth), or the human
+    Basic login. WS connections bypass the @middleware('http') gate, so we check here."""
+    auth = ws.headers.get("Authorization", "")
+    if not auth.startswith("Basic "):
+        return False
+    try:
+        user, _, pw = base64.b64decode(auth[6:]).decode("utf-8", errors="replace").partition(":")
+    except Exception:
+        return False
+    dev = ws.headers.get("X-Ph3b3-Device", "")
+    if dev in device_auth.KNOWN_DEVICES and device_auth.verify(dev, pw or ""):
+        return True
+    return bool(AUTH_PASS) and \
+        secrets.compare_digest(user.encode(), AUTH_USER.encode()) and \
+        secrets.compare_digest((pw or "").encode(), AUTH_PASS.encode())
+
+
+@app.websocket("/vad/stream")   # NOT under /ws/ — that prefix is caught by /ws/{session_id}
+async def vad_stream(websocket: WebSocket):
+    """Live voice-endpointing stream: Dio pushes 16 kHz mono int16 mic frames while
+    recording; Nyx runs Silero VAD and pushes back {"event":"endpoint"} the instant the
+    speaker stops — so a capture ends before the hard cap WITHOUT an energy floor (a
+    hum keeps RMS high; the model judges speech vs noise).
+
+    ┌─ PRIVACY INVARIANT — DO NOT WEAKEN ────────────────────────────────────────┐
+    │ This audio is processed IN MEMORY for exactly one question — "did the        │
+    │ speaker stop?" — and discarded frame-by-frame. It is NEVER written to disk,  │
+    │ logged, added to the captures feed, put in any DB, or tapped by Argus. No    │
+    │ buffer of the stream outlives this function (see finally). The ONLY audio    │
+    │ ever persisted remains the finished /transcribe capture, unchanged by this.  │
+    │ Do NOT add any file/db/log write of the frame bytes anywhere below.          │
+    └─────────────────────────────────────────────────────────────────────────────┘
+    """
+    if not _ws_authed(websocket):
+        await websocket.close(code=1008)   # policy violation / unauthorised
+        return
+    await websocket.accept()
+    dev = websocket.headers.get("X-Ph3b3-Device", "stackchan")
+    mon = audio_monitor.AudioMonitor()
+    sent_endpoint = False
+    log.info("[vad] %s connected — VAD endpointing (in-memory only, not persisted)", dev)
+    try:
+        while True:
+            msg = await websocket.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+            raw = msg.get("bytes")
+            if raw is None:
+                # Text control channel: "reset" re-arms the monitor at the start of a
+                # fresh recording. Carries no audio.
+                if "reset" in (msg.get("text") or ""):
+                    mon.reset(); sent_endpoint = False
+                continue
+            # Feed the frames; NOTHING here stores raw — feed_bytes buffers a sub-frame
+            # tail in memory only. We look at telemetry, not the samples.
+            for r in mon.feed_bytes(raw):
+                if r["endpoint"] and not sent_endpoint:
+                    sent_endpoint = True
+                    await websocket.send_json({"event": "endpoint", "t": r["t"]})
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        log.info("[vad] %s error: %s", dev, e)
+    finally:
+        mon.reset()   # drop state + the sub-frame byte tail immediately; nothing persists
+        log.info("[vad] %s closed", dev)
+
 
 @app.post("/transcribe")
 async def transcribe_audio(request: Request, body: dict):
