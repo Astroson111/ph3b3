@@ -12,7 +12,14 @@ firmware/.pio/
 **/build/
 **/secrets.h
 stack-chan/
+# Music / audio content — BRING YOUR OWN. Never commit copyrighted tracks;
+# users source their own and follow the in-repo instructions to load them.
 *.wav
+*.mp3
+*.flac
+*.m4a
+*.ogg
+*.aac
 voices/*.png
 soul/soul.md
 modules/content_profiles/*.local.*
