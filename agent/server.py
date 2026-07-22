@@ -1393,6 +1393,22 @@ async def _run_chat_pipeline(body: dict, request: Request):
             log.info("[echo-guard] dropped self-echo: %r", user_msg)
             return None
 
+    # ── Iris device-command near-miss (fail-CLOSED) ───────────────────────────
+    # Iris drives its audio unit ONLY through the strict device_command gate in
+    # /transcribe. If a play/stop/volume-shaped utterance slips past that parser
+    # and reaches the chat brain, Hermes3 (which has NO audio-unit control) will
+    # fabricate a "Track 4 it is." while nothing plays. Refuse to let the model
+    # answer an audio-control request it cannot perform: return a deterministic,
+    # spoken clarification instead — never a fabricated confirmation. Detection is
+    # a loose superset of parse(); it never dispatches (dispatch stays in /transcribe).
+    if request.headers.get("X-Ph3b3-Device", "") == "iris" \
+            and device_commands.is_device_intent(user_msg):
+        _clar = device_commands.clarify(user_msg)
+        log.info("[device-cmd] iris near-miss (no clean parse) → clarify, LLM skipped: %r", user_msg[:60])
+        session.add("user", user_msg)
+        session.add("assistant", _clar)
+        return _clar
+
     if "soul" in user_msg.lower():
         tts.soul_line()
 

@@ -57,6 +57,11 @@ def _to_int(token: str):
 _LEADIN_RE = re.compile(
     r"^(?:can you|could you|would you|will you|can u|"
     r"go ahead and|i want(?: you)? to|i'?d like(?: you)? to|i would like(?: you)? to|"
+    # correction / negation / affirmation framing — a user re-issuing a misheard
+    # command naturally opens with "no, I said …" / "actually …" / "yeah …". These
+    # are framing, not content, so stripping them keeps the whole-utterance anchor.
+    r"no|nope|nah|actually|wait|sorry|oops|whoops|"
+    r"i said|i meant|i mean|i just said|yeah|yep|yes|"
     r"please|hey|ok|okay|um+|uh+|just|kindly|let'?s|now)\b[\s,]*", re.I)
 _TRAIL_RE = re.compile(
     r"[\s,]*\b(?:please|thanks|thank you|now|for me|for us|real quick|ok|okay)\b[.?!]*$", re.I)
@@ -102,6 +107,64 @@ def parse(text: str):
     if _VOLDN_RE.match(t):
         return {"action": "volume_down"}
     return None
+
+
+# ── Fail-open guard (chat-pipeline side) ──────────────────────────────────────
+# parse() is deliberately STRICT so it never mis-fires and plays the wrong thing.
+# The cost: a device-command-shaped utterance it can't cleanly resolve ("go and
+# play track four for me", a mangled transcript) falls through to the LLM — which
+# has NO audio-unit control and will happily fabricate "Track 4 it is." while
+# nothing plays. is_device_intent() is a loose SUPERSET of parse() used ONLY to
+# detect that near-miss so the pipeline can return a deterministic clarification
+# instead of a fabricated confirmation. It is DETECTION ONLY — it never dispatches
+# (dispatch stays strict + firmware-validated). Fail-closed, mirroring Metis.
+
+# Negation directly on the control verb — "don't play track 4", "not going to
+# stop it", "no need to play that" — means the user is NOT issuing the command.
+# (Bare leading "no," is a CORRECTION, handled in _LEADIN_RE, and excluded here.)
+_NEG_VERB_RE = re.compile(
+    r"\b(?:not|never|no\s+need|rather\s+not|"
+    r"don'?t|doesn'?t|didn'?t|won'?t|can'?t|cannot|"
+    r"wouldn'?t|shouldn'?t|couldn'?t|isn'?t|aren'?t)\b"
+    r"(?:\s+\w+){0,3}?\s+(?:play|start|stop|pause|resume|put\s+on|turn\s+it)\b",
+    re.I)
+
+# Strong "control the audio unit" signals. The play branch requires the audio
+# noun to follow the verb closely (only articles/pronouns between) so a STORY
+# request — "play me a story about tracks" — does NOT trip it.
+_INTENT_SIGNAL_RE = re.compile(
+    r"\b(?:play|start|put\s+on|resume)\s+"
+    r"(?:(?:the|a|an|some|me|us|my|that|this|track|next|previous)\s+){0,3}"
+    r"(?:track|song|music|tune|tunes|playlist|album|number|audio)\b"
+    r"|\bstop\s+(?:the\s+|this\s+|that\s+)?(?:music|track|song|audio|playback|playlist)\b"
+    r"|\b(?:stop|pause)\s+playing\b"
+    r"|\bvolume\s+(?:up|down)\b"
+    r"|\bturn\s+(?:it|the\s+(?:volume|music|song|audio))\s+(?:up|down)\b"
+    r"|\b(?:louder|quieter|softer)\b",
+    re.I)
+
+
+def is_device_intent(text: str) -> bool:
+    """True if the utterance is trying to control the audio unit (play a track /
+    stop / volume) even though parse() couldn't resolve a clean command. Negated
+    forms ("don't play …") and non-commands return False. Superset of parse()."""
+    t = (text or "").strip()
+    if not t or _NEG_VERB_RE.search(t):
+        return False
+    return bool(_INTENT_SIGNAL_RE.search(t))
+
+
+def clarify(text: str) -> str:
+    """Spoken, deterministic reply for a device-command near-miss. NEVER claims an
+    action happened — it tells the user the phrasing that works. This is what stands
+    in for the LLM's fabricated confirmation."""
+    t = (text or "").lower()
+    if re.search(r"\b(?:volume|louder|quieter|softer)\b|\bturn\s+it\b", t):
+        return "To change the volume, say: volume up, or volume down."
+    if re.search(r"\b(?:stop|pause)\b", t):
+        return "To stop the music, just say: stop the music."
+    return ("I can play a track by its number — try saying: play track four. "
+            "Which track would you like?")
 
 
 _ORDINAL = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
