@@ -122,12 +122,14 @@ class KadmosModule:
         log.info("Kadmos document reader ready.")
 
     # ── Reading-mode state (explicit, user-controlled via the portal switch) ───
-    def set_reading(self, session_id: str, mode: bool, instruction: str = ""):
+    def set_reading(self, session_id: str, mode: bool, instruction: str = "", doc_mode: str = "auto"):
+        dm = doc_mode if doc_mode in ("auto", "ocr", "text") else "auto"
         self._reading[session_id or "default"] = {
-            "mode": bool(mode), "instruction": (instruction or "").strip()[:500]}
+            "mode": bool(mode), "instruction": (instruction or "").strip()[:500], "doc_mode": dm}
 
     def get_reading(self, session_id: str) -> dict:
-        return self._reading.get(session_id or "default", {"mode": False, "instruction": ""})
+        return self._reading.get(session_id or "default",
+                                 {"mode": False, "instruction": "", "doc_mode": "auto"})
 
     # ── Session document tracking ─────────────────────────────────────────────
     def set_pending(self, session_id: str, doc_id: str, filename: str, label: str = "document"):
@@ -323,23 +325,25 @@ class KadmosModule:
             raise KadmosError("That PDF has no pages I can read.")
         return doc
 
-    def extract_pages(self, doc, *, speak=None, is_cancelled=None) -> dict:
-        """PDF: per-page text, OCR fallback for scans (if tesseract installed)."""
+    def extract_pages(self, doc, *, speak=None, is_cancelled=None, force_ocr=False) -> dict:
+        """PDF: per-page text, OCR fallback for scans (if tesseract installed).
+        force_ocr skips the text layer entirely (the 'Force OCR' override)."""
         n = doc.page_count
         pages, digital_chars = [], 0
-        for i in range(n):
-            if is_cancelled and is_cancelled():
-                return self._ex(pages, page_count=n, cancelled=True)
-            t = self._extract_page(doc[i])
-            pages.append(t)
-            digital_chars += len(t)
+        if not force_ocr:
+            for i in range(n):
+                if is_cancelled and is_cancelled():
+                    return self._ex(pages, page_count=n, cancelled=True)
+                t = self._extract_page(doc[i])
+                pages.append(t)
+                digital_chars += len(t)
+            if digital_chars >= SCAN_TEXT_FLOOR * n:
+                return self._ex(pages, page_count=n)
 
-        if digital_chars >= SCAN_TEXT_FLOOR * n:
-            return self._ex(pages, page_count=n)
-        # Scanned / image-only PDF → OCR fallback.
+        # Scanned/image-only PDF → OCR fallback (also the forced-OCR path).
         if not self.ocr_available():
-            return self._ex(pages, scanned=True, ocr_unavailable=True, page_count=n)
-        if speak:
+            return self._ex([], scanned=True, ocr_unavailable=True, page_count=n)
+        if speak and not force_ocr:          # forced case is announced by the caller
             speak("This looks like a scan — running OCR. Give me a minute.")
         ocr_pages = []
         for i in range(min(n, OCR_PAGE_CAP)):
@@ -352,12 +356,12 @@ class KadmosModule:
                 ocr_pages.append("")
         return self._ex(ocr_pages, scanned=True, ocr_used=True, page_count=n)
 
-    def _extract_pdf(self, path, *, speak=None, is_cancelled=None) -> dict:
+    def _extract_pdf(self, path, *, speak=None, is_cancelled=None, force_ocr=False) -> dict:
         doc = self.open_doc(path)
         try:
             if doc.page_count > PDF_PAGE_CEILING:
                 return self._ex([], page_count=doc.page_count, over_ceiling=True)
-            return self.extract_pages(doc, speak=speak, is_cancelled=is_cancelled)
+            return self.extract_pages(doc, speak=speak, is_cancelled=is_cancelled, force_ocr=force_ocr)
         finally:
             doc.close()
 
@@ -426,24 +430,39 @@ class KadmosModule:
     # ── Summarize / answer (tools DISABLED, floor-checked) ────────────────────
     async def answer(self, *, query: str, path: Path, summarize, speak=None,
                      is_cancelled=None, session_id: str = "default",
-                     store: bool = True) -> str:
+                     store: bool = True, doc_mode: str = "auto") -> str:
         """Detect + extract `path` (any supported format) and answer `query` over
         it with the injection firewall. `summarize(query, fenced_text)` is an
-        injected TOOLS-DISABLED async pass over fenced untrusted text."""
+        injected TOOLS-DISABLED async pass over fenced untrusted text. `doc_mode`
+        is the reader-strip override: 'auto' (router decides), 'ocr' (force OCR on
+        a PDF), or 'text' (treat the raw bytes as plain text)."""
         # 1. Floor on the user's question (gated question is never processed).
         if morpheus.floor_check(query or "") or metis.query_gate(query or ""):
             return _REFUSE_FLOOR_QUERY
 
-        # 2. Read, route, extract.
+        # 2. Read, route, extract. Manual doc-type overrides are edge-case only;
+        # the magic-byte router stays the authority for 'auto'.
         path = Path(path)
         try:
             raw = path.read_bytes()
         except Exception:
             return "I couldn't open that file — it may have moved. Upload it again."
         kind, refusal = self.detect_format(raw, path.name)
-        if refusal:
-            return refusal
-        ex = self._extract(kind, path, raw, speak=speak, is_cancelled=is_cancelled)
+        try:
+            if doc_mode == "text":                       # override: read raw bytes as text
+                if speak:
+                    speak("Reading it as plain text, as you asked.")
+                ex = self._extract_text(raw)
+            elif doc_mode == "ocr" and kind == "pdf":     # override: force OCR (bad text layer)
+                if speak:
+                    speak("Forcing OCR on this one, as you asked.")
+                ex = self._extract_pdf(path, speak=speak, is_cancelled=is_cancelled, force_ocr=True)
+            else:                                         # auto (router authority)
+                if refusal:
+                    return refusal
+                ex = self._extract(kind, path, raw, speak=speak, is_cancelled=is_cancelled)
+        except KadmosError as e:
+            return str(e)
 
         if ex["cancelled"]:
             return "Stopped — I didn't finish reading that document."

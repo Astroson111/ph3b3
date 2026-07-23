@@ -470,9 +470,40 @@ def test_reading_state_store():
     k = _fresh()
     assert k.get_reading("z")["mode"] is False           # default off
     k.set_reading("z", True, "focus on dates")
-    assert k.get_reading("z") == {"mode": True, "instruction": "focus on dates"}
+    assert k.get_reading("z")["mode"] is True and k.get_reading("z")["instruction"] == "focus on dates"
+    assert k.get_reading("z")["doc_mode"] == "auto"       # default
     k.set_reading("z", False, "")
     assert k.get_reading("z")["mode"] is False
+
+
+def test_doc_mode_state():
+    k = _fresh()
+    k.set_reading("m", True, "", "ocr")
+    assert k.get_reading("m")["doc_mode"] == "ocr"
+    k.set_reading("m", True, "", "bogus")
+    assert k.get_reading("m")["doc_mode"] == "auto"       # invalid → auto
+
+
+def test_force_ocr_override_extract():
+    k = _fresh()
+    p = _tmp("hastext.pdf"); make_text_pdf(p, pages=2)    # has a real text layer
+    d = k.open_doc(p)
+    ex = k.extract_pages(d, force_ocr=True); d.close()     # override skips the text layer
+    if k.ocr_available():
+        assert ex["ocr_used"] is True and ex["scanned"] is True
+    else:
+        assert ex["ocr_unavailable"] is True
+
+
+def test_force_text_override_announced_and_read():
+    k = _fresh()
+    tf = _tmp("plain.txt"); tf.write_text("Alice owns the migration. Deadline Friday.")
+    fs = FakeSummarizer(); spoken = []
+    ans = run(k.answer(query="who owns it", path=tf, summarize=fs, doc_mode="text",
+                       speak=spoken.append, session_id="ov"))
+    assert any("plain text" in m for m in spoken)          # override announced in the spoken flow
+    assert fs.calls and "Alice" in fs.calls[0][1]          # read as text, fenced
+    assert ans == fs.reply
 
 
 if __name__ == "__main__":

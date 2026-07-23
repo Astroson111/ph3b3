@@ -942,19 +942,21 @@ async def _answer_pdf(user_msg: str, session_id: str = "") -> str:
         return bool(_kadmos_cancel.get(sid))
     # Fold the standing reading-mode instruction (if any) into the query — it shapes
     # how the sealed pass answers, while is_whole_doc_ask still keys off the raw ask.
-    instruction = kadmos.get_reading(sid).get("instruction", "")
+    _rd = kadmos.get_reading(sid)
+    instruction, doc_mode = _rd.get("instruction", ""), _rd.get("doc_mode", "auto")
     q = user_msg if not instruction else f"{user_msg}\n\nHow to answer: {instruction}"
     try:
-        # Already read once + this is a detail follow-up → answer from what we have.
+        # Detail follow-up in AUTO mode → answer from cache. A manual doc-type
+        # override (ocr/text) always re-extracts so the override actually takes.
         already = st.get("rolling_summary") is not None or st.get("full_text") is not None
-        if already and not kadmos.is_whole_doc_ask(user_msg):
+        if already and doc_mode == "auto" and not kadmos.is_whole_doc_ask(user_msg):
             fu = await kadmos.followup(query=q, session_id=sid,
                                        summarize=_summarize_pdf_untrusted)
             if fu is not None:
                 return fu
-        return await kadmos.answer(query=q, path=path,
-                                   summarize=_summarize_pdf_untrusted,
-                                   speak=speak, is_cancelled=is_cancelled, session_id=sid)
+        return await kadmos.answer(query=q, path=path, summarize=_summarize_pdf_untrusted,
+                                   speak=speak, is_cancelled=is_cancelled, session_id=sid,
+                                   doc_mode=doc_mode)
     except KadmosError as e:
         return str(e)
     except Exception as e:
@@ -1567,7 +1569,8 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # Set before routing so an explicit "summarize this pdf" also picks up the
     # standing reading instruction.
     _sid = body.get("session_id", "default")
-    kadmos.set_reading(_sid, bool(body.get("reading_mode")), body.get("reading_instruction", ""))
+    kadmos.set_reading(_sid, bool(body.get("reading_mode")), body.get("reading_instruction", ""),
+                       body.get("doc_mode", "auto"))
 
     # ── Dedicated-module precedence (BEFORE Metis forced routing) ─────────────
     # A dedicated module (weather, …) may CLAIM this intent. A claimed turn is
