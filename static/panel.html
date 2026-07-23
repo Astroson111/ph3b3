@@ -1424,8 +1424,8 @@
       </div>
       <div class="chat-foot">
         <input class="cin" id="cin" type="text" placeholder="Message Ph3b3…" data-i18n-ph="chat.placeholder" autocomplete="off" autocorrect="off" spellcheck="true">
-        <input type="file" id="pdfInput" accept="application/pdf,.pdf" hidden>
-        <button class="btn-mic" id="pdfBtn" title="Attach a PDF for Phoebe to read">
+        <input type="file" id="pdfInput" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png" hidden>
+        <button class="btn-mic" id="pdfBtn" title="Attach a document (PDF, Word, text, or a photo) for Phoebe to read">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         </button>
         <button class="btn-send" id="sendBtn" data-i18n="chat.send">Send</button>
@@ -2168,9 +2168,8 @@ async function uploadPdf(file) {
       return;
     }
     const data = await res.json();
-    const pp = data.pages + (data.pages === 1 ? ' page' : ' pages');
-    addMsg('asst', '📄 Loaded “' + data.filename + '” (' + pp + '). Ask me to summarize it, or flip on Reading mode and just ask questions.');
-    activeDoc = { filename: data.filename, pages: data.pages };
+    addMsg('asst', '📄 Loaded “' + data.filename + '” (' + (data.label || 'document') + '). Ask me to summarize it, or flip on Reading mode and just ask questions.');
+    activeDoc = { filename: data.filename, label: data.label || 'document' };
     showReadingBar();
   } catch (e) {
     hint.remove();
@@ -2194,7 +2193,7 @@ readModeToggle.addEventListener('change', () =>
   localStorage.setItem('ph3b3_reading_mode', readModeToggle.checked ? '1' : '0'));
 function showReadingBar() {
   if (!activeDoc) return;
-  rbDoc.textContent = '📄 ' + activeDoc.filename + ' · ' + activeDoc.pages + (activeDoc.pages === 1 ? ' page' : ' pages');
+  rbDoc.textContent = '📄 ' + activeDoc.filename + ' · ' + activeDoc.label;
   readingBar.hidden = false;
 }
 

@@ -97,10 +97,10 @@ def test_intent_routing_positive_and_negative():
                  "fix my resume", "what time is it", "read me a story"]
     for p in positives:
         c = intent_registry.resolve(p)
-        assert c and c.module == "pdf", f"expected pdf claim for {p!r}, got {c}"
+        assert c and c.module == "document", f"expected document claim for {p!r}, got {c}"
     for n in negatives:
         c = intent_registry.resolve(n)
-        assert not (c and c.module == "pdf"), f"pdf wrongly stole {n!r}"
+        assert not (c and c.module == "document"), f"document wrongly stole {n!r}"
 
 
 # ── 8 (paths). URL / out-of-bounds refusal ──────────────────────────────────────
@@ -119,22 +119,110 @@ def test_upload_validation():
     k = _fresh()
     # valid
     p = _tmp("v.pdf"); make_text_pdf(p, pages=2)
-    doc_id, name, pages, err = k.stage_upload(p.read_bytes(), "v.pdf")
-    assert err is None and doc_id and pages == 2
+    doc_id, name, kind, label, err = k.stage_upload(p.read_bytes(), "v.pdf")
+    assert err is None and doc_id and kind == "pdf" and label == "PDF"
     # empty
-    assert k.stage_upload(b"", "e.pdf")[3][0] == 400
-    # not a pdf (no %PDF header)
-    assert k.stage_upload(b"i am not a pdf at all", "x.pdf")[3][0] == 400
+    assert k.stage_upload(b"", "e.pdf")[4][0] == 400
+    # not a pdf (no %PDF header, .pdf extension) → 400
+    assert k.stage_upload(b"i am not a pdf at all", "x.pdf")[4][0] == 400
     # encrypted → refused
     ep = _tmp("enc.pdf"); make_encrypted_pdf(ep)
-    assert k.stage_upload(ep.read_bytes(), "enc.pdf")[3][0] == 400
+    assert k.stage_upload(ep.read_bytes(), "enc.pdf")[4][0] == 400
     # oversized → 413 (shrink the cap rather than allocate 25 MB)
     old = kadmos_module.PDF_MAX_BYTES
     try:
         kadmos_module.PDF_MAX_BYTES = 100
-        assert k.stage_upload(b"%PDF-" + b"0" * 500, "big.pdf")[3][0] == 413
+        assert k.stage_upload(b"%PDF-" + b"0" * 500, "big.pdf")[4][0] == 413
     finally:
         kadmos_module.PDF_MAX_BYTES = old
+
+
+# ── 0a–0f. Multi-format router ──────────────────────────────────────────────────
+def _make_docx_bytes(with_table=False):
+    import docx
+    d = docx.Document()
+    d.add_paragraph("Quarterly report for Project Atlas.")
+    d.add_paragraph("Revenue rose and costs held flat.")
+    if with_table:
+        t = d.add_table(rows=3, cols=3)
+        t.rows[0].cells[0].text, t.rows[0].cells[1].text, t.rows[0].cells[2].text = "Item", "Qty", "Amount"
+        t.rows[1].cells[0].text, t.rows[1].cells[1].text, t.rows[1].cells[2].text = "Widget A", "2", "$10.00"
+        t.rows[2].cells[0].text, t.rows[2].cells[1].text, t.rows[2].cells[2].text = "Widget B", "1", "$5.50"
+    buf = io.BytesIO(); d.save(buf); return buf.getvalue()
+
+
+def _make_xlsx_bytes():
+    # minimal OOXML spreadsheet: a zip that contains an xl/ member
+    buf = io.BytesIO()
+    import zipfile
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr("xl/workbook.xml", "<workbook/>")
+    return buf.getvalue()
+
+
+def test_docx_router_and_table_extract():   # 0a
+    k = _fresh()
+    raw = _make_docx_bytes(with_table=True)
+    kind, refusal = k.detect_format(raw, "report.docx")
+    assert kind == "docx" and refusal is None
+    ex = k._extract_docx(raw)
+    text = "\n".join(ex["pages"])
+    assert "Project Atlas" in text
+    assert "| Widget A | 2 | $10.00 |" in text      # amount stays with its line item
+
+
+def test_text_and_markdown(tmp=None):        # 0b
+    k = _fresh()
+    kind, refusal = k.detect_format(b"# Heading\n\nplain body text about cats", "notes.md")
+    assert kind == "text" and refusal is None
+    ex = k._extract_text(b"line one\nline two about dogs")
+    assert "dogs" in "\n".join(ex["pages"])
+    # undecodable binary (control bytes) as .txt → honest refusal, never garbage
+    try:
+        k._extract_text(b"\x00\x01\x02\x03\x04\x05" * 200)
+        assert False, "binary should not decode as clean text"
+    except KadmosError:
+        pass
+
+
+def test_legacy_doc_refused_by_name():       # 0d
+    k = _fresh()
+    ole = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 32
+    kind, refusal = k.detect_format(ole, "old.doc")
+    assert kind is None and "doc" in refusal.lower() and ".docx" in refusal
+
+
+def test_spreadsheets_refused_by_name():     # 0e
+    k = _fresh()
+    # .csv by extension
+    kind, refusal = k.detect_format(b"a,b,c\n1,2,3\n", "data.csv")
+    assert kind is None and "spreadsheet" in refusal.lower()
+    # .xlsx by magic (zip with xl/)
+    kind, refusal = k.detect_format(_make_xlsx_bytes(), "sheet.xlsx")
+    assert kind is None and "spreadsheet" in refusal.lower()
+
+
+def test_mislabeled_docx_as_pdf_caught_by_magic():   # 0f
+    k = _fresh()
+    raw = _make_docx_bytes()
+    kind, refusal = k.detect_format(raw, "actually_a_word_doc.pdf")   # lying extension
+    assert kind == "docx" and refusal is None       # magic bytes win
+
+
+def test_image_router_and_ocr_path():        # 0c (detection; OCR text gated on tesseract)
+    k = _fresh()
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (600, 160), "white")
+    ImageDraw.Draw(img).text((15, 60), "PHONE PHOTO OF A FORM", fill="black")
+    buf = io.BytesIO(); img.save(buf, "PNG"); raw = buf.getvalue()
+    kind, refusal = k.detect_format(raw, "photo.png")
+    assert kind == "image" and refusal is None
+    ex = k._extract_image(raw)
+    if k.ocr_available():
+        assert ex["ocr_used"] is True
+    else:
+        assert ex["ocr_unavailable"] is True
 
 
 # ── 1 (verify). fast-path extraction + answer ───────────────────────────────────

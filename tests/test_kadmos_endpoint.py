@@ -51,8 +51,8 @@ def _pdf_bytes(pages=2, text="Quarterly revenue rose. Apples and oranges discuss
 raw = _pdf_bytes(pages=3)
 r = client.post("/kadmos/upload?session_id=itest",
                 files={"file": ("report.pdf", raw, "application/pdf")}, headers=HEADERS)
-check("valid PDF upload → 200 with doc_id + page count",
-      r.status_code == 200 and r.json().get("pages") == 3 and r.json().get("doc_id"))
+check("valid PDF upload → 200 with doc_id + kind",
+      r.status_code == 200 and r.json().get("kind") == "pdf" and r.json().get("doc_id"))
 
 # ── upload: not a PDF → 400 ─────────────────────────────────────────────────────
 r = client.post("/kadmos/upload",
