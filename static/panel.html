@@ -1396,6 +1396,10 @@
       </div>
       <div class="chat-foot">
         <input class="cin" id="cin" type="text" placeholder="Message Ph3b3…" data-i18n-ph="chat.placeholder" autocomplete="off" autocorrect="off" spellcheck="true">
+        <input type="file" id="pdfInput" accept="application/pdf,.pdf" hidden>
+        <button class="btn-mic" id="pdfBtn" title="Attach a PDF for Phoebe to read">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
         <button class="btn-send" id="sendBtn" data-i18n="chat.send">Send</button>
         <button class="btn-mic" id="micBtn" title="Hold to speak" data-i18n-title="chat.mic">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
@@ -2104,6 +2108,48 @@ async function send() {
 
 sendBtn.addEventListener('click', send);
 cin.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+
+// ── Kadmos PDF upload — posts to /kadmos/upload with the SAME SID the chat uses,
+// so "summarize this pdf" finds the staged document. Local file only; the server
+// validates by %PDF magic + structural decode (413 oversize, 400 non-PDF). ──────
+const pdfBtn = document.getElementById('pdfBtn');
+const pdfInput = document.getElementById('pdfInput');
+async function uploadPdf(file) {
+  if (!file || chatBusy) return;
+  pdfBtn.disabled = true;
+  const hint = document.createElement('div');
+  hint.className = 'msg-hint';
+  hint.textContent = 'uploading ' + file.name + '…';
+  chatHist.appendChild(hint);
+  chatHist.scrollTop = chatHist.scrollHeight;
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/kadmos/upload?session_id=' + encodeURIComponent(SID), { method: 'POST', body: fd });
+    hint.remove();
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).detail || ''; } catch (_) {}
+      const msg = res.status === 413 ? 'That PDF is too large for me to read.'
+                : res.status === 401 ? 'I need you signed in to accept an upload.'
+                : res.status === 400 ? (detail || "That file isn't a readable PDF.")
+                : ('Upload failed (' + res.status + ').');
+      addMsg('asst', '📄 ' + msg);
+      return;
+    }
+    const data = await res.json();
+    const pp = data.pages + (data.pages === 1 ? ' page' : ' pages');
+    addMsg('asst', '📄 Loaded “' + data.filename + '” (' + pp + '). Ask me to summarize it, or ask a question about it.');
+  } catch (e) {
+    hint.remove();
+    addMsg('asst', '📄 Upload error: ' + e.message);
+  } finally {
+    pdfBtn.disabled = false;
+    pdfInput.value = '';   // allow re-selecting the same file
+  }
+}
+pdfBtn.addEventListener('click', () => { if (!chatBusy) pdfInput.click(); });
+pdfInput.addEventListener('change', () => uploadPdf(pdfInput.files[0]));
 
 // ── Argus fleet card (in the Status pane) ─────────────────────────────────────
 const fleetList = document.getElementById('fleetList');
