@@ -246,6 +246,26 @@
     }
     .btn-mic:disabled { opacity: .4; cursor: not-allowed; }
 
+    /* ── Kadmos reading bar ── */
+    .reading-bar {
+      display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+      padding: .5rem .75rem; border-top: 1px solid var(--border);
+      background: rgba(43,15,95,.35); font-size: .8rem; color: var(--dim);
+    }
+    .reading-bar .rb-doc {
+      color: var(--text); font-weight: 600; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; max-width: 45%;
+    }
+    .rb-switch { display: inline-flex; align-items: center; gap: .35rem; cursor: pointer; user-select: none; }
+    .rb-switch input { accent-color: var(--magenta); width: 15px; height: 15px; cursor: pointer; }
+    .rb-instr {
+      flex: 1; min-width: 140px; background: rgba(43,15,95,.6);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: .4rem .6rem; color: var(--text); font-size: .8rem;
+      outline: none; font-family: inherit;
+    }
+    .rb-instr:focus { border-color: var(--purple); }
+
     /* ── Device roster ── */
     .dev-list { display: flex; flex-direction: column; gap: .45rem; }
     .dev-row {
@@ -1394,6 +1414,14 @@
         <div class="bars"><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>
         <span data-i18n="chat.speaking">Alba speaking…</span>
       </div>
+      <div class="reading-bar" id="readingBar" hidden>
+        <span class="rb-doc" id="rbDoc">📄 —</span>
+        <label class="rb-switch" title="When on, your questions are answered from this document">
+          <input type="checkbox" id="readModeToggle"><span>Reading mode</span>
+        </label>
+        <input class="rb-instr" id="readInstr" type="text" autocomplete="off"
+               placeholder="How to read it (optional): focus on dates, explain simply…">
+      </div>
       <div class="chat-foot">
         <input class="cin" id="cin" type="text" placeholder="Message Ph3b3…" data-i18n-ph="chat.placeholder" autocomplete="off" autocorrect="off" spellcheck="true">
         <input type="file" id="pdfInput" accept="application/pdf,.pdf" hidden>
@@ -2089,7 +2117,9 @@ async function send() {
     const res  = await fetch('/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({session_id: SID, message: msg}),
+      body: JSON.stringify({session_id: SID, message: msg,
+        reading_mode: !!(readModeToggle && readModeToggle.checked),
+        reading_instruction: (readInstr && readInstr.value.trim()) || ''}),
     });
     const data = await res.json();
     hint.remove();
@@ -2139,7 +2169,9 @@ async function uploadPdf(file) {
     }
     const data = await res.json();
     const pp = data.pages + (data.pages === 1 ? ' page' : ' pages');
-    addMsg('asst', '📄 Loaded “' + data.filename + '” (' + pp + '). Ask me to summarize it, or ask a question about it.');
+    addMsg('asst', '📄 Loaded “' + data.filename + '” (' + pp + '). Ask me to summarize it, or flip on Reading mode and just ask questions.');
+    activeDoc = { filename: data.filename, pages: data.pages };
+    showReadingBar();
   } catch (e) {
     hint.remove();
     addMsg('asst', '📄 Upload error: ' + e.message);
@@ -2150,6 +2182,21 @@ async function uploadPdf(file) {
 }
 pdfBtn.addEventListener('click', () => { if (!chatBusy) pdfInput.click(); });
 pdfInput.addEventListener('change', () => uploadPdf(pdfInput.files[0]));
+
+// ── Reading-mode bar: switch + doc status + standing instruction ──────────────
+const readingBar = document.getElementById('readingBar');
+const readModeToggle = document.getElementById('readModeToggle');
+const readInstr = document.getElementById('readInstr');
+const rbDoc = document.getElementById('rbDoc');
+let activeDoc = null;
+readModeToggle.checked = localStorage.getItem('ph3b3_reading_mode') === '1';
+readModeToggle.addEventListener('change', () =>
+  localStorage.setItem('ph3b3_reading_mode', readModeToggle.checked ? '1' : '0'));
+function showReadingBar() {
+  if (!activeDoc) return;
+  rbDoc.textContent = '📄 ' + activeDoc.filename + ' · ' + activeDoc.pages + (activeDoc.pages === 1 ? ' page' : ' pages');
+  readingBar.hidden = false;
+}
 
 // ── Argus fleet card (in the Status pane) ─────────────────────────────────────
 const fleetList = document.getElementById('fleetList');

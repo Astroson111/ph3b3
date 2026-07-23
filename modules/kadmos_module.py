@@ -100,7 +100,17 @@ class KadmosModule:
         INBOX.mkdir(parents=True, exist_ok=True)
         # session_id -> {doc_id, filename, page_count, was_chunked, rolling_summary, full_text}
         self._pending: dict = {}
+        # session_id -> {"mode": bool, "instruction": str} — the reading-mode UI state
+        self._reading: dict = {}
         log.info("Kadmos PDF module ready.")
+
+    # ── Reading-mode state (explicit, user-controlled via the portal switch) ───
+    def set_reading(self, session_id: str, mode: bool, instruction: str = ""):
+        self._reading[session_id or "default"] = {
+            "mode": bool(mode), "instruction": (instruction or "").strip()[:500]}
+
+    def get_reading(self, session_id: str) -> dict:
+        return self._reading.get(session_id or "default", {"mode": False, "instruction": ""})
 
     # ── Session document tracking ─────────────────────────────────────────────
     def set_pending(self, session_id: str, doc_id: str, filename: str, page_count: int):

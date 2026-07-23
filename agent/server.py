@@ -940,15 +940,19 @@ async def _answer_pdf(user_msg: str, session_id: str = "") -> str:
     speak = _kadmos_speak()
     def is_cancelled():
         return bool(_kadmos_cancel.get(sid))
+    # Fold the standing reading-mode instruction (if any) into the query — it shapes
+    # how the sealed pass answers, while is_whole_doc_ask still keys off the raw ask.
+    instruction = kadmos.get_reading(sid).get("instruction", "")
+    q = user_msg if not instruction else f"{user_msg}\n\nHow to answer: {instruction}"
     try:
         # Already read once + this is a detail follow-up → answer from what we have.
         already = st.get("rolling_summary") is not None or st.get("full_text") is not None
         if already and not kadmos.is_whole_doc_ask(user_msg):
-            fu = await kadmos.followup(query=user_msg, session_id=sid,
+            fu = await kadmos.followup(query=q, session_id=sid,
                                        summarize=_summarize_pdf_untrusted)
             if fu is not None:
                 return fu
-        return await kadmos.answer(query=user_msg, path=path,
+        return await kadmos.answer(query=q, path=path,
                                    summarize=_summarize_pdf_untrusted,
                                    speak=speak, is_cancelled=is_cancelled, session_id=sid)
     except KadmosError as e:
@@ -1559,6 +1563,12 @@ async def _run_chat_pipeline(body: dict, request: Request):
 
     session.add("user", user_msg)
 
+    # ── Kadmos reading-mode state (explicit, from the portal switch) ──────────
+    # Set before routing so an explicit "summarize this pdf" also picks up the
+    # standing reading instruction.
+    _sid = body.get("session_id", "default")
+    kadmos.set_reading(_sid, bool(body.get("reading_mode")), body.get("reading_instruction", ""))
+
     # ── Dedicated-module precedence (BEFORE Metis forced routing) ─────────────
     # A dedicated module (weather, …) may CLAIM this intent. A claimed turn is
     # answered by that module and Metis NEVER engages — so "search the weather for
@@ -1588,6 +1598,17 @@ async def _run_chat_pipeline(body: dict, request: Request):
         answer = await _tool_web_search(user_msg, body.get("session_id", ""))
         session.add("assistant", answer)
         return answer
+
+    # ── Reading mode (Kadmos) — with a PDF loaded and the switch ON, route every
+    # otherwise-unclaimed turn to the document so "what is the risk?" is grounded
+    # without naming the file. Weather/time/search above still win; toggle off to
+    # exit. Answered by the sealed tools-disabled pass — no untrusted text leaks. ─
+    if kadmos.get_reading(_sid).get("mode") and kadmos.get_pending(_sid):
+        answer = await _answer_pdf(user_msg, _sid)
+        if answer is not None:
+            log.info("[kadmos] reading-mode → routed turn to the loaded document")
+            session.add("assistant", answer)
+            return answer
 
     messages = session.messages()
 

@@ -90,6 +90,15 @@ check("summarizer received fenced untrusted text",
 ans_none = asyncio.run(server._answer_pdf("summarize this document", "nobody"))
 check("no staged doc → falls through (None), never hijacks", ans_none is None)
 
+# ── reading mode: a BARE question (no "pdf") routes to the doc, instruction folds in
+server.kadmos.set_reading("itest", True, "focus on dates and dollar amounts")
+calls.clear()
+ans_r = asyncio.run(server._answer_pdf("what is the risk", "itest"))
+check("reading-mode: bare question answered from the loaded doc",
+      ans_r is not None and len(calls) == 1)
+check("reading-mode: standing instruction folded into the sealed query",
+      calls and "focus on dates" in calls[0][0])
+
 # ── cancel endpoint sets the flag ───────────────────────────────────────────────
 r = client.delete("/kadmos/read/itest", headers=HEADERS)
 check("cancel endpoint → 200 + cancelling flag",

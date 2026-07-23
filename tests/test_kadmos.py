@@ -378,6 +378,15 @@ def test_followup_fastpath_no_offer():
     assert "re-scan" not in ans        # full text cached → answered directly
 
 
+def test_reading_state_store():
+    k = _fresh()
+    assert k.get_reading("z")["mode"] is False           # default off
+    k.set_reading("z", True, "focus on dates")
+    assert k.get_reading("z") == {"mode": True, "instruction": "focus on dates"}
+    k.set_reading("z", False, "")
+    assert k.get_reading("z")["mode"] is False
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
