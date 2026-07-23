@@ -246,6 +246,41 @@
     }
     .btn-mic:disabled { opacity: .4; cursor: not-allowed; }
 
+    /* ── Kadmos reader strip + reading bar ── */
+    .reader-strip {
+      display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+      padding: .5rem .75rem; border-top: 1px solid var(--border);
+      background: rgba(43,15,95,.28);
+    }
+    .reader-strip .rs-name {
+      font-weight: 700; color: var(--magenta); font-size: .8rem;
+      letter-spacing: .02em; white-space: nowrap;
+    }
+    .rs-type {
+      background: rgba(43,15,95,.6); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); font-size: .78rem;
+      padding: .35rem .5rem; font-family: inherit; cursor: pointer; outline: none;
+    }
+    .rs-type:focus { border-color: var(--purple); }
+    .reading-bar {
+      display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+      padding: .5rem .75rem; border-top: 1px solid var(--border);
+      background: rgba(43,15,95,.35); font-size: .8rem; color: var(--dim);
+    }
+    .reading-bar .rb-doc {
+      color: var(--text); font-weight: 600; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; max-width: 45%;
+    }
+    .rb-switch { display: inline-flex; align-items: center; gap: .35rem; cursor: pointer; user-select: none; }
+    .rb-switch input { accent-color: var(--magenta); width: 15px; height: 15px; cursor: pointer; }
+    .rb-instr {
+      flex: 1; min-width: 140px; background: rgba(43,15,95,.6);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: .4rem .6rem; color: var(--text); font-size: .8rem;
+      outline: none; font-family: inherit;
+    }
+    .rb-instr:focus { border-color: var(--purple); }
+
     /* ── Device roster ── */
     .dev-list { display: flex; flex-direction: column; gap: .45rem; }
     .dev-row {
@@ -1394,8 +1429,28 @@
         <div class="bars"><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>
         <span data-i18n="chat.speaking">Alba speaking…</span>
       </div>
+      <div class="reader-strip" id="readerStrip" hidden>
+        <span class="rs-name">Kadmos</span>
+        <select class="rs-type" id="docType" title="How to read it — Auto follows the file type; override only for edge cases">
+          <option value="auto">Auto</option>
+          <option value="ocr">Force OCR</option>
+          <option value="text">Treat as plain text</option>
+        </select>
+        <input class="rb-instr" id="readInstr" type="text" autocomplete="off"
+               placeholder="How to read it (optional): focus on dates, explain simply…">
+      </div>
+      <div class="reading-bar" id="readingBar" hidden>
+        <span class="rb-doc" id="rbDoc">📄 —</span>
+        <label class="rb-switch" title="When on, your questions are answered from this document">
+          <input type="checkbox" id="readModeToggle"><span>Reading mode</span>
+        </label>
+      </div>
       <div class="chat-foot">
         <input class="cin" id="cin" type="text" placeholder="Message Ph3b3…" data-i18n-ph="chat.placeholder" autocomplete="off" autocorrect="off" spellcheck="true">
+        <input type="file" id="pdfInput" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png" hidden>
+        <button class="btn-mic" id="pdfBtn" title="Attach a document (PDF, Word, text, or a photo) for Phoebe to read">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
         <button class="btn-send" id="sendBtn" data-i18n="chat.send">Send</button>
         <button class="btn-mic" id="micBtn" title="Hold to speak" data-i18n-title="chat.mic">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
@@ -2085,7 +2140,10 @@ async function send() {
     const res  = await fetch('/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({session_id: SID, message: msg}),
+      body: JSON.stringify({session_id: SID, message: msg,
+        reading_mode: !!(readModeToggle && readModeToggle.checked),
+        reading_instruction: (readInstr && readInstr.value.trim()) || '',
+        doc_mode: (docType && docType.value) || 'auto'}),
     });
     const data = await res.json();
     hint.remove();
@@ -2104,6 +2162,71 @@ async function send() {
 
 sendBtn.addEventListener('click', send);
 cin.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+
+// ── Kadmos PDF upload — posts to /kadmos/upload with the SAME SID the chat uses,
+// so "summarize this pdf" finds the staged document. Local file only; the server
+// validates by %PDF magic + structural decode (413 oversize, 400 non-PDF). ──────
+const pdfBtn = document.getElementById('pdfBtn');
+const pdfInput = document.getElementById('pdfInput');
+async function uploadPdf(file) {
+  if (!file || chatBusy) return;
+  pdfBtn.disabled = true;
+  const hint = document.createElement('div');
+  hint.className = 'msg-hint';
+  hint.textContent = 'uploading ' + file.name + '…';
+  chatHist.appendChild(hint);
+  chatHist.scrollTop = chatHist.scrollHeight;
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/kadmos/upload?session_id=' + encodeURIComponent(SID), { method: 'POST', body: fd });
+    hint.remove();
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).detail || ''; } catch (_) {}
+      const msg = res.status === 413 ? 'That PDF is too large for me to read.'
+                : res.status === 401 ? 'I need you signed in to accept an upload.'
+                : res.status === 400 ? (detail || "That file isn't a readable PDF.")
+                : ('Upload failed (' + res.status + ').');
+      addMsg('asst', '📄 ' + msg);
+      return;
+    }
+    const data = await res.json();
+    // Confirmation gate: Phoebe asks before reading. Show her question; the user's
+    // next chat reply (yes/no/look) is the go/no-go.
+    addMsg('asst', '📄 ' + (data.gate_prompt || ('Loaded ' + data.filename + '. Want me to read it?')));
+    activeDoc = { filename: data.filename, label: data.label || 'document', kind: data.kind };
+    showReaderUI();
+  } catch (e) {
+    hint.remove();
+    addMsg('asst', '📄 Upload error: ' + e.message);
+  } finally {
+    pdfBtn.disabled = false;
+    pdfInput.value = '';   // allow re-selecting the same file
+  }
+}
+pdfBtn.addEventListener('click', () => { if (!chatBusy) pdfInput.click(); });
+pdfInput.addEventListener('change', () => uploadPdf(pdfInput.files[0]));
+
+// ── Reading-mode bar: switch + doc status + standing instruction ──────────────
+const readerStrip = document.getElementById('readerStrip');
+const readingBar = document.getElementById('readingBar');
+const readModeToggle = document.getElementById('readModeToggle');
+const readInstr = document.getElementById('readInstr');
+const rbDoc = document.getElementById('rbDoc');
+const docType = document.getElementById('docType');
+let activeDoc = null;
+readModeToggle.checked = localStorage.getItem('ph3b3_reading_mode') === '1';
+readModeToggle.addEventListener('change', () =>
+  localStorage.setItem('ph3b3_reading_mode', readModeToggle.checked ? '1' : '0'));
+function showReaderUI() {
+  if (!activeDoc) return;
+  rbDoc.textContent = '📄 ' + activeDoc.filename;
+  docType.options[0].text = 'Auto (' + activeDoc.label + ')';   // show the router's detection
+  docType.value = 'auto';                                       // override is per-document
+  readerStrip.hidden = false;
+  readingBar.hidden = false;
+}
 
 // ── Argus fleet card (in the Status pane) ─────────────────────────────────────
 const fleetList = document.getElementById('fleetList');
