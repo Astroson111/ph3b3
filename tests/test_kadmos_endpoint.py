@@ -47,6 +47,11 @@ def _pdf_bytes(pages=2, text="Quarterly revenue rose. Apples and oranges discuss
     return buf
 
 
+def _png_bytes():
+    from PIL import Image
+    buf = io.BytesIO(); Image.new("RGB", (80, 40), "white").save(buf, "PNG"); return buf.getvalue()
+
+
 # ── upload: valid → 200 ─────────────────────────────────────────────────────────
 raw = _pdf_bytes(pages=3)
 r = client.post("/kadmos/upload?session_id=itest",
@@ -72,6 +77,9 @@ finally:
 # ── upload requires auth → 401 without header ───────────────────────────────────
 r = client.post("/kadmos/upload", files={"file": ("a.pdf", raw, "application/pdf")})
 check("upload without auth → 401", r.status_code == 401)
+
+# The staged doc is behind the confirmation gate; confirm it so the read tests run.
+server.kadmos.confirm("itest")
 
 # ── forced-routing read: _answer_pdf drives the sealed summarizer ────────────────
 calls = []
@@ -103,6 +111,48 @@ check("reading-mode: standing instruction folded into the sealed query",
 r = client.delete("/kadmos/read/itest", headers=HEADERS)
 check("cancel endpoint → 200 + cancelling flag",
       r.status_code == 200 and r.json().get("cancelling") is True and server._kadmos_cancel.get("itest"))
+
+# ── v1.1 confirmation gate: nothing reads until an explicit go ──────────────────
+r = client.post("/kadmos/upload?session_id=gate1",
+                files={"file": ("g.pdf", _pdf_bytes(2), "application/pdf")}, headers=HEADERS)
+gp = r.json().get("gate_prompt", "")
+check("upload returns a gate prompt naming the file", "g.pdf" in gp and "read it?" in gp)
+check("unconfirmed doc is NOT read by _answer_pdf (nothing extracted before go)",
+      asyncio.run(server._answer_pdf("summarize this document", "gate1")) is None)
+resp_no = asyncio.run(server._kadmos_gate("no, wrong one", "gate1"))
+check("gate 'no' → discarded plainly, pending cleared",
+      "unread" in resp_no.lower() and server.kadmos.get_pending("gate1") is None)
+
+server._summarize_pdf_untrusted = _fake_summarize
+client.post("/kadmos/upload?session_id=gate2",
+            files={"file": ("g2.pdf", _pdf_bytes(2), "application/pdf")}, headers=HEADERS)
+calls.clear()
+asyncio.run(server._kadmos_gate("yes go ahead", "gate2"))
+check("gate 'yes' → reads (summarizer engaged) and marks confirmed",
+      len(calls) >= 1 and server.kadmos.get_pending("gate2")["confirmed"] is True)
+
+client.post("/kadmos/upload?session_id=gate3",
+            files={"file": ("g3.pdf", _pdf_bytes(2), "application/pdf")}, headers=HEADERS)
+calls.clear()
+resp_amb = asyncio.run(server._kadmos_gate("hmm maybe", "gate3"))
+check("gate ambiguous → re-asks, does not read",
+      "?" in resp_amb and calls == [] and server.kadmos.get_pending("gate3")["confirmed"] is False)
+
+# ── v1.1 vision lane: image 'look at it' → LLaVA describe (mocked), floor-checked ─
+r = client.post("/kadmos/upload?session_id=vis1",
+                files={"file": ("photo.png", _png_bytes(), "image/png")}, headers=HEADERS)
+gpi = r.json().get("gate_prompt", "")
+check("image gate offers the read-or-look fork",
+      "read the text" in gpi and "describe" in gpi)
+_orig_analyze = server.vision._analyze
+server.vision._analyze = lambda raw, prompt: "A photo of a cat sitting on a mat."
+try:
+    resp_v = asyncio.run(server._kadmos_gate("look at it and describe it", "vis1"))
+    check("vision lane returns the LLaVA description", "cat sitting on a mat" in resp_v)
+    check("vision lane recorded on the pending slot",
+          server.kadmos.get_pending("vis1")["lane"] == "vision")
+finally:
+    server.vision._analyze = _orig_analyze
 
 print(f"\n{sum(_results)}/{len(_results)} passed")
 sys.exit(0 if all(_results) else 1)

@@ -119,22 +119,49 @@ def test_upload_validation():
     k = _fresh()
     # valid
     p = _tmp("v.pdf"); make_text_pdf(p, pages=2)
-    doc_id, name, kind, label, err = k.stage_upload(p.read_bytes(), "v.pdf")
-    assert err is None and doc_id and kind == "pdf" and label == "PDF"
+    doc_id, name, kind, label, pages, err = k.stage_upload(p.read_bytes(), "v.pdf")
+    assert err is None and doc_id and kind == "pdf" and label == "PDF" and pages == 2
     # empty
-    assert k.stage_upload(b"", "e.pdf")[4][0] == 400
+    assert k.stage_upload(b"", "e.pdf")[5][0] == 400
     # not a pdf (no %PDF header, .pdf extension) → 400
-    assert k.stage_upload(b"i am not a pdf at all", "x.pdf")[4][0] == 400
+    assert k.stage_upload(b"i am not a pdf at all", "x.pdf")[5][0] == 400
     # encrypted → refused
     ep = _tmp("enc.pdf"); make_encrypted_pdf(ep)
-    assert k.stage_upload(ep.read_bytes(), "enc.pdf")[4][0] == 400
+    assert k.stage_upload(ep.read_bytes(), "enc.pdf")[5][0] == 400
     # oversized → 413 (shrink the cap rather than allocate 25 MB)
     old = kadmos_module.PDF_MAX_BYTES
     try:
         kadmos_module.PDF_MAX_BYTES = 100
-        assert k.stage_upload(b"%PDF-" + b"0" * 500, "big.pdf")[4][0] == 413
+        assert k.stage_upload(b"%PDF-" + b"0" * 500, "big.pdf")[5][0] == 413
     finally:
         kadmos_module.PDF_MAX_BYTES = old
+
+
+# ── v1.1 confirmation gate ──────────────────────────────────────────────────────
+def test_gate_state_and_parse():
+    k = _fresh()
+    k.set_pending("g", "d1", "invoice.pdf", "PDF", kind="pdf", size=3200, pages=3)
+    st = k.awaiting_confirmation("g")
+    assert st and st["confirmed"] is False
+    prompt = k.gate_prompt(st)
+    assert "invoice.pdf" in prompt and "3 pages" in prompt and "read it?" in prompt
+    assert k.parse_gate_reply("yes go ahead") == "yes"
+    assert k.parse_gate_reply("no wrong one") == "no"
+    assert k.parse_gate_reply("hmm maybe") == "ambiguous"
+    k.confirm("g")
+    assert k.awaiting_confirmation("g") is None and k.get_pending("g")["confirmed"] is True
+
+
+def test_gate_image_lane_fork():
+    k = _fresh()
+    k.set_pending("gi", "d2", "receipt.jpg", "image", kind="image", size=90000)
+    prompt = k.gate_prompt(k.awaiting_confirmation("gi"))
+    assert "read the text" in prompt and "describe" in prompt
+    assert k.parse_gate_reply("read the text", needs_lane=True) == "ocr"
+    assert k.parse_gate_reply("what does this say", needs_lane=True) == "ocr"
+    assert k.parse_gate_reply("look at it and describe", needs_lane=True) == "vision"
+    assert k.parse_gate_reply("yes", needs_lane=True) == "ambiguous"   # bare yes → which lane?
+    assert k.parse_gate_reply("nah", needs_lane=True) == "no"
 
 
 # ── 0a–0f. Multi-format router ──────────────────────────────────────────────────

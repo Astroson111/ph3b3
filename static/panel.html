@@ -2192,7 +2192,9 @@ async function uploadPdf(file) {
       return;
     }
     const data = await res.json();
-    addMsg('asst', '📄 Loaded “' + data.filename + '” (' + (data.label || 'document') + '). Ask me to summarize it, or flip on Reading mode and just ask questions.');
+    // Confirmation gate: Phoebe asks before reading. Show her question; the user's
+    // next chat reply (yes/no/look) is the go/no-go.
+    addMsg('asst', '📄 ' + (data.gate_prompt || ('Loaded ' + data.filename + '. Want me to read it?')));
     activeDoc = { filename: data.filename, label: data.label || 'document', kind: data.kind };
     showReaderUI();
   } catch (e) {

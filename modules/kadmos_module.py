@@ -85,6 +85,20 @@ _PDF_CLOSE = "<<<END PDF>>>"
 _REFUSE_FLOOR_QUERY   = "I won't help with that — that crosses a hard line for me."
 _REFUSE_FLOOR_CONTENT = "I read that document, but its contents cross into something I won't relay."
 
+# Confirmation-gate reply parsing (conversational, not a magic word).
+_GATE_NO = re.compile(
+    r"\b(no|nope|nah|cancel|stop|don'?t|do not|wrong( one)?|leave it|never ?mind|"
+    r"skip|forget it|not now|unread)\b", re.I)
+_GATE_YES = re.compile(
+    r"\b(yes|yeah|yep|yup|sure|ok(ay)?|go|go ahead|do it|read it|read|please|"
+    r"proceed|sounds good|go for it)\b", re.I)
+_GATE_LOOK = re.compile(
+    r"\b(look|describe|what ?is|what'?s (?:this|it)|see it|view it|vision|"
+    r"picture of|photo of|what do you see)\b", re.I)
+_GATE_READ = re.compile(
+    r"\b(read|ocr|the text|what does (?:this|it|that) say|what'?s it say|"
+    r"transcribe|scan|the words)\b", re.I)
+
 # A "whole-document" ask (summary/overview) vs a follow-up detail question.
 _WHOLE_DOC_RE = re.compile(
     r"\b(summar|overview|gist|what(?:'s| is) (?:this|it)(?: about| say)?|"
@@ -131,10 +145,13 @@ class KadmosModule:
         return self._reading.get(session_id or "default",
                                  {"mode": False, "instruction": "", "doc_mode": "auto"})
 
-    # ── Session document tracking ─────────────────────────────────────────────
-    def set_pending(self, session_id: str, doc_id: str, filename: str, label: str = "document"):
+    # ── Session document tracking + confirmation gate ─────────────────────────
+    def set_pending(self, session_id: str, doc_id: str, filename: str, label: str = "document",
+                    kind: str = None, size: int = None, pages: int = None):
         self._pending[session_id or "default"] = {
             "doc_id": doc_id, "filename": filename, "label": label,
+            "kind": kind, "size": size, "pages": pages,
+            "confirmed": False, "lane": None,          # gate: nothing read until an explicit go
             "was_chunked": None, "rolling_summary": None, "full_text": None,
         }
 
@@ -143,6 +160,62 @@ class KadmosModule:
 
     def clear_pending(self, session_id: str):
         self._pending.pop(session_id or "default", None)
+
+    def awaiting_confirmation(self, session_id: str):
+        """The pending doc if it exists and has NOT been confirmed yet, else None."""
+        st = self._pending.get(session_id or "default")
+        return st if (st and not st.get("confirmed")) else None
+
+    def confirm(self, session_id: str, lane: str = None):
+        st = self._pending.get(session_id or "default")
+        if st:
+            st["confirmed"] = True
+            if lane:
+                st["lane"] = lane
+        return st
+
+    @staticmethod
+    def _human_size(n) -> str:
+        if not n:
+            return ""
+        if n < 1024:
+            return f"{n} B"
+        if n < 1024 * 1024:
+            return f"{n / 1024:.0f} KB"
+        return f"{n / (1024 * 1024):.1f} MB"
+
+    def gate_prompt(self, st: dict) -> str:
+        """The confirmation question — filename, detected type, size, page count
+        where cheap. Nothing has been read yet."""
+        name = st.get("filename", "that file")
+        bits = [st.get("label", "document")]
+        if st.get("pages"):
+            bits.append(f"{st['pages']} page" + ("s" if st["pages"] != 1 else ""))
+        sz = self._human_size(st.get("size"))
+        if sz:
+            bits.append(sz)
+        meta = ", ".join(bits)
+        if st.get("kind") == "image":
+            return (f"This is {name} — {meta}. Want me to read the text in it, or look at it "
+                    f"and describe what it shows?")
+        return f"This is {name} — {meta}. Want me to read it?"
+
+    def parse_gate_reply(self, msg: str, needs_lane: bool = False) -> str:
+        """Return 'no' | 'yes' | 'ocr' | 'vision' | 'ambiguous' — conversational,
+        no magic word. needs_lane=True (image with no chosen lane) forks read/look."""
+        m = msg or ""
+        if _GATE_NO.search(m):
+            return "no"
+        if needs_lane:
+            look, read = _GATE_LOOK.search(m), _GATE_READ.search(m)
+            if look and not read:
+                return "vision"
+            if read and not look:
+                return "ocr"
+            return "ambiguous"          # both or a bare "yes" → clarify the fork
+        if _GATE_YES.search(m):
+            return "yes"
+        return "ambiguous"
 
     # ── Input / path safety ───────────────────────────────────────────────────
     @staticmethod
@@ -228,27 +301,31 @@ class KadmosModule:
 
     # ── Upload staging ────────────────────────────────────────────────────────
     def stage_upload(self, raw: bytes, filename: str = "document"):
-        """Validate + stage an uploaded document. Return
-        (doc_id, safe_name, kind, label, None) or (None,None,None,None,(code,msg))."""
+        """Validate + stage an uploaded document (cheap ID only — NO extraction/OCR;
+        that waits for the confirmation gate). Return
+        (doc_id, safe_name, kind, label, pages, None) or
+        (None, None, None, None, None, (code, msg))."""
         if not raw:
-            return None, None, None, None, (400, "empty upload")
+            return None, None, None, None, None, (400, "empty upload")
         if len(raw) > PDF_MAX_BYTES:
-            return None, None, None, None, (413, f"file too large: {len(raw)} bytes (max {PDF_MAX_BYTES})")
+            return None, None, None, None, None, (413, f"file too large: {len(raw)} bytes (max {PDF_MAX_BYTES})")
         kind, refusal = self.detect_format(raw, filename)
         if refusal:
-            return None, None, None, None, (400, refusal)
-        # Encrypted PDFs are refused up front (never store an unreadable file).
+            return None, None, None, None, None, (400, refusal)
+        pages = None
+        # Cheap metadata only: page count + encrypted check are PDF header reads,
+        # not text extraction.
         if kind == "pdf":
             try:
                 d = fitz.open(stream=raw, filetype="pdf")
-                enc, npages = d.needs_pass, d.page_count
+                enc, pages = d.needs_pass, d.page_count
                 d.close()
             except Exception:
-                return None, None, None, None, (400, "not a decodable PDF")
+                return None, None, None, None, None, (400, "not a decodable PDF")
             if enc:
-                return None, None, None, None, (400, "PDF is encrypted/password-protected — I can't open it")
-            if npages < 1:
-                return None, None, None, None, (400, "PDF has no pages")
+                return None, None, None, None, None, (400, "PDF is encrypted/password-protected — I can't open it")
+            if pages < 1:
+                return None, None, None, None, None, (400, "PDF has no pages")
         doc_id = uuid.uuid4().hex
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", Path(filename or "document").name)[:80] or "document"
         ext = Path(safe).suffix.lower()
@@ -257,7 +334,7 @@ class KadmosModule:
         (INBOX / f"{doc_id}{ext}").write_bytes(raw)
         label = _KIND_LABEL.get(kind, "document")
         log.info("[kadmos] staged %s (%r, kind=%s)", doc_id, safe, kind)
-        return doc_id, safe, kind, label, None
+        return doc_id, safe, kind, label, pages, None
 
     # ── Per-format extraction → a uniform ex dict ─────────────────────────────
     @staticmethod
