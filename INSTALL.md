@@ -50,7 +50,18 @@ piper --version
 sudo apt install ffmpeg portaudio19-dev python3-pyaudio libsndfile1 v4l-utils
 ```
 
-### 5. Tailscale (recommended for remote access)
+### 5. Tesseract OCR (for the Kadmos PDF reader's scanned-document fallback)
+
+Kadmos reads born-digital PDFs with no extra system package (PyMuPDF is pip-only).
+For **scanned / image-only** PDFs it falls back to OCR, which needs the tesseract
+binary. Without it, Kadmos still reads text-based PDFs and reports honestly that a
+scan can't be read until OCR is installed.
+
+```bash
+sudo apt install tesseract-ocr
+```
+
+### 6. Tailscale (recommended for remote access)
 
 Tailscale creates an encrypted mesh between your devices so Ph3b3 stays on
 your LAN while your phone or laptop can reach her from anywhere — no port

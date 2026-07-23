@@ -26,6 +26,11 @@ unidecode>=1.3.8
 Pillow>=10.0.0
 python-docx
 pdfplumber
+# Kadmos — PDF reader (text-layer via PyMuPDF, OCR via pytesseract wrapper).
+# NOTE: pytesseract needs the system binary too — `sudo apt install tesseract-ocr`
+# (see INSTALL.md). Without it, born-digital PDFs still work; scans report honestly.
+PyMuPDF>=1.24.0
+pytesseract>=0.3.10
 trafilatura
 # Mnemosyne — shared persistent memory spine (in-process, CPU-only, no GPU)
 sqlite-vec>=0.1.9
