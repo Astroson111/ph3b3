@@ -185,24 +185,12 @@ a compute path, not the model eyeballing rows — and are refused by name.
 
 ---
 
-## Interrupting Phoebe — stop & voice barge-in
+## Interrupting Phoebe — stop control
 
-You can cut Phoebe off mid-answer and take the next turn immediately.
-
-- **Explicit stop** (always on, no setup): a **STOP** button appears in the composer
-  while she's answering, and **Esc** does the same. It halts playback and cancels the
-  turn server-side so the model stops generating and frees the GPU. Deterministic, works
-  on any machine — no microphone involved.
-- **Voice barge-in** (opt-in): with the **barge-in** toggle on (under the mic) *and* the
-  mic in **AUTO** mode, simply speaking over her interrupts and starts your next turn.
-  It is **off by default** on a fresh clone; a **● live** indicator shows whenever the
-  barge-in mic is armed. Detection audio is held in a short in-memory rolling window that
-  is never saved or uploaded — only your captured utterance goes to speech-to-text.
-
-Voice barge-in relies on the browser's acoustic echo cancellation (`echoCancellation`)
-so Phoebe's own voice from the speakers doesn't trigger it. **AEC quality varies by
-browser and audio setup** — if your setup false-triggers (she interrupts herself),
-turn barge-in off; the **STOP button / Esc are the honest fallback** and always work.
+You can cut Phoebe off mid-answer and take the next turn immediately. A **STOP** button
+appears in the composer while she's answering, and **Esc** does the same. It halts
+playback and cancels the turn server-side so the model stops generating and frees the
+GPU — deterministic, works on any machine, no microphone involved.
 
 ---
 

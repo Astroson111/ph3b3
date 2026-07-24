@@ -29,7 +29,7 @@
     // ── Chat helpers ──────────────────────────────────────────────────────────
     let busy = false;
 
-    // ── Interrupt / barge-in state (Tier 1: explicit stop; Tier 2 reuses stopSpeaking) ──
+    // ── Interrupt state (explicit stop — STOP button + Esc) ─────────────────────
     // turnSeq is the client's per-turn token: bumping it supersedes the in-flight turn so
     // its late unwinding (aborted fetch, stopped audio) can't clobber the next turn's state.
     let turnSeq       = 0;
@@ -41,7 +41,7 @@
 
     // Cut Phoebe off mid-answer and free the composer for the next turn immediately.
     // Halts audio, aborts the in-flight request, and tells the server to cancel generation
-    // (freeing the GPU). One path for the stop button, Esc, and voice barge-in.
+    // (freeing the GPU). Shared by the STOP button and Esc.
     function stopSpeaking() {
         if (!busy) return;                       // nothing active to interrupt
         turnSeq++;                               // supersede → the running turn's tail no-ops
