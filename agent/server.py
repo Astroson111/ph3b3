@@ -140,6 +140,7 @@ from screenshot_module import ScreenshotModule
 from kadmos_module import KadmosModule, KadmosError  # Kadmos — PDF reader (untrusted-input firewall)
 from recipes import RecipeStore
 import morpheus
+import amphion                    # song generation (ACE-Step 1.5) — Morpheus's sibling (shares gpu_lock + floor)
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
 import intent_registry           # dedicated-module intent claims (precedence over Metis)
 import device_auth               # per-device auth keys (Iris/Dio), decoupled from the human login
@@ -369,6 +370,10 @@ clock = TimeModule()
 if _SETUP_COMPLETE and AUTH_PASS:
     device_auth.grandfather(AUTH_PASS)
 resume = ResumeModule()
+if amphion.ready():
+    log.info("Amphion (song generation) ready.")
+else:
+    log.warning("Amphion (song generation): ComfyUI or ACE-Step weights unreachable at boot — generation will fail until fixed.")
 network = NetworkModule()
 bluetooth = BluetoothModule()
 system = SystemModule()
@@ -2086,6 +2091,8 @@ async def vad_stream(websocket: WebSocket):
     dev = websocket.headers.get("X-Ph3b3-Device", "stackchan")
     mon = audio_monitor.AudioMonitor()
     sent_endpoint = False
+    _dmax_prob = 0.0; _dmax_rms = -120.0   # DIAG: received-frame telemetry (numbers only, no audio)
+    _diag_first = True
     log.info("[vad] %s connected — VAD endpointing (in-memory only, not persisted)", dev)
     try:
         while True:
@@ -2099,19 +2106,36 @@ async def vad_stream(websocket: WebSocket):
                 if "reset" in (msg.get("text") or ""):
                     mon.reset(); sent_endpoint = False
                 continue
+            # DIAG (temporary): identify byte-swap vs misalignment. Aggregate numbers
+            # only (len/rms/peak) — NEVER logs raw sample bytes; privacy invariant intact.
+            if _diag_first and len(raw) >= 4:
+                _diag_first = False
+                import numpy as np
+                _n2 = (len(raw) // 2) * 2
+                _le = np.frombuffer(raw[:_n2], dtype="<i2").astype(np.float32)
+                _be = np.frombuffer(raw[:_n2], dtype=">i2").astype(np.float32)
+                log.info("[vad] %s DIAG first-frame len=%d le_rms=%.0f le_peak=%d be_rms=%.0f be_peak=%d",
+                         dev, len(raw), float(np.sqrt((_le**2).mean())), int(np.abs(_le).max()),
+                         float(np.sqrt((_be**2).mean())), int(np.abs(_be).max()))
             # Feed the frames; NOTHING here stores raw — feed_bytes buffers a sub-frame
             # tail in memory only. We look at telemetry, not the samples.
             for r in mon.feed_bytes(raw):
+                if r["speech_prob"] > _dmax_prob: _dmax_prob = r["speech_prob"]
+                if r["rms_db"] > _dmax_rms: _dmax_rms = r["rms_db"]
                 if r["endpoint"] and not sent_endpoint:
                     sent_endpoint = True
                     await websocket.send_json({"event": "endpoint", "t": r["t"]})
+                    log.info("[vad] %s endpoint fired at t=%.2fs (frame-time)", dev, r["t"])
     except WebSocketDisconnect:
         pass
     except Exception as e:
         log.info("[vad] %s error: %s", dev, e)
     finally:
+        # DIAGNOSTIC (Phase 3b): flags/counts only — NEVER audio (privacy invariant intact).
+        # Splits "Silero never fired" (had_speech / endpoint_sent) from "Dio didn't receive it".
+        log.info("[vad] %s closed — frames=%d had_speech=%s endpoint_sent=%s max_prob=%.3f max_rms_db=%.1f",
+                 dev, mon._n, mon.had_speech, sent_endpoint, _dmax_prob, _dmax_rms)
         mon.reset()   # drop state + the sub-frame byte tail immediately; nothing persists
-        log.info("[vad] %s closed", dev)
 
 
 @app.post("/vad/turn")
@@ -3928,6 +3952,113 @@ def _prune_image_subdirs() -> None:
                     child.rmdir()
             except Exception:
                 pass
+
+
+# ── Amphion — song generation (ACE-Step 1.5), Morpheus's sibling ───────────────
+def _amphion_floor_gate(tags: str, lyrics: str, request: Request) -> None:
+    """Content floor for Amphion — the SAME Morpheus floor, run on the prompt AND the
+    lyrics (never a parallel floor). Floor → localhost interlock → profile. Raises 403
+    on any violation; logs field/category only, never the text."""
+    fields = ((tags, "tags"), (lyrics, "lyrics"))
+    for field, which in fields:
+        if not (field or "").strip():
+            continue
+        cat = morpheus.floor_check(field)
+        if cat:
+            log.warning("[safety] amphion floor-blocked (%s) — category: %s", which, cat)
+            raise HTTPException(403, detail="Content policy: not permitted")
+    forced = None
+    if morpheus.ACTIVE_PROFILE == "permissive":
+        host = (request.client.host if request.client else "") or ""
+        if host not in _MORPHEUS_LOCAL_ADDRS:
+            forced = morpheus.STRICT_DENYLIST
+    for field, which in fields:
+        if not (field or "").strip():
+            continue
+        if not morpheus.profile_check(field, denylist=forced):
+            log.warning("[safety] amphion profile-blocked (%s)", which)
+            raise HTTPException(403, detail="Content policy: not permitted")
+
+
+@app.post("/amphion/generate")
+async def amphion_generate(request: Request, body: dict):
+    tags = (body.get("tags") or "").strip()
+    if not tags:
+        raise HTTPException(400, "a song description is required")
+    lyrics = (body.get("lyrics") or "").strip()
+    _amphion_floor_gate(tags, lyrics, request)   # floor on prompt AND lyrics, before anything queues
+    try:
+        seconds = max(5.0, min(amphion.MAX_DURATION, float(body.get("seconds", amphion.DEFAULT_DURATION))))
+    except (TypeError, ValueError):
+        seconds = amphion.DEFAULT_DURATION
+    try:
+        seed = int(body.get("seed"))
+        if seed < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        seed = int.from_bytes(os.urandom(4), "big")
+    variant = body.get("variant") if body.get("variant") in amphion.DIT_BY_VARIANT else "base"
+    params = {
+        "tags": tags, "lyrics": lyrics,
+        "bpm": int(body.get("bpm", 120)), "keyscale": body.get("keyscale", "C major"),
+        "timesig": str(body.get("timesig", "4")), "language": body.get("language", "en"),
+        "seconds": seconds, "seed": seed, "variant": variant,
+    }
+    job_id = amphion.new_job()
+    task = asyncio.create_task(amphion.run_generation(job_id, params))
+    amphion.register_task(job_id, task)
+    return {"job_id": job_id}
+
+
+@app.get("/amphion/job/{job_id}")
+async def amphion_job(job_id: str):
+    j = amphion.jobs.get(job_id)
+    if not j:
+        raise HTTPException(404, "no such job")
+    return j
+
+
+@app.delete("/amphion/job/{job_id}")
+async def amphion_cancel(job_id: str):
+    return {"cancelled": await amphion.cancel(job_id)}
+
+
+@app.get("/amphion/library")
+async def amphion_library():
+    return {"songs": await asyncio.to_thread(amphion.library, 100)}
+
+
+@app.get("/amphion/file/{job_id}")
+async def amphion_file(job_id: str):
+    if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
+        raise HTTPException(400, "bad id")
+    p = amphion.song_path(job_id)
+    if not p:
+        raise HTTPException(404, "not found")
+    return FileResponse(str(p), media_type="audio/flac", filename=f"{job_id}.flac")
+
+
+@app.get("/amphion/export/{job_id}/{fmt}")
+async def amphion_export(job_id: str, fmt: str):
+    """Download the master converted to flac/wav/mp3 with an export-only -1 dBTP
+    normalize (master on disk is never touched). WAV = 44.1k/16-bit, Dio-ready."""
+    if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
+        raise HTTPException(400, "bad id")
+    if fmt not in amphion.EXPORT_FORMATS:
+        raise HTTPException(400, "format must be flac, wav or mp3")
+    res = await asyncio.to_thread(amphion.export_bytes, job_id, fmt)
+    if not res:
+        raise HTTPException(404, "not found or conversion failed")
+    data, media_type, filename = res
+    return Response(content=data, media_type=media_type,
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.delete("/amphion/song/{job_id}")
+async def amphion_delete_song(job_id: str):
+    if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
+        raise HTTPException(400, "bad id")
+    return {"deleted": await asyncio.to_thread(amphion.delete_song, job_id)}
 
 
 @app.post("/morpheus/delete_all")
