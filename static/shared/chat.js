@@ -2,6 +2,7 @@
     const chatEl    = document.getElementById('chat');
     const inputEl   = document.getElementById('msg-input');
     const sendBtn   = document.getElementById('send-btn');
+    const stopBtn   = document.getElementById('stop-btn');   // composer interrupt (both portals; may be null)
     const dotEl     = document.getElementById('status-dot');
     const statusEl  = document.getElementById('status-text');
     const btnAuto   = document.getElementById('btn-auto');
@@ -27,6 +28,32 @@
 
     // ── Chat helpers ──────────────────────────────────────────────────────────
     let busy = false;
+
+    // ── Interrupt / barge-in state (Tier 1: explicit stop; Tier 2 reuses stopSpeaking) ──
+    // turnSeq is the client's per-turn token: bumping it supersedes the in-flight turn so
+    // its late unwinding (aborted fetch, stopped audio) can't clobber the next turn's state.
+    let turnSeq       = 0;
+    let currentSource = null;   // active TTS BufferSourceNode — kept so it can be stopped
+    let currentAbort  = null;   // AbortController for the in-flight /chat fetch
+
+    function showStop() { if (stopBtn) stopBtn.style.display = ''; }
+    function hideStop() { if (stopBtn) stopBtn.style.display = 'none'; }
+
+    // Cut Phoebe off mid-answer and free the composer for the next turn immediately.
+    // Halts audio, aborts the in-flight request, and tells the server to cancel generation
+    // (freeing the GPU). One path for the stop button, Esc, and voice barge-in.
+    function stopSpeaking() {
+        if (!busy) return;                       // nothing active to interrupt
+        turnSeq++;                               // supersede → the running turn's tail no-ops
+        if (currentSource) { try { currentSource.stop(); } catch {} currentSource = null; }
+        if (currentAbort)  { try { currentAbort.abort(); } catch {} currentAbort = null; }
+        // server-side truth for both portals: cancel the turn + free the GPU
+        fetch(api('/interrupt/web'), { method: 'POST', headers: { 'Authorization': authHeader } }).catch(() => {});
+        busy = false;
+        unlockInput();
+        hideStop();
+        setStatus('Idle');
+    }
 
     function ts() {
         return new Date().toLocaleTimeString('en-GB', {
@@ -98,7 +125,8 @@
                 const src = ctx.createBufferSource();
                 src.buffer = buffer;
                 src.connect(ctx.destination);
-                src.onended = resolve;
+                currentSource = src;                 // exposed so stopSpeaking() can halt it
+                src.onended = () => { if (currentSource === src) currentSource = null; resolve(); };
                 src.start();
             });
         } catch (e) {
@@ -118,32 +146,35 @@
                  doc_mode: (d && d.value) || 'auto' };
     }
 
-    async function doSend(text) {
+    async function doSend(text, myTurn) {
         setStatus('Thinking');
         const thinking = addThinking();
+        const myAbort = new AbortController();
+        currentAbort = myAbort;
         try {
             const res = await fetch(api('/chat'), {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
                 body:    JSON.stringify(Object.assign({ message: text, session_id: 'web' }, _kadmosReading())),
+                signal:  myAbort.signal,
             });
             thinking.remove();
+            if (myTurn !== turnSeq) return;      // interrupted/superseded while awaiting headers
             if (res.status === 401) { _clearAuth(); _showLogin('Session expired — please reconnect.'); return; }
-            if (!res.ok) {
-                addSys(`Server error: ${res.status}`);
-            } else {
-                const data = await res.json();
-                addMsg('Ph3b3', data.response || '(no response)');
-                if (data.audio) {
-                    setStatus('Speaking');
-                    await playAudio(data.audio);
-                }
+            if (!res.ok) { addSys(`Server error: ${res.status}`); return; }
+            const data = await res.json();
+            if (myTurn !== turnSeq || data.interrupted) return;   // stopped → no render, no audio
+            addMsg('Ph3b3', data.response || '(no response)');
+            if (data.audio) {
+                setStatus('Speaking');
+                await playAudio(data.audio);
             }
-        } catch {
+        } catch (e) {
             thinking.remove();
-            addSys('Cannot reach server — is Ph3b3 running?');
+            if (!(e && e.name === 'AbortError')) addSys('Cannot reach server — is Ph3b3 running?');  // AbortError = deliberate stop
+        } finally {
+            if (currentAbort === myAbort) currentAbort = null;
         }
-        setStatus('Idle');
     }
 
     // ── Image request + inline render ─────────────────────────────────────────
@@ -208,21 +239,36 @@
         const raw = inputEl.value.trim();
         if (!raw || busy) return;
         inputEl.value = '';
+        const myTurn = ++turnSeq;
         busy = true;
         lockInput();
+        showStop();
         const m = raw.match(/^\/(?:img|image)\s+([\s\S]+)/i);
         if (m) {
             await sendImage(m[1].trim());
         } else {
             addMsg('You', raw);
-            await doSend(raw);
+            await doSend(raw, myTurn);
         }
-        busy = false;
-        unlockInput();
+        // Only clean up if this turn wasn't superseded by an interrupt (which already did).
+        if (myTurn === turnSeq) {
+            busy = false;
+            unlockInput();
+            hideStop();
+            setStatus('Idle');
+        }
     }
 
     sendBtn.addEventListener('click', send);
     inputEl.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+    if (stopBtn) stopBtn.addEventListener('click', stopSpeaking);
+    // Esc interrupts — but yields to closing an open overlay (gallery lightbox / status card).
+    document.addEventListener('keydown', e => {
+        if (e.key !== 'Escape' || !busy) return;
+        if (document.querySelector('#gallery-lightbox.open, #gallery-overlay.open, #status-overlay.open')) return;
+        e.preventDefault();
+        stopSpeaking();
+    });
 
     // ── Kadmos document upload (attach 📎) — ONE shared implementation, present on
     // BOTH portals (the attach button sits in each portal's #inputbar, same as the
@@ -348,13 +394,19 @@
         if (!text) { addSys('(no speech detected)'); return false; }
 
         addMsg('You', text);
+        const myTurn = ++turnSeq;
         busy = true;
         lockInput();
+        showStop();
         try {
-            await doSend(text);
+            await doSend(text, myTurn);
         } finally {
-            busy = false;
-            unlockInput();
+            if (myTurn === turnSeq) {      // skip if an interrupt superseded this turn
+                busy = false;
+                unlockInput();
+                hideStop();
+                setStatus('Idle');
+            }
         }
         return true;
     }

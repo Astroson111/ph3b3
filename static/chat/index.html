@@ -66,6 +66,7 @@
             </div>
             <div id="ctrl-row">
                 <button id="send-btn">SEND</button>
+                <button id="stop-btn" title="Stop Phoebe (Esc)" style="display:none">■&nbsp;STOP</button>
                 <div id="mode-box">
                     <button id="btn-auto">AUTO</button>
                     <button id="btn-hold">HOLD</button>
@@ -75,6 +76,10 @@
         <div id="right-col">
             <canvas id="mic-canvas" width="120" height="120"></canvas>
             <div id="mic-label">hold to speak</div>
+            <label id="bargein-label" title="Voice barge-in — in AUTO mode, speak over Phoebe to interrupt her (opt-in; the STOP button/Esc always work)">
+                <input type="checkbox" id="bargein-toggle" /> barge-in
+            </label>
+            <span id="bargein-live" title="Barge-in mic is live" style="display:none">● live</span>
         </div>
     </div>
 

@@ -54,6 +54,34 @@
     const VAD_TICK_MS     = 80;
     const VAD_SILENCE_TKS = Math.ceil(VAD_SILENCE_MS / VAD_TICK_MS);  // 18 ticks
 
+    // ── Voice barge-in (Tier 2, opt-in) ─────────────────────────────────────────
+    // In AUTO mode, sustained speech OVER Phoebe cuts her off and captures the new
+    // utterance. Default OFF on a fresh clone; persisted per-device (a mic setting, not
+    // server state). Detection reuses the never-persisted pre-roll ring buffer — only the
+    // post-trigger capture reaches Whisper. The STOP button / Esc are the honest fallback
+    // if the browser's echo cancellation false-triggers.
+    const bargeToggle = document.getElementById('bargein-toggle');
+    const bargeLive   = document.getElementById('bargein-live');
+    let bargeInEnabled = false;
+    try { bargeInEnabled = localStorage.getItem('ph3b3_bargein') === '1'; } catch {}
+    let bargeCount = 0;
+    const BARGE_TICKS       = 3;     // sustained ticks (~240ms) before firing — ignore blips
+    const BARGE_THRESH_MULT = 2.5;   // louder than normal VAD to resist the speakers' echo
+
+    function updateBargeLive() {
+        // Indicator visible whenever the barge-in mic is armed AND live (AUTO mic open).
+        if (bargeLive) bargeLive.style.display = (bargeInEnabled && autoOn) ? '' : 'none';
+    }
+    if (bargeToggle) {
+        bargeToggle.checked = bargeInEnabled;
+        bargeToggle.addEventListener('change', () => {
+            bargeInEnabled = bargeToggle.checked;
+            try { localStorage.setItem('ph3b3_bargein', bargeInEnabled ? '1' : '0'); } catch {}
+            bargeCount = 0;
+            updateBargeLive();
+        });
+    }
+
     // ── Mode buttons ──────────────────────────────────────────────────────────
     function refreshButtons() {
         if (micMode === 'auto') {
@@ -146,6 +174,7 @@
     async function startAutoLoop() {
         if (!MIC_OK || autoOn) return;
         autoOn = true;
+        updateBargeLive();
         vadState       = 'waiting';
         capturedChunks = [];
         preRollChunks  = [];
@@ -171,13 +200,14 @@
             micProc = micCtx.createScriptProcessor(4096, 1, 1);
             micProc.onaudioprocess = e => {
                 const chunk = new Float32Array(e.inputBuffer.getChannelData(0));
-                if (vadState === 'waiting') {
+                if (vadState === 'capturing') {
+                    capturedChunks.push(chunk);
+                } else {
+                    // 'waiting' AND 'submitting' (a turn in flight): keep a rolling pre-roll so
+                    // a barge-in captures the user's opening words. In-memory only, never persisted.
                     if (preRollChunks.length >= PRE_ROLL_MAX) preRollChunks.shift();
                     preRollChunks.push(chunk);
-                } else if (vadState === 'capturing') {
-                    capturedChunks.push(chunk);
                 }
-                // 'submitting': discard
             };
 
             micSource.connect(micAnalyser);
@@ -202,11 +232,31 @@
             // VAD tick loop
             autoItvl = setInterval(() => {
                 if (!autoOn) { clearInterval(autoItvl); autoItvl = null; return; }
-                if (busy || vadState === 'submitting') return;
 
                 micAnalyser.getFloatTimeDomainData(vadBuf);
                 let sum = 0; for (const s of vadBuf) sum += s * s;
                 const rms = Math.sqrt(sum / vadBuf.length);
+
+                // ── While a turn is in flight, only voice barge-in may act. Sustained speech
+                // OVER Phoebe (currentSource live = she's audibly speaking) cuts her off and
+                // starts capturing the new utterance. Opt-in; a higher threshold + sustained
+                // ticks resist the speakers' echo (browser echoCancellation helps too). ──
+                if (busy) {
+                    if (bargeInEnabled && currentSource && rms >= vadThresh * BARGE_THRESH_MULT) {
+                        if (++bargeCount >= BARGE_TICKS) {
+                            bargeCount = 0;
+                            stopSpeaking();                       // cut her off + free the turn
+                            capturedChunks = preRollChunks.splice(0);
+                            silenceN = 0; captureT = Date.now();
+                            vadState = 'capturing'; autoCapturing = true;
+                            setStatus('Listening'); micLabel.textContent = 'listening…';
+                        }
+                    } else {
+                        bargeCount = 0;
+                    }
+                    return;
+                }
+                if (vadState === 'submitting') return;
 
                 if (vadState === 'waiting') {
                     if (rms >= vadThresh) {
@@ -257,6 +307,7 @@
 
     function stopAutoLoop() {
         autoOn        = false;
+        updateBargeLive();
         autoCapturing = false;
         vadState      = 'waiting';
         teardownMic();

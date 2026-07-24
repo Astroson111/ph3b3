@@ -472,6 +472,29 @@ def _time_intercept(user_msg: str):
     return None
 
 
+# ══ Interrupt / barge-in — per-turn generation tracking (one truth, both portals) ══
+# A turn is (session_id, turn_id). /interrupt marks that id cancelled and cancels the
+# in-flight generation TASK, which drops the Ollama HTTP connection so the model stops
+# holding the GPU (there is no stream to cut — the whole stack is request/response).
+# Audio produced by a cancelled turn is dropped so a late blob never speaks over the next.
+_turn_seq: dict = {}         # session_id -> monotonically increasing turn counter
+_turn_task: dict = {}        # session_id -> asyncio.Task running the in-flight generation
+_turn_cancelled: dict = {}   # session_id -> set of cancelled turn_ids
+
+
+def _turn_begin(sid: str) -> int:
+    """Start a fresh turn: bump the counter, clear stale cancel state for this session."""
+    sid = sid or "default"
+    _turn_seq[sid] = _turn_seq.get(sid, 0) + 1
+    _turn_cancelled.pop(sid, None)   # a new turn is never pre-cancelled
+    _kadmos_cancel.pop(sid, None)    # clear a stale between-chunks cancel flag
+    return _turn_seq[sid]
+
+
+def _turn_is_cancelled(sid: str, tid: int) -> bool:
+    return tid in _turn_cancelled.get(sid or "default", ())
+
+
 # ══ Kadmos — document reader (untrusted-input firewall), twin of the web path ══
 _kadmos_cancel: dict = {}   # session_id -> True flips an in-progress chunked read
 
@@ -645,16 +668,43 @@ def _doc_intent(user_msg: str, session_id: str) -> bool:
     return kadmos.is_document_intent(user_msg) or kadmos.is_whole_doc_ask(user_msg)
 
 
+async def _ollama_chat(client, payload):
+    """POST to Ollama and return the assembled message dict. Consumes the reply as a
+    STREAM (stream=True) even though the caller uses it whole: if this coroutine is
+    cancelled by an interrupt, the async-with closes the connection mid-token and Ollama
+    aborts the generation, RELEASING THE GPU. A stream=False call keeps running on the
+    GPU after a client disconnect (detached, not dead) — the exact stall we must avoid.
+    Nothing is streamed to the browser; the full message is reassembled here."""
+    p = dict(payload); p["stream"] = True
+    parts, tool_calls, role = [], None, "assistant"
+    async with client.stream("POST", f"{OLLAMA_HOST}/api/chat", json=p) as r:
+        r.raise_for_status()
+        async for line in r.aiter_lines():
+            if not line.strip():
+                continue
+            obj = json.loads(line)
+            m = obj.get("message") or {}
+            if m.get("role"):        role = m["role"]
+            if m.get("content"):     parts.append(m["content"])
+            if m.get("tool_calls"):  tool_calls = m["tool_calls"]
+            if obj.get("done"):
+                break
+    msg = {"role": role, "content": "".join(parts)}
+    if tool_calls:
+        msg["tool_calls"] = tool_calls
+    return msg
+
+
 async def chat_with_tools(messages, session_id: str = "default"):
     async with httpx.AsyncClient(timeout=120) as client:
         payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":TOOLS,"options":{"temperature":0.7,"num_ctx":8192}}
         try:
-            response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
-            response.raise_for_status()
+            msg = await _ollama_chat(client, payload)
+        except asyncio.CancelledError:
+            raise                                   # interrupt — propagate so the turn aborts + GPU frees
         except Exception as e:
             log.error(f"Ollama initial request failed: {e}")
             return f"I can't reach my language model right now ({HEAVY_MODEL}). Is Ollama running?", messages
-        msg = response.json()["message"]
         called_tools: set = set()
         tool_cache: dict = {}
         loop = 0
@@ -677,12 +727,12 @@ async def chat_with_tools(messages, session_id: str = "default"):
             payload["model"] = follow_model
             payload["messages"] = messages
             try:
-                response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
-                response.raise_for_status()
+                msg = await _ollama_chat(client, payload)
+            except asyncio.CancelledError:
+                raise                               # interrupt during the tool loop — abort + free GPU
             except Exception as e:
                 log.error(f"Ollama follow-up request failed (model={follow_model}): {e}")
                 return f"I completed the action but couldn't formulate a response — model '{follow_model}' may not be installed.", messages
-            msg = response.json()["message"]
         return msg.get("content",""), messages
 
 class Session:
@@ -741,43 +791,63 @@ async def skills_log():
 @app.post("/chat")
 async def chat_endpoint(body: dict):
     session = get_session(body.get("session_id","default"))
+    _sid = body.get("session_id", "default")
     user_msg = body.get("message","")
     if "soul" in user_msg.lower():
         tts.soul_line()
     session.add("user", user_msg)
+    # ── Interrupt/barge-in: stamp this turn so a stop can cancel it (see /interrupt). ──
+    _tid = _turn_begin(_sid)
+
+    async def _finish(text):
+        """Store the turn honestly + synthesize audio, unless it was interrupted. An
+        interrupt that lands after the text is produced keeps the honest text in the
+        transcript but DROPS the audio, so a late blob never speaks over the next turn.
+        (Mid-generation interrupt of the main path is handled by the CancelledError arm.)"""
+        if _turn_is_cancelled(_sid, _tid):
+            session.add("assistant", text or "[interrupted]")
+            return {"response": text or "", "interrupted": True}   # no audio
+        session.add("assistant", text)
+        audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, text)
+        if _turn_is_cancelled(_sid, _tid):        # interrupted DURING synth → drop the blob
+            return {"response": text, "interrupted": True}
+        return {"response": text, "audio": audio_b64}
+
     # ── Kadmos reading-mode state (from the reader strip) + v1.1 confirmation gate.
     # set_reading before routing so a later "summarize this" also honors the strip; the
     # gate runs BEFORE all other routing — an attached-but-unconfirmed doc makes THIS
     # turn the go/no-go, and nothing was read at upload. ──
-    _ksid = body.get("session_id", "default")
-    kadmos.set_reading(_ksid, bool(body.get("reading_mode")),
+    kadmos.set_reading(_sid, bool(body.get("reading_mode")),
                        body.get("reading_instruction", ""), body.get("doc_mode", "auto"))
-    _gate = await _kadmos_gate(user_msg, _ksid)
+    _gate = await _kadmos_gate(user_msg, _sid)
     if _gate is not None:
-        session.add("assistant", _gate)
-        audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, _gate)
-        return {"response": _gate, "audio": audio_b64}
+        return await _finish(_gate)
     _det = _time_intercept(user_msg)
     if _det is not None:
-        session.add("assistant", _det)
-        audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, _det)
-        return {"response": _det, "audio": audio_b64}
+        return await _finish(_det)
     # ── Kadmos forced routing — a confirmed doc + (reading mode ON or a document ask)
-    # routes the turn to the sealed reader so untrusted text never enters the tool loop. ──
-    _sid = body.get("session_id", "default")
+    # routes the turn to the sealed reader so untrusted text never enters the tool loop.
+    # Interrupt stops it between chunks via the shared _kadmos_cancel flag. ──
     _kst = kadmos.get_pending(_sid)
     if _kst and _kst.get("confirmed") and (kadmos.get_reading(_sid).get("mode") or _doc_intent(user_msg, _sid)):
         _kans = await _answer_pdf(user_msg, _sid)
         if _kans is not None:
             log.info("[kadmos] forced-routing → answered from the loaded document")
-            session.add("assistant", _kans)
-            audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, _kans)
-            return {"response": _kans, "audio": audio_b64}
-    response, updated = await chat_with_tools(session.messages(), _sid)
+            return await _finish(_kans)
+    # ── Main generation — run as a cancellable task so /interrupt frees the GPU by
+    # dropping the Ollama request (no stream to cut). CancelledError = killed mid-gen. ──
+    task = asyncio.create_task(chat_with_tools(session.messages(), _sid))
+    _turn_task[_sid] = task
+    try:
+        response, updated = await task
+    except asyncio.CancelledError:
+        session.add("assistant", "[interrupted]")     # nothing produced — mark it, no audio
+        log.info(f"[interrupt] session={_sid!r} turn={_tid} — generation aborted mid-flight")
+        return {"response": "", "interrupted": True}
+    finally:
+        _turn_task.pop(_sid, None)
     session.history = updated
-    session.add("assistant", response)
-    audio_b64 = await asyncio.to_thread(tts.synthesize_to_b64, response)
-    return {"response": response, "audio": audio_b64}
+    return await _finish(response)
 
 @app.delete("/session/{session_id}")
 async def clear_session(session_id: str):
@@ -812,6 +882,25 @@ async def kadmos_cancel(session_id: str):
     web path). The read loop polls _kadmos_cancel between chunks."""
     _kadmos_cancel[session_id or "default"] = True
     return {"session_id": session_id, "cancelling": True}
+
+@app.post("/interrupt/{session_id}")
+async def interrupt_turn(session_id: str):
+    """Explicit stop / voice barge-in — one server-side truth for both /light/ and /chat/.
+    Marks the session's current turn cancelled, cancels its in-flight generation task (which
+    drops the Ollama HTTP connection so the model stops holding the GPU — there is no stream
+    to cut), and flips the Kadmos chunk-cancel flag so a chunked summarize stops between
+    chunks (reusing the existing path, not a second mechanism). Audio from the cancelled turn
+    is dropped server-side. Idempotent; safe when no turn is active."""
+    sid = session_id or "default"
+    tid = _turn_seq.get(sid)
+    if tid is not None:
+        _turn_cancelled.setdefault(sid, set()).add(tid)
+    _kadmos_cancel[sid] = True                 # reuse the between-chunks cancel path
+    t = _turn_task.get(sid)
+    if t is not None and not t.done():
+        t.cancel()                             # drop the Ollama request → free the GPU
+    log.info(f"[interrupt] session={sid!r} turn={tid} — cancelled + task aborted")
+    return {"session_id": sid, "interrupted": True, "turn": tid}
 
 def _ws_authorized(websocket: WebSocket) -> bool:
     """Gate WebSocket handshakes. Browsers send an Origin header (native clients
