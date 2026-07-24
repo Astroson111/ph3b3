@@ -221,6 +221,24 @@ class VisionModule:
         except Exception as e:
             return f"Vision error: {e}"
 
+    def describe_bytes(self, raw: bytes, prompt: str) -> str:
+        """Describe an ARBITRARY uploaded image (raw bytes) via the SAME LLaVA path
+        the camera uses — no camera capture, no new model. Kadmos's vision lane feeds
+        an uploaded document-photo here; the caller treats the returned description as
+        UNTRUSTED (a photo can carry written instructions) and floor-checks it before
+        relay. Ollama /api/generate accepts the base64 of the raw image bytes directly,
+        so no cv2 decode is needed."""
+        try:
+            import requests
+            b64 = base64.b64encode(raw).decode("utf-8")
+            payload = {"model": VISION_MODEL, "prompt": prompt, "images": [b64], "stream": False}
+            r = requests.post(OLLAMA_API_URL, json=payload, timeout=90)
+            if r.status_code == 200:
+                return (r.json().get("response") or "").strip()
+            return f"Vision model error: {r.status_code}"
+        except Exception as e:
+            return f"Vision error: {e}"
+
     def _monitor_loop(self, interval):
         while self.monitoring:
             try:

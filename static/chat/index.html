@@ -43,10 +43,26 @@
     <div id="chat"></div>
     <div id="sep"></div>
 
+    <div id="reader-strip" hidden>
+        <span id="reader-label">Kadmos</span>
+        <select id="doc-type" title="How to read it — Auto follows the file type; override only for edge cases">
+            <option value="auto">Auto</option>
+            <option value="ocr">Force OCR</option>
+            <option value="text">Treat as plain text</option>
+        </select>
+        <input id="read-instr" type="text" autocomplete="off"
+               placeholder="How to read it (optional): focus on dates, explain simply…" />
+        <label id="read-mode-label" title="When on, your questions are answered from this document">
+            <input id="read-mode-toggle" type="checkbox" /><span>Reading mode</span>
+        </label>
+    </div>
+
     <div id="inputbar">
         <div id="left-col">
             <div id="input-wrap">
                 <input id="msg-input" type="text" placeholder="type a message…" autocomplete="off" />
+                <button id="doc-attach-btn" title="Attach a document (PDF, Word, text, or a photo) for Phoebe to read">📎</button>
+                <input id="doc-file-input" type="file" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png" hidden />
             </div>
             <div id="ctrl-row">
                 <button id="send-btn">SEND</button>

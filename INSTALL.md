@@ -158,6 +158,33 @@ python -m platformio run -d C:\pio\ph3b3-fw -t upload       # flash
 
 ---
 
+## Reading documents (Kadmos) — OCR is optional
+
+Kadmos lets Phoebe read a document you hand her — **PDF, Word (.docx), text
+(.txt/.md), and photos of documents (.jpg/.png)** — via the 📎 attach button in
+either portal. Extraction runs locally; the text is treated as untrusted data and
+summarised with tools disabled, so an "ignore your instructions" line inside a file
+is data, never a command.
+
+**Born-digital files work out of the box.** The Python deps (`PyMuPDF`,
+`python-docx`, `pytesseract`, `Pillow`) are in `requirements.txt` — no system
+packages needed for PDFs with a real text layer, Word, or text/markdown.
+
+**OCR (scanned PDFs and photos) is optional** and needs the Tesseract *system*
+binary:
+```bash
+sudo apt install tesseract-ocr
+```
+Without it: text-layer PDFs, `.docx`, `.txt`, and `.md` all read fully; a scanned
+PDF or an image is **refused honestly** with a one-line pointer — *"OCR needs
+tesseract — sudo apt install tesseract-ocr"* — never a silent failure. A fresh clone
+with no Tesseract passes end-to-end on every text format.
+
+Spreadsheets (`.csv`/`.xlsx`) are deliberately **not** supported — honest math needs
+a compute path, not the model eyeballing rows — and are refused by name.
+
+---
+
 ## Software Prerequisites (Linux / native — the Nyx box)
 
 ### 1. Python 3.11 or newer

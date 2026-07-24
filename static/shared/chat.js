@@ -107,6 +107,17 @@
     }
 
     // ── Core chat fetch (caller manages busy + lock) ──────────────────────────
+    // Kadmos reading state — the reader strip lives on /chat/ only; on /light/ these
+    // elements are absent, so this returns defaults (no reading mode, auto routing).
+    function _kadmosReading() {
+        const t = document.getElementById('read-mode-toggle');
+        const d = document.getElementById('doc-type');
+        const i = document.getElementById('read-instr');
+        return { reading_mode: !!(t && t.checked),
+                 reading_instruction: (i && i.value.trim()) || '',
+                 doc_mode: (d && d.value) || 'auto' };
+    }
+
     async function doSend(text) {
         setStatus('Thinking');
         const thinking = addThinking();
@@ -114,7 +125,7 @@
             const res = await fetch(api('/chat'), {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
-                body:    JSON.stringify({ message: text, session_id: 'web' }),
+                body:    JSON.stringify(Object.assign({ message: text, session_id: 'web' }, _kadmosReading())),
             });
             thinking.remove();
             if (res.status === 401) { _clearAuth(); _showLogin('Session expired — please reconnect.'); return; }
@@ -212,6 +223,75 @@
 
     sendBtn.addEventListener('click', send);
     inputEl.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+
+    // ── Kadmos document upload (attach 📎) — ONE shared implementation, present on
+    // BOTH portals (the attach button sits in each portal's #inputbar, same as the
+    // web-access toggle's shared logic). Posts to /kadmos/upload with the SAME
+    // session_id ('web') the chat uses, so "summarize this" finds the staged doc.
+    // Local file only; the server validates by MAGIC BYTES (413 oversize / 400
+    // non-readable). NOTHING is read until Phoebe's gate question is answered next
+    // turn. The reader strip is /chat/-only; its refs are null on /light/. ────────
+    const KADMOS_MAX_BYTES = 25 * 1024 * 1024;              // mirror server PDF_MAX_BYTES — cap surfaced pre-upload
+    const KADMOS_ACCEPT    = /\.(pdf|docx|txt|md|jpe?g|png)$/i;
+    const docBtn      = document.getElementById('doc-attach-btn');
+    const docInput    = document.getElementById('doc-file-input');
+    const readerStrip = document.getElementById('reader-strip');   // /chat/ only (may be null)
+    const docTypeSel  = document.getElementById('doc-type');
+
+    async function uploadDoc(file) {
+        if (!file || busy) return;
+        if (!KADMOS_ACCEPT.test(file.name)) {
+            addSys('I can only read PDF, Word (.docx), text (.txt/.md), or a photo (.jpg/.png).');
+            return;
+        }
+        if (file.size > KADMOS_MAX_BYTES) {
+            addSys('That file is too large for me to read (max 25 MB).');
+            return;
+        }
+        if (docBtn) docBtn.disabled = true;
+        addSys('uploading ' + file.name + '…');
+        try {
+            const fd = new FormData();
+            fd.append('file', file);
+            const res = await fetch(api('/kadmos/upload?session_id=web'), {
+                method: 'POST', headers: { 'Authorization': authHeader }, body: fd });
+            if (res.status === 401) { _clearAuth(); _showLogin('Session expired — please reconnect.'); return; }
+            if (!res.ok) {
+                let detail = '';
+                try { detail = (await res.json()).detail || ''; } catch (_) {}
+                const msg = res.status === 413 ? 'That file is too large for me to read.'
+                          : res.status === 400 ? (detail || "That file isn't something I can read.")
+                          : ('Upload failed (' + res.status + ').');
+                addMsg('Ph3b3', '📄 ' + msg);
+                return;
+            }
+            const data = await res.json();
+            // Confirmation gate: Phoebe asks before reading. Show her question; the
+            // user's next chat reply (yes / no / look) is the go/no-go.
+            addMsg('Ph3b3', '📄 ' + (data.gate_prompt || ('Loaded ' + data.filename + '. Want me to read it?')));
+            if (readerStrip) {
+                if (docTypeSel && data.label) docTypeSel.options[0].text = 'Auto (' + data.label + ')';
+                if (docTypeSel) docTypeSel.value = 'auto';   // override is per-document
+                readerStrip.hidden = false;
+            }
+        } catch (e) {
+            addSys('Upload error: ' + e.message);
+        } finally {
+            if (docBtn) docBtn.disabled = false;
+            if (docInput) docInput.value = '';               // allow re-selecting the same file
+        }
+    }
+    if (docBtn && docInput) {
+        docBtn.addEventListener('click', () => { if (!busy) docInput.click(); });
+        docInput.addEventListener('change', () => uploadDoc(docInput.files[0]));
+    }
+    // Reading-mode toggle persists across turns (chat portal only).
+    const readModeToggle = document.getElementById('read-mode-toggle');
+    if (readModeToggle) {
+        readModeToggle.checked = localStorage.getItem('ph3b3_reading_mode') === '1';
+        readModeToggle.addEventListener('change', () =>
+            localStorage.setItem('ph3b3_reading_mode', readModeToggle.checked ? '1' : '0'));
+    }
 
     // ── WAV encoding (Float32 PCM → 16-bit WAV) ───────────────────────────────
     function encodeWAV(chunks, sampleRate) {

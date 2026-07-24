@@ -43,6 +43,32 @@
         .msg-text-bot  { color: #c084fc; font-size: 13px; white-space: pre-wrap; margin-bottom: 8px; }
         .msg-sys       { color: #5b5280; font-size: 12px; font-style: italic; padding: 4px 0; }
 
+        /* ── Kadmos: attach button (both portals) + reader strip (/chat/ only) ── */
+        /* In-field attach clip — lives at the right edge INSIDE #input-wrap. */
+        #doc-attach-btn {
+            background: transparent; color: #c084fc; border: none;
+            cursor: pointer; font-size: 18px; line-height: 1;
+            padding: 0 12px; flex-shrink: 0; align-self: center;
+        }
+        #doc-attach-btn:hover    { color: #e9d5ff; }
+        #doc-attach-btn:disabled { opacity: .5; cursor: default; }
+
+        #reader-strip {
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+            padding: 6px 12px; margin: 0 20px 6px; background: #12102a;
+            border: 1px solid #2a1f4a; border-radius: 8px;
+            font-family: 'Courier New', monospace; font-size: 12px; color: #a78bfa;
+        }
+        #reader-strip[hidden] { display: none; }
+        #reader-label { font-weight: bold; color: #a855f7; letter-spacing: 1px; }
+        #reader-strip select,
+        #reader-strip input[type="text"] {
+            background: #0d0d1c; color: #e2d9f3; border: 1px solid #2a1f4a;
+            border-radius: 6px; padding: 3px 6px; font-family: inherit; font-size: 12px;
+        }
+        #reader-strip input[type="text"] { flex: 1; min-width: 130px; }
+        #read-mode-label { display: flex; align-items: center; gap: 4px; cursor: pointer; color: #c084fc; }
+
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
         .thinking { color: #5b5280; font-size: 12px; font-style: italic;
                     animation: pulse 1.2s ease-in-out infinite; padding: 4px 0; }
@@ -70,12 +96,15 @@
             border: 2px solid #2a1f4a;
             border-radius: 4px;
             transition: border-color 0.15s;
+            display: flex;
+            align-items: center;
         }
 
         #input-wrap:focus-within { border-color: #a855f7; }
 
         #msg-input {
-            width: 100%;
+            flex: 1;
+            min-width: 0;
             background: transparent;
             border: none;
             outline: none;
