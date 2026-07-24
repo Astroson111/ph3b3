@@ -47,7 +47,7 @@ Ph3b3 is a FastAPI application that runs entirely on **your own machine** — th
 - **Voice (TTS):** Piper — **Alba** (en_GB) by default, plus native voices across **fifteen languages** (Latin, Hanzi, Cyrillic, and Arabic RTL scripts), selectable per language; Japanese, Korean, Hindi & Indonesian run text-only. New voice candidates install gated as *unreviewed* and only reach the picker once approved by ear in the Status tab — adding a language or voice is a registry entry plus a hash-pinned download, not code.
 - **Hearing (STT):** Whisper, running on CUDA
 - **Server:** FastAPI over HTTPS, basic-auth protected
-- **Modules:** 31 capability modules
+- **Modules:** 32 capability modules
 - **Tools:** 89 callable functions she can invoke
 
 Her range is wide for a single-author build:
@@ -55,10 +55,11 @@ Her range is wide for a single-author build:
 - **Voice conversation, in eight languages — and text in more** — she speaks through Piper TTS, defaulting to the **Alba** voice (English, Scottish). Pick a language in the Status tab and she both *responds* and *speaks* in it — **English, Spanish, French, German, Mandarin, Italian, Polish, or Russian** — each in a real native voice (Mandarin in Hanzi, Russian in Cyrillic, never romanization read with an English mouth). Languages without a quality voice yet — **Japanese, Korean** — are offered *text-only*: she writes in them and stays silent rather than faking an accent, by declared design. The portal UI localizes too. **More can be added**: a new language or voice is a registry entry plus a one-time, hash-pinned model download, reviewed by ear before it goes live — not a code change. One setting, applied everywhere she talks — portal, Dio, Iris. Her **safety refusals hold in every language** (the "the filter only speaks English" hole, closed). Push-to-talk capture, with a server-side silence gate so quiet is never transcribed into phantom words.
 - **Sight on request** — she takes photos and describes what she sees, through a webcam or Dio's own camera, **only when you ask**. Never ambient, never silent: every capture is announced and logged.
 - **Image generation** — Morpheus (SDXL via ComfyUI), fully local.
+- **Song generation** — Amphion (ACE-Step 1.5 via ComfyUI): full songs from a text prompt, with optional lyrics, fully local.
 - **Web search** — Metis, her first step outside the machine, **off by default** and flipped on in the Status tab. Every search is announced and answers are cited from the *actual* result URLs; web pages are treated as untrusted input (summarized with no tools, safety-checked both ways), and a dead backend says so rather than inventing an answer. SearXNG in a localhost-only container, DuckDuckGo fallback.
 - **Argus** — fleet observability: heartbeats from every device, a captures feed (photos, audio, transcripts), and browsable chat history, all in one watchtower tab.
 - **Rhea** — nightly encrypted backups to a dedicated external drive, versioned, with a tested one-script restore. If the server dies tonight, she survives.
-- **31 modules** — ghost hunting, translation, cybersecurity, film, anime, D&D, weather, music, notes, karaoke, web search (Metis), a resume analyzer (Ariadne), an on-page utility tray (timer, calc, converter, scratchpad, QR, dice, world clock) and more.
+- **32 modules** — ghost hunting, translation, cybersecurity, film, anime, D&D, weather, music, notes, karaoke, a local song generator (Amphion), web search (Metis), a resume analyzer (Ariadne), an on-page utility tray (timer, calc, converter, scratchpad, QR, dice, world clock) and more.
 - **Persistent memory across sessions** — Mnemosyne, in active development toward full retrieval.
 - **Reflective learning loop.**
 - **Web UI** accessible over Tailscale from anywhere.
@@ -126,6 +127,16 @@ Ph3b3 generates images locally through Morpheus, a txt2img module running on the
 Morpheus does more than stills now. It can **edit** an image you point it at, and it can **make short video** — from a text description, or by animating a still it already generated. Video comes in three tiers on that same single card: a fast lane for quick clips, and two higher-quality lanes that trade minutes for richer, longer motion (a clip runs anywhere from under two minutes to about half an hour, depending on the tier). Because a render holds the whole GPU for that stretch, Ph3b3 treats it as a background job — ask her, in conversation, to make a video and she starts it, tells you the estimate, and steps away from chat until it's done, letting you know she's rendering rather than falling silent.
 
 Every generation passes through a safety floor that runs locally before anything renders and cannot be disabled by any setting. It refuses content involving minors, non-consensual material, and sexualized or compromising depictions of real, identifiable people — categorically, on every request. The floor covers video exactly as it covers images: the prompt, and for image-to-video the source image too, are checked before a single frame renders. Local generation doesn't mean no guardrails. The line is enforced on your hardware, by default, with no off switch.
+
+---
+
+## Amphion
+
+Amphion writes songs. Describe what you want — a genre, the instruments, a tempo, the feeling — hand her lyrics if you have them or leave them blank for an instrumental, and she composes a full track locally, in seconds, on the same single card as everything else. She's Morpheus's sibling and works the same way: park the chat model, take the GPU, generate, hand it back — nothing leaves the box, and there's **no cost per song**, so you run it as many times as it takes to land the one you want.
+
+Every song is kept as one lossless master you can play in the panel and export on demand — a lossless **FLAC**, a phone-friendly **320 kbps MP3**, or a **WAV** in the format the karaoke player wants — each peak-normalized on the way out so it never clips a small speaker into distortion. You set the length, from a short loop to a few minutes, and she shows an honest estimate of how long the render will take before you start it — and warns you if the lyrics you pasted are too long for the time you chose.
+
+She will not clone a voice or imitate a named artist, by design: the same content floor that governs Morpheus runs here too — on the **prompt and the lyrics both**, before a single note is generated — and there is no voice-training path in her at all. Lives in the Control Panel's **Amphion** tab, beside Karaoke.
 
 ---
 
