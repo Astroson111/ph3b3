@@ -1995,6 +1995,42 @@ async def tts_chunk_endpoint(stream_id: str, n: int):
     return {"text": st["chunks"][n], "audio": audio or "",
             "chunk_index": n, "last": n + 1 >= len(st["chunks"])}
 
+@app.post("/chat/interrupt")
+async def chat_interrupt(body: dict, request: Request):
+    """Barge-in (browser): the user stopped playback mid-reply.
+
+    /chat generates the WHOLE reply before any audio plays, so there is no
+    server compute left to cancel by the time she is speaking — but the full
+    reply was already written to MODEL-FACING context (session.history) at
+    generation time. HARD RULE: the model must never see words the user did not
+    hear, so drop the just-spoken assistant turn from session.history (the
+    user's question stays). The display transcript (chat_log) keeps the full
+    text and gets an 'interrupted' marker — the two stores are deliberately
+    distinct. Idempotent: re-firing finds no trailing assistant turn and no-ops.
+    """
+    sid = str(body.get("session_id", "default"))
+    try:
+        played_ms = int(body.get("played_ms", 0) or 0)
+    except (TypeError, ValueError):
+        played_ms = 0
+    dropped = False
+    sess = sessions.get(sid)                    # do NOT create a session here
+    if sess and len(sess.history) > 1 and sess.history[-1].get("role") == "assistant":
+        sess.history.pop()                      # spoken-only: unheard reply leaves model context
+        dropped = True
+    _src = request.headers.get("X-Ph3b3-Device", "") or "nyx"
+    # Annotate the display transcript only for a REAL interruption (a turn we
+    # actually dropped) — so a stray double-POST doesn't stack duplicate markers.
+    if dropped:
+        try:
+            chat_log.mark_interrupted(sid, _src, played_ms)
+        except Exception:
+            log.exception("chat_log interrupt-mark failed")
+    # Always log — an interrupt attempt (even a no-op) is worth seeing distinctly.
+    log.info("BARGE_IN browser interrupt: session=%s played_ms=%d model_turn_dropped=%s src=%s",
+             sid, played_ms, dropped, _src)
+    return {"ok": True, "model_turn_dropped": dropped}
+
 @app.delete("/session/{session_id}")
 async def clear_session(session_id: str):
     if session_id in sessions: sessions[session_id].reset()

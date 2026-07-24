@@ -199,6 +199,14 @@
       padding: .3rem .9rem; font-size: .72rem; color: var(--cyan); flex-shrink: 0;
     }
     .audio-row.on { display: flex; }
+    .speak-stop {
+      margin-left: auto; display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; padding: 0; border-radius: 6px; cursor: pointer;
+      background: transparent; color: var(--cyan); border: 1px solid var(--cyan);
+      font-size: .7rem; line-height: 1; opacity: .85; transition: opacity .12s, background .12s;
+    }
+    .speak-stop:hover { opacity: 1; background: rgba(34,211,238,.14); }
+    .speak-stop:active { transform: scale(.94); }
     .bars { display: flex; align-items: flex-end; gap: 2px; height: 13px; }
     .bar { width: 3px; background: var(--cyan); border-radius: 2px; animation: ba .8s ease-in-out infinite; }
     .bar:nth-child(2){animation-delay:.12s} .bar:nth-child(3){animation-delay:.24s}
@@ -1428,6 +1436,7 @@
       <div class="audio-row" id="audioRow">
         <div class="bars"><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>
         <span data-i18n="chat.speaking">Alba speaking…</span>
+        <button type="button" class="speak-stop" id="speakStopBtn" aria-label="Stop speaking" title="Stop">⏹</button>
       </div>
       <div class="reader-strip" id="readerStrip" hidden>
         <span class="rs-name">Kadmos</span>
@@ -2102,24 +2111,55 @@ function addMsg(role, text) {
   return d;
 }
 
+// ── Barge-in: keep a handle to the playing clip so the user can cut her off ──
+let currentAudio = null, currentAudioUrl = null, speakStartTs = 0;
+
+function _clearSpeaking() {
+  audioRow.classList.remove('on');
+  if (currentAudioUrl) { try { URL.revokeObjectURL(currentAudioUrl); } catch(e){} currentAudioUrl = null; }
+  currentAudio = null;
+}
+
+// Stop playback immediately and re-arm for the next turn. Idempotent: a second
+// call, or a call while nothing is speaking, is a no-op. When notifyServer is
+// true this was a user barge-in, so the server drops the unheard reply from
+// model-facing context (HARD RULE) and flags the transcript interrupted.
+function interruptSpeech(notifyServer) {
+  const aud = currentAudio;
+  if (!aud) return;
+  const elapsed = Math.max(0, Math.round(Date.now() - speakStartTs));
+  try { aud.pause(); } catch(e){}
+  try { if (aud._done) aud._done(); } catch(e){}   // release the awaiting playAudio()
+  _clearSpeaking();
+  if (notifyServer) {
+    fetch('/chat/interrupt', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id: SID, played_ms: elapsed}),
+    }).catch(()=>{});   // fire-and-forget; the UI has already stopped
+  }
+}
+
 async function playAudio(b64) {
   if (!b64) return;
+  interruptSpeech(false);          // a fresh reply supersedes any prior clip (not a barge-in)
   audioRow.classList.add('on');
+  let aud = null;
   try {
     const bin = atob(b64);
     const buf = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-    const blob = new Blob([buf], {type: 'audio/wav'});
-    const url  = URL.createObjectURL(blob);
-    const aud  = new Audio(url);
-    await new Promise((res, rej) => { aud.onended = res; aud.onerror = rej; aud.play().catch(rej); });
-    URL.revokeObjectURL(url);
+    const url  = URL.createObjectURL(new Blob([buf], {type: 'audio/wav'}));
+    aud = new Audio(url);
+    currentAudio = aud; currentAudioUrl = url; speakStartTs = Date.now();
+    await new Promise((res) => { aud._done = res; aud.onended = res; aud.onerror = res; aud.play().catch(()=>res()); });
   } catch(e) {
     console.warn('[Ph3b3] audio:', e);
   } finally {
-    audioRow.classList.remove('on');
+    if (currentAudio === aud) _clearSpeaking();   // clear only if not superseded/interrupted
   }
 }
+const speakStopBtn = document.getElementById('speakStopBtn');
+if (speakStopBtn) speakStopBtn.addEventListener('click', () => interruptSpeech(true));
 
 let chatBusy = false;
 
