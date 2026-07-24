@@ -1,0 +1,138 @@
+"""
+vad_turns.py — per-turn VAD diagnostic record.
+
+Dio's voice endpointing works intermittently ("it fired once and never again"),
+and the three channels that would say why are all unavailable on that device:
+her USB serial is silent (USB-Serial-JTAG), the on-screen "voice endpoint
+offline" banner was removed as noise, and the DIO_STATE UDP telemetry never
+reaches Nyx. So a turn where the VAD worked and a turn where it failed look
+identical from the outside. This gives those turns somewhere to land.
+
+┌─ PRIVACY INVARIANT — inherited from the /vad/stream contract ────────────────┐
+│ METADATA ONLY. This module records whether the stream connected, when the     │
+│ endpoint fired, and how much heap was free — numbers ABOUT a turn, never any  │
+│ part of it. No audio frames, no transcript, no text the user spoke, ever      │
+│ touches this file. /vad/stream promises the mic stream is processed in memory │
+│ and discarded; writing any of it here would break that promise from the other │
+│ side. Do not add an audio, text, or transcript field below.                   │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+One JSON object per line in PH3B3_DATA/vad_turns.jsonl, so a test session can be
+read back with plain tools. Self-trimming — this is a diagnostic, not an archive.
+"""
+from __future__ import annotations
+
+import json
+import os
+import time
+from pathlib import Path
+
+from paths import PH3B3_DATA   # modules/ is on sys.path (server.py inserts MODULES_DIR)
+
+LOG_PATH: Path = PH3B3_DATA / "vad_turns.jsonl"
+
+# Self-trim: once the file passes MAX_BYTES, keep the newest KEEP_LINES. A
+# diagnostic that silently eats the data partition is its own kind of bug.
+MAX_BYTES = 1_000_000
+KEEP_LINES = 2_000
+
+# The complete set of fields accepted from a device. Anything else in the payload
+# is DROPPED rather than stored — an allowlist, so a firmware change can never
+# start writing new (or sensitive) fields here without a deliberate edit.
+_INT_FIELDS = ("ep_ms", "dur_ms", "heap_free", "heap_max", "samples")
+_STR_FIELDS = ("why", "fw")
+_BOOL_FIELDS = ("ok",)
+
+
+def _coerce_int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _trim_if_needed() -> None:
+    try:
+        if not LOG_PATH.exists() or LOG_PATH.stat().st_size <= MAX_BYTES:
+            return
+        lines = LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+        tail = lines[-KEEP_LINES:]
+        tmp = LOG_PATH.with_suffix(".jsonl.tmp")
+        tmp.write_text("\n".join(tail) + "\n", encoding="utf-8")
+        os.replace(tmp, LOG_PATH)          # atomic — a crash mid-trim can't truncate the log
+    except Exception:
+        pass                                # diagnostics must never break a voice turn
+
+
+def record(device: str, data: dict) -> dict:
+    """Append one turn. Returns the stored row (useful for the endpoint's reply).
+
+    Never raises: this sits on the voice path, and a failed diagnostic write must
+    not cost the user their turn."""
+    row: dict = {
+        "ts": round(time.time(), 3),
+        "device": str(device or "unknown")[:32],
+    }
+    for k in _INT_FIELDS:
+        if k in data:
+            row[k] = _coerce_int(data.get(k))
+    for k in _STR_FIELDS:
+        if k in data:
+            v = data.get(k)
+            row[k] = (str(v)[:48] if v is not None else None)
+    for k in _BOOL_FIELDS:
+        if k in data:
+            row[k] = bool(data.get(k))
+    try:
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+        _trim_if_needed()
+    except Exception:
+        pass
+    return row
+
+
+def recent(limit: int = 50) -> list[dict]:
+    """Newest-first turns, for the panel or a quick curl."""
+    try:
+        if not LOG_PATH.exists():
+            return []
+        lines = LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return []
+    out: list[dict] = []
+    for line in reversed(lines):
+        if len(out) >= max(1, min(limit, 500)):
+            break
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            continue                        # a torn line never poisons the read
+    return out
+
+
+def summary(limit: int = 200) -> dict:
+    """Aggregate the recent window — the actual question is 'how often does it
+    work', which is tedious to eyeball from raw rows."""
+    rows = recent(limit)
+    total = len(rows)
+    ok = sum(1 for r in rows if r.get("ok"))
+    fired = sum(1 for r in rows if (r.get("ep_ms") or 0) > 0)
+    whys: dict[str, int] = {}
+    for r in rows:
+        w = r.get("why")
+        if w:
+            whys[w] = whys.get(w, 0) + 1
+    heaps = [r["heap_max"] for r in rows if isinstance(r.get("heap_max"), int)]
+    return {
+        "turns": total,
+        "stream_ok": ok,
+        "endpoint_fired": fired,
+        "fail_reasons": dict(sorted(whys.items(), key=lambda kv: -kv[1])),
+        "heap_max_min": min(heaps) if heaps else None,
+        "heap_max_max": max(heaps) if heaps else None,
+    }

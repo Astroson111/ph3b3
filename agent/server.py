@@ -144,6 +144,7 @@ import metis                      # web-search egress (SearXNG); first deliberat
 import intent_registry           # dedicated-module intent claims (precedence over Metis)
 import device_auth               # per-device auth keys (Iris/Dio), decoupled from the human login
 import device_commands           # Iris track-playback voice-command gate (pre-LLM intercept)
+import vad_turns                 # per-turn VAD diagnostics (metadata only — never audio)
 import audio_monitor             # Silero VAD endpointing + level meter (chat cutoff / ghost readout)
 from triage import triage_gate   # clarification guard before main inference
 
@@ -2111,6 +2112,46 @@ async def vad_stream(websocket: WebSocket):
     finally:
         mon.reset()   # drop state + the sub-frame byte tail immediately; nothing persists
         log.info("[vad] %s closed", dev)
+
+
+@app.post("/vad/turn")
+async def vad_turn(request: Request):
+    """Record what happened to ONE capture's VAD stream — metadata only.
+
+    Dio's endpointing is intermittent and unobservable from the device: her USB
+    serial is silent, the on-screen banner was removed, and the UDP debug channel
+    never arrives. So 'it worked once' is currently an anecdote. This gives each
+    turn a row, over the same authenticated HTTPS path her heartbeat already uses
+    (which is the one channel proven to work), so the failure rate and the heap at
+    failure become facts.
+
+    PRIVACY: /vad/stream promises the mic stream is processed in memory and
+    discarded. This endpoint accepts NUMBERS ABOUT a turn — connected, endpoint
+    time, free heap — never audio, text, or transcript. modules/vad_turns.py
+    enforces that with a field allowlist; do not add an audio or text field."""
+    body = await request.body()
+    if len(body) > 512:                       # payload contract is <200 B
+        raise HTTPException(413, "vad turn payload too large")
+    try:
+        data = json.loads(body or b"{}")
+    except Exception:
+        raise HTTPException(400, "invalid vad turn JSON")
+    if not isinstance(data, dict):
+        raise HTTPException(400, "vad turn body must be a JSON object")
+    device = request.headers.get("X-Ph3b3-Device", "unidentified")
+    row = vad_turns.record(device, data)
+    log.info("[vad-turn] %s ok=%s ep=%sms heap=%s/%s why=%s",
+             device, row.get("ok"), row.get("ep_ms"),
+             row.get("heap_free"), row.get("heap_max"), row.get("why"))
+    return {"ok": True}
+
+
+@app.get("/vad/turns")
+async def vad_turns_read(limit: int = 50):
+    """Read back a test session: newest-first rows plus an aggregate, so the
+    question that actually matters — how often does the endpoint fire, and what
+    was the heap when it didn't — is one call rather than arithmetic."""
+    return {"summary": vad_turns.summary(limit), "turns": vad_turns.recent(limit)}
 
 
 @app.post("/transcribe")
