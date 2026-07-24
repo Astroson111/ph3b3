@@ -48,7 +48,7 @@ Ph3b3 is a FastAPI application that runs entirely on **your own machine** — th
 - **Hearing (STT):** Whisper, running on CUDA
 - **Server:** FastAPI over HTTPS, basic-auth protected
 - **Modules:** 31 capability modules
-- **Tools:** 88 callable functions she can invoke
+- **Tools:** 89 callable functions she can invoke
 
 Her range is wide for a single-author build:
 
@@ -179,7 +179,7 @@ targeting `m5stack:esp32:m5stack_cores3`; copy `secrets.example.h` to
 Where she's going next:
 
 - **More languages & voices** — multilingual voice + response ships today (eight voiced languages, Japanese/Korean text-only). The bench stays open: any medium-or-better Piper voice drops in through the registry and a by-ear review, no code change. The next real step is *voicing* Japanese and Korean — official Piper has nothing that clears the bar, so it needs a second local TTS engine (VITS-class) behind the same registry.
-- **Agent orchestration** — multi-step autonomous tool chaining: give her a goal, she plans and sequences her own tool calls (across the existing 88 functions) instead of single-shot invocation.
+- **Agent orchestration** — multi-step autonomous tool chaining: give her a goal, she plans and sequences her own tool calls (across the existing 89 functions) instead of single-shot invocation.
 - **RAG memory backend** — vector-store retrieval over her long-term memory so recall scales past what fits in context, with the same local-only guarantee (embeddings generated and stored locally, nothing leaves).
 - **Integrations pattern** — a repeatable shape for new capabilities: a subfolder under `integrations/`, its own README and scripts, wired into `server.py`.
 

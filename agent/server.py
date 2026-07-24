@@ -116,7 +116,6 @@ import voices
 from occult_module import OccultModule
 from jokes_module import JokesModule
 from vision_module import VisionModule
-from search_module import SearchModule
 from tts_module import TTSModule, trim_silence_b64, rms_b64, PREVIEW_RMS_FLOOR
 from stt_module import STTModule
 from paths import PH3B3_DATA  # [DBG-AUDIO] instrumentation save-dir root
@@ -353,7 +352,6 @@ MNEMO_RECALL_THRESHOLD = 0.30
 occult = OccultModule()
 jokes = JokesModule()
 vision = VisionModule(memory_module=memory)   # Stack-Chan only — frames come from Dio
-search = SearchModule()
 tts = TTSModule()
 stt = STTModule()
 anime = AnimeModule()
@@ -437,7 +435,6 @@ TOOLS = [
     {"type":"function","function":{"name":"set_baseline","description":"GHOST-HUNTING ONLY (requires an active investigation): capture the current camera view as the 'normal' baseline for anomaly detection. Refuses outside an investigation. For a plain look, use 'look'.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"check_anomaly","description":"GHOST-HUNTING ONLY (requires an active investigation): compare the live camera to the baseline and flag motion. Refuses outside an investigation.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"start_monitoring","description":"GHOST-HUNTING ONLY (requires an active investigation): begin background camera anomaly monitoring on a timer. This is the only vision path that looks WITHOUT a fresh prompt, so it is gated to an active investigation and stops when it ends. Refuses otherwise.","parameters":{"type":"object","properties":{"interval":{"type":"integer","default":30}}}}},
-    {"type":"function","function":{"name":"web_search","description":"Search the web for current information. CALL THIS for: current events, news, recent/latest anything, prices, scores, schedules, weather forecasts, product releases, politics, tech news, or any question where the answer may have changed since training. Use type='news' for breaking news. Never answer time-sensitive questions from memory when this tool is available.","parameters":{"type":"object","properties":{"query":{"type":"string"},"type":{"type":"string","default":"search"}},"required":["query"]}}},
     {"type":"function","function":{"name":"speak","description":"Speak text aloud using Piper TTS","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}},
     {"type":"function","function":{"name":"listen","description":"Listen via microphone using Whisper","parameters":{"type":"object","properties":{"duration":{"type":"integer","default":10}}}}},
     {"type":"function","function":{"name":"anime_lookup","description":"Look up anime or get recommendations","parameters":{"type":"object","properties":{"query":{"type":"string"},"mode":{"type":"string","default":"lookup"}},"required":["query"]}}},
@@ -668,7 +665,6 @@ async def execute_tool(name, args, device="nyx", session_id=""):
             result = (await asyncio.to_thread(vision.check_anomaly)) if investigation.is_active() else "Anomaly monitoring is ghost-hunting gear — start an investigation first."
         elif name == "start_monitoring":
             result = (await asyncio.to_thread(vision.start_monitoring, args.get("interval",30))) if investigation.is_active() else "Background camera monitoring is ghost-hunting gear — start an investigation first."
-        elif name == "web_search": result = search.news(args["query"]) if args.get("type") == "news" else search.search(args["query"])
         elif name == "speak": result = tts.speak(args["text"], blocking=False)
         elif name == "listen":
             r = stt.listen(args.get("duration",10))
