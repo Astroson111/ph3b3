@@ -2164,6 +2164,14 @@ async def transcribe_audio(request: Request, body: dict):
     # Which device POSTed this — Iris and Dio both hit /transcribe; the firmware
     # sends X-Ph3b3-Device. Used only for [DBG-MIC]/[DBG-AUDIO] labelling.
     _device = request.headers.get("X-Ph3b3-Device", "unknown")
+    # [DBG-HEAP] Dio's internal RAM at idle / mid-capture / post-reply, carried on
+    # THIS request rather than a probe of its own — a probe needing a fresh TLS
+    # context would fail for the very reason we're measuring. reply= is the number
+    # that decides whether a second TLS context (VAD) can ever fit alongside
+    # TalkApp's keep-alive socket.
+    _heap = request.headers.get("X-Ph3b3-Heap")
+    if _heap:
+        log.warning("[DBG-HEAP] dev=%s %s  (free/largest-contiguous, bytes)", _device, _heap)
     try:                                                          # [DBG-MIC] keep last capture for audition
         open("/tmp/dio_mic_last.wav", "wb").write(audio_bytes)
     except Exception:
