@@ -904,8 +904,28 @@ class ResumeModule:
         excess = (rep.pages - target_pages) / rep.pages
         return max(1, int(len(content) * excess * 1.15))
 
+    def _vision_fn(self):
+        """The EXISTING vision lane (llava via local ollama), or None.
+
+        Imported lazily and by reference so this module does not own a second
+        vision path — the brief is explicit that Tier 2 reuses the take_photo /
+        describe pipeline rather than building its own. Local-only: _analyze
+        posts to OLLAMA_HOST on localhost, so a rasterised resume page never
+        leaves this machine, which is the whole reason Ariadne exists.
+        """
+        try:
+            import vision_module
+            vm = getattr(self, "_vm", None)
+            if vm is None:
+                vm = self._vm = vision_module.VisionModule()
+            return vm._analyze
+        except Exception as e:
+            log.info("[ariadne] vision lane unavailable for Tier 2: %s", e)
+            return None
+
     def _fit_document(self, blocks, out_path: Path, target_pages: int,
-                      jd_text: str, req: list[str], pref: list[str]):
+                      jd_text: str, req: list[str], pref: list[str],
+                      deep_verify: bool = False):
         """Render; if it does not fit, cut the lowest-scoring lines and try again.
 
         Returns (blocks, report, repair_log). The document is ALWAYS returned —
@@ -949,10 +969,29 @@ class ResumeModule:
                      attempt, self.MAX_REPAIR_ITERATIONS, len(plan.cut_indices),
                      before_pages, rep.pages)
 
+        # ── Tier 2 gate (verify item 6) ──────────────────────────────────────
+        # The brief scopes the vision pass to "only if Tier 1 is clean, or to
+        # confirm a repair", and separately requires it NOT to fire on every
+        # build. Those pull against each other, because Tier 1 is clean on most
+        # builds. Resolved as the intersection: Tier 1 must be clean AND there
+        # must be a reason to look — either a repair just changed the document,
+        # or the caller explicitly asked for a deep verify.
+        #
+        # So an ordinary clean build spends no vision call, a repaired document
+        # gets its repair confirmed visually, and a broken document is not asked
+        # about at all (Tier 1 already measured what is wrong).
+        if rep is not None and rep.status == render_verify.STATUS_PASS and (repair_log or deep_verify):
+            vfn = self._vision_fn()
+            if vfn is not None:
+                why = "confirming the repair" if repair_log else "deep verify requested"
+                log.info("[ariadne] Tier 2 vision pass — %s", why)
+                rep = render_verify.verify(out_path, target_pages=target_pages, vision_fn=vfn)
+
         return blocks, rep, repair_log
 
     def build_ats_resume(self, resume_text: str, job_description: str = "",
-                         target_pages: int = DEFAULT_TARGET_PAGES) -> str:
+                         target_pages: int = DEFAULT_TARGET_PAGES,
+                         deep_verify: bool = False) -> str:
         """Build the ATS .docx, then LOOK at the rendered page.
 
         target_pages is the page budget the document is held to. It is what makes
@@ -993,7 +1032,7 @@ class ResumeModule:
         try:
             work = _scratch / "candidate.docx"
             blocks, rep, repair_log = self._fit_document(
-                blocks, work, target_pages, job_description, _req, _pref)
+                blocks, work, target_pages, job_description, _req, _pref, deep_verify)
 
             after_text = self._blocks_to_text(blocks)
             rid = hashlib.sha1((before_text + after_text).encode("utf-8")).hexdigest()[:12]
@@ -1042,6 +1081,10 @@ class ResumeModule:
         # is two lines of noise per document telling the user nothing to act on.
         if rep is not None and rep.notes and rep.status != render_verify.STATUS_PASS:
             out += [f"  · {n}" for n in rep.notes]
+        if rep is not None and rep.tier2:
+            out += ["", "VISION PASS (layout only — advisory, it does not overrule the "
+                        "measured checks above):"]
+            out += [f"  ~ {t}" for t in rep.tier2]
         if repair_log:
             out += ["", "FITTED TO THE PAGE TARGET — what was cut and why "
                         "(overrule anything you disagree with):"]

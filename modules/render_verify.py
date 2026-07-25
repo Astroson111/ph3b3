@@ -79,6 +79,7 @@ class Report:
     checks_run: list[str] = field(default_factory=list)
     checks_skipped: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)   # benign observations, NOT defects
+    tier2: list[str] = field(default_factory=list)   # vision-pass observations — advisory only
     reason: str = ""                                   # why UNVERIFIED, when it is
 
     @property
@@ -330,7 +331,69 @@ def _page_count(pdf: Path) -> tuple[int | None, str]:
         return None, f"could not open the render: {e}"
 
 
-def verify(docx_path: Path, target_pages: int = DEFAULT_TARGET_PAGES) -> Report:
+# ── Tier 2: the vision pass ──────────────────────────────────────────────────
+# Scoped to LAYOUT ONLY. It is looking at a picture of a page, not reading a CV:
+# no judgement of the candidate, the wording, or whether the experience is any
+# good. Content evaluation is not this pass's business and asking for it would
+# invite the model to editorialise about a person from their resume.
+_VISION_PROMPT = (
+    "This is a photograph of one printed page of a document. Describe ONLY its "
+    "physical layout. Answer these three questions and nothing else:\n"
+    "1. Is any heading or title stranded alone at the very bottom of the page "
+    "with no text under it?\n"
+    "2. Is the spacing between blocks obviously broken — a huge gap, or text "
+    "overlapping other text?\n"
+    "3. Does any text run off the edge of the page?\n"
+    "If the page looks normal, reply exactly: LAYOUT OK. Do not describe, "
+    "summarise, evaluate or comment on the words, the person, or the content."
+)
+
+# Cap the pages we rasterise. A vision call per page is the expensive part, and
+# layout breakage that matters shows up in the first few pages of a resume.
+VISION_MAX_PAGES = 3
+VISION_DPI = 100
+
+
+def vision_check(pdf: Path, vision_fn) -> tuple[list[str], list[str]]:
+    """Rasterise pages and ask the existing vision path about layout.
+
+    Returns (observations, errors). Pages are rasterised to JPEG IN MEMORY and
+    handed straight to vision_fn — no image file is ever written, so there is no
+    rasterised copy of someone's resume on disk to clean up or leak.
+
+    vision_fn is injected rather than imported so this module does not reach into
+    the vision stack itself; the caller passes the same lane take_photo/describe
+    already uses, per the brief's "do not build a second vision lane".
+    """
+    observations: list[str] = []
+    errors: list[str] = []
+    try:
+        import fitz
+    except ImportError:
+        return observations, ["PyMuPDF unavailable — no vision pass"]
+    try:
+        with fitz.open(str(pdf)) as doc:
+            for pno in range(min(doc.page_count, VISION_MAX_PAGES)):
+                pix = doc[pno].get_pixmap(dpi=VISION_DPI)
+                jpeg = pix.tobytes("jpeg")           # in memory; never written out
+                try:
+                    said = (vision_fn(jpeg, _VISION_PROMPT) or "").strip()
+                except Exception as e:
+                    errors.append(f"page {pno + 1}: vision call failed ({e})")
+                    continue
+                if not said:
+                    errors.append(f"page {pno + 1}: vision returned nothing")
+                elif said.upper().startswith("LAYOUT OK") or "layout ok" in said.lower()[:40]:
+                    continue                          # clean, nothing to report
+                else:
+                    observations.append(f"page {pno + 1}: {said[:220]}")
+    except Exception as e:
+        errors.append(f"could not rasterise the render: {e}")
+    return observations, errors
+
+
+def verify(docx_path: Path, target_pages: int = DEFAULT_TARGET_PAGES,
+           vision_fn=None) -> Report:
     """Render the .docx and check it. Never raises — a verifier that throws would
     take the user's document with it, and the document is still worth returning.
 
@@ -389,6 +452,24 @@ def verify(docx_path: Path, target_pages: int = DEFAULT_TARGET_PAGES) -> Report:
                 rep.checks_run.append("margin_overflow")
 
             rep.status = STATUS_FAIL if rep.defects else STATUS_PASS
+
+            # Tier 2 runs ONLY on a clean Tier 1 — per brief. There is nothing for
+            # a second opinion to add to a document already known to be broken,
+            # and asking anyway would spend a vision call to be told what we
+            # measured. The caller decides WHETHER to ask at all (see the gate in
+            # resume_module); this only decides whether it is meaningful to.
+            if vision_fn is not None and rep.status == STATUS_PASS:
+                obs, errs = vision_check(pdf, vision_fn)
+                rep.checks_run.append("vision_layout")
+                # ADVISORY, not authoritative. Tier 1 measured the geometry; this
+                # is a model looking at a picture. It can say something worth
+                # reading, but it does not get to overturn a measurement — so its
+                # findings are surfaced, never used to flip the status to FAIL.
+                rep.tier2 += obs
+                rep.tier2 += [f"(vision pass incomplete: {e})" for e in errs]
+            elif vision_fn is not None:
+                rep.checks_skipped.append("vision_layout")
+
             return rep
     except Exception as e:                       # never let a verifier eat the document
         log.exception("[ariadne] render-verify crashed")
