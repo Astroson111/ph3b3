@@ -907,7 +907,7 @@ class ResumeModule:
     def _vision_fn(self):
         """The EXISTING vision lane (llava via local ollama), or None.
 
-        Imported lazily and by reference so this module does not own a second
+        Imported on first use, and by reference, so this module does not own a second
         vision path — the brief is explicit that Tier 2 reuses the take_photo /
         describe pipeline rather than building its own. Local-only: _analyze
         posts to OLLAMA_HOST on localhost, so a rasterised resume page never
