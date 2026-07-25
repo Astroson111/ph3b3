@@ -45,6 +45,26 @@ except ImportError:
     TRAFILATURA_AVAILABLE = False
     log.warning("trafilatura not installed — JD URL extraction falls back to BS4")
 
+# Render-verify + relevance-weighted cutting (Ariadne v1.1). Import failures are
+# survivable: the builder still produces the .docx, it just says plainly that the
+# rendered page was not checked. It must never claim a clean render it did not do.
+try:
+    import render_verify
+    RENDER_VERIFY_AVAILABLE = True
+except ImportError as _e:
+    RENDER_VERIFY_AVAILABLE = False
+    log.warning("render_verify unavailable (%s) — built resumes will be flagged unverified", _e)
+
+try:
+    import resume_fit
+    RESUME_FIT_AVAILABLE = True
+except ImportError as _e:
+    RESUME_FIT_AVAILABLE = False
+    log.warning("resume_fit unavailable (%s) — overflow cutting disabled", _e)
+
+# Page target for a built resume. Two pages is the ATS/recruiter convention.
+DEFAULT_TARGET_PAGES = 2
+
 # --- Ariadne JD-URL validation gate ---------------------------------------
 # The fallback Ariadne returns whenever a URL can't be read/validated as a JD.
 _JD_FETCH_FALLBACK = "[couldn't read that URL — paste the listing text instead.]"
@@ -852,9 +872,20 @@ class ResumeModule:
         RESUME_DIR.mkdir(parents=True, exist_ok=True)
         d.save(str(out_path))
 
-    def build_ats_resume(self, resume_text: str, job_description: str = "") -> str:
+    def build_ats_resume(self, resume_text: str, job_description: str = "",
+                         target_pages: int = DEFAULT_TARGET_PAGES) -> str:
+        """Build the ATS .docx, then LOOK at the rendered page.
+
+        target_pages is the page budget the document is held to. It is what makes
+        "overflow" a defined condition rather than a feeling — before this, the
+        builder emitted whatever length it emitted and nothing measured it.
+        """
         if not DOCX_AVAILABLE:
             return "ATS builder unavailable — python-docx is not installed."
+        try:
+            target_pages = max(1, min(int(target_pages), 10))
+        except (TypeError, ValueError):
+            target_pages = DEFAULT_TARGET_PAGES
         if not resume_text or len(resume_text.strip()) < 40:
             return "Resume text too short to build from — paste the full resume text."
         text = resume_text.replace("\r\n", "\n")
@@ -884,10 +915,30 @@ class ResumeModule:
         if not diff.strip():
             diff = "(no textual changes — resume was already ATS-clean)"
 
+        # ── Look at the rendered page ────────────────────────────────────────
+        # The .docx is written; now check what it becomes on paper. A build that
+        # was not verified says so — it is never reported as clean.
+        render_line = "LAYOUT: not checked — render verification is unavailable."
+        if RENDER_VERIFY_AVAILABLE:
+            rep = render_verify.verify(out_path, target_pages=target_pages)
+            render_line = f"LAYOUT: {rep.summary()}"
+            if rep.status == render_verify.STATUS_UNVERIFIED:
+                log.warning("[ariadne] built %s but did not verify the render: %s", rid, rep.reason)
+
         out = ["ATS RESUME BUILT",
                "=" * 40,
                f"file: resumes/{rid}.docx   (download: GET /resume/file/{rid})",
-               "",
+               f"page target: {target_pages}",
+               render_line]
+        if RENDER_VERIFY_AVAILABLE and rep.defects:
+            out += [f"  ! {d}" for d in rep.defects]
+        # Benign notes (e.g. the Calibri→Carlito metric-compatible substitution
+        # that happens on EVERY render) are shown only when something actually
+        # went wrong, where they help explain it. Printing them on a clean build
+        # is two lines of noise per document telling the user nothing to act on.
+        if RENDER_VERIFY_AVAILABLE and rep.notes and rep.status != render_verify.STATUS_PASS:
+            out += [f"  · {n}" for n in rep.notes]
+        out += ["",
                "GROUNDED KEYWORDS INSERTED (each tied to a real line in your resume):"]
         out += [f"  • {g['term']}  ← justified by: \"{g['source'][:90]}\"" for g in grounded] \
                or ["  (none — no grounded gaps to align)"]
