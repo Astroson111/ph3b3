@@ -872,6 +872,85 @@ class ResumeModule:
         RESUME_DIR.mkdir(parents=True, exist_ok=True)
         d.save(str(out_path))
 
+    # Hard cap. Not a suggestion: three attempts, then hand the document over with
+    # an honest warning. Never loop forever, never return nothing.
+    MAX_REPAIR_ITERATIONS = 3
+
+    @staticmethod
+    def _cuttable_defects(rep) -> list[str]:
+        """Which defects removing content could plausibly fix.
+
+        Page spill, orphans and margin overflow all move when lines come out.
+        FONT FALLBACK DOES NOT — no amount of cutting changes which font the
+        renderer substituted. Looping on it would burn all three iterations
+        achieving nothing and then warn about the same defect it started with.
+        """
+        return [d for d in rep.defects
+                if ("spills to" in d or "orphan" in d or "bottom margin" in d)]
+
+    def _estimate_cuts(self, blocks, rep, target_pages: int) -> int:
+        """How many lines to remove this round.
+
+        Proportional to the excess: if the render is 5 pages against a target of
+        2, three fifths of the content has to go. Slight over-cut (1.15) because
+        undershooting costs a whole extra render, while a marginal over-cut costs
+        one bullet. Orphan-only failures need a nudge, not a haircut.
+        """
+        content = [i for i, (k, _) in enumerate(blocks) if k in ("bullet", "para")]
+        if not content or not rep.pages:
+            return 1
+        if rep.pages <= target_pages:
+            return 1                       # fits, but something else is off (orphan)
+        excess = (rep.pages - target_pages) / rep.pages
+        return max(1, int(len(content) * excess * 1.15))
+
+    def _fit_document(self, blocks, out_path: Path, target_pages: int,
+                      jd_text: str, req: list[str], pref: list[str]):
+        """Render; if it does not fit, cut the lowest-scoring lines and try again.
+
+        Returns (blocks, report, repair_log). The document is ALWAYS returned —
+        a resume that overflows is still worth having; one that never arrives is
+        not.
+        """
+        self._blocks_to_docx(blocks, out_path)
+        if not RENDER_VERIFY_AVAILABLE:
+            return blocks, None, []
+
+        rep = render_verify.verify(out_path, target_pages=target_pages)
+        repair_log: list[str] = []
+        if not RESUME_FIT_AVAILABLE:
+            return blocks, rep, repair_log
+
+        for attempt in range(1, self.MAX_REPAIR_ITERATIONS + 1):
+            fixable = self._cuttable_defects(rep)
+            if rep.status != render_verify.STATUS_FAIL or not fixable:
+                break                      # passed, unverifiable, or nothing cutting can fix
+
+            n = self._estimate_cuts(blocks, rep, target_pages)
+            plan = resume_fit.plan_cuts(blocks, n, req, pref, jd_text)
+            if not plan.cut_indices:
+                # Nothing left to cut. Stop rather than spend the remaining
+                # iterations re-rendering an identical document — an iteration
+                # that changes nothing is not an attempt.
+                repair_log.append(f"attempt {attempt}: nothing further may be cut "
+                                  f"({plan.protected_count} lines are protected) — stopping")
+                break
+
+            blocks = resume_fit.apply_cuts(blocks, plan.cut_indices)
+            self._blocks_to_docx(blocks, out_path)
+            before_pages = rep.pages
+            rep = render_verify.verify(out_path, target_pages=target_pages)
+            repair_log.append(
+                f"attempt {attempt}: cut {len(plan.cut_indices)} line(s), "
+                f"{before_pages} → {rep.pages} pages"
+            )
+            repair_log += [f"    {r}" for r in plan.rationale]
+            log.info("[ariadne] repair %d/%d: cut %d, pages %s -> %s",
+                     attempt, self.MAX_REPAIR_ITERATIONS, len(plan.cut_indices),
+                     before_pages, rep.pages)
+
+        return blocks, rep, repair_log
+
     def build_ats_resume(self, resume_text: str, job_description: str = "",
                          target_pages: int = DEFAULT_TARGET_PAGES) -> str:
         """Build the ATS .docx, then LOOK at the rendered page.
@@ -900,14 +979,29 @@ class ResumeModule:
             grounded, unsupported = self._classify_gaps(text, missing_terms)
 
         blocks = self._assemble_blocks(contact, sections, grounded)
-        after_text = self._blocks_to_text(blocks)
         before_text = "\n".join(l.rstrip() for l in text.splitlines()).strip()
 
-        # persist the .docx (deterministic id from content hash keeps re-runs stable)
-        import hashlib
-        rid = hashlib.sha1((before_text + after_text).encode("utf-8")).hexdigest()[:12]
-        out_path = RESUME_DIR / f"{rid}.docx"
-        self._blocks_to_docx(blocks, out_path)
+        # Fit the document to its page budget, then keep the EXACT bytes that were
+        # verified. Iterating on a scratch file and copying the settled result
+        # means the layout report describes the file the user downloads, rather
+        # than a rebuild of it that was never rendered.
+        import hashlib, shutil, tempfile
+        _req = _pref = []
+        if job_description.strip():
+            _req, _pref = self._jd_keywords(job_description)
+        _scratch = Path(tempfile.mkdtemp(prefix="ariadne-build-"))
+        try:
+            work = _scratch / "candidate.docx"
+            blocks, rep, repair_log = self._fit_document(
+                blocks, work, target_pages, job_description, _req, _pref)
+
+            after_text = self._blocks_to_text(blocks)
+            rid = hashlib.sha1((before_text + after_text).encode("utf-8")).hexdigest()[:12]
+            out_path = RESUME_DIR / f"{rid}.docx"
+            RESUME_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(work, out_path)      # byte-identical to what was verified
+        finally:
+            shutil.rmtree(_scratch, ignore_errors=True)
 
         diff = "\n".join(difflib.unified_diff(
             before_text.splitlines(), after_text.splitlines(),
@@ -915,29 +1009,43 @@ class ResumeModule:
         if not diff.strip():
             diff = "(no textual changes — resume was already ATS-clean)"
 
-        # ── Look at the rendered page ────────────────────────────────────────
-        # The .docx is written; now check what it becomes on paper. A build that
-        # was not verified says so — it is never reported as clean.
+        # ── What the rendered page actually did ──────────────────────────────
         render_line = "LAYOUT: not checked — render verification is unavailable."
-        if RENDER_VERIFY_AVAILABLE:
-            rep = render_verify.verify(out_path, target_pages=target_pages)
+        warning = ""
+        if rep is not None:
             render_line = f"LAYOUT: {rep.summary()}"
             if rep.status == render_verify.STATUS_UNVERIFIED:
                 log.warning("[ariadne] built %s but did not verify the render: %s", rid, rep.reason)
+            elif rep.status == render_verify.STATUS_FAIL:
+                # Returned anyway, per brief: never silently return a broken doc,
+                # never loop forever, never return nothing. Name the defect that
+                # survived so the user can act on it.
+                warning = ("⚠ THIS DOCUMENT STILL HAS A LAYOUT PROBLEM after "
+                           f"{len(repair_log)} repair attempt(s): "
+                           + "; ".join(rep.defects)
+                           + ". The file is usable and is returned regardless — "
+                             "fix it by hand, raise the page target, or cut content yourself.")
+                log.warning("[ariadne] %s returned with unfixed defects: %s", rid, rep.defects)
 
         out = ["ATS RESUME BUILT",
                "=" * 40,
                f"file: resumes/{rid}.docx   (download: GET /resume/file/{rid})",
                f"page target: {target_pages}",
                render_line]
-        if RENDER_VERIFY_AVAILABLE and rep.defects:
+        if warning:
+            out += ["", warning]
+        if rep is not None and rep.defects:
             out += [f"  ! {d}" for d in rep.defects]
         # Benign notes (e.g. the Calibri→Carlito metric-compatible substitution
         # that happens on EVERY render) are shown only when something actually
         # went wrong, where they help explain it. Printing them on a clean build
         # is two lines of noise per document telling the user nothing to act on.
-        if RENDER_VERIFY_AVAILABLE and rep.notes and rep.status != render_verify.STATUS_PASS:
+        if rep is not None and rep.notes and rep.status != render_verify.STATUS_PASS:
             out += [f"  · {n}" for n in rep.notes]
+        if repair_log:
+            out += ["", "FITTED TO THE PAGE TARGET — what was cut and why "
+                        "(overrule anything you disagree with):"]
+            out += [f"  {r}" for r in repair_log]
         out += ["",
                "GROUNDED KEYWORDS INSERTED (each tied to a real line in your resume):"]
         out += [f"  • {g['term']}  ← justified by: \"{g['source'][:90]}\"" for g in grounded] \
