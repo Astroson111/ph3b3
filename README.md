@@ -47,7 +47,7 @@ Ph3b3 is a FastAPI application that runs entirely on **your own machine** — th
 - **Voice (TTS):** Piper — **Alba** (en_GB) by default, plus native voices across **fifteen languages** (Latin, Hanzi, Cyrillic, and Arabic RTL scripts), selectable per language; Japanese, Korean, Hindi & Indonesian run text-only. New voice candidates install gated as *unreviewed* and only reach the picker once approved by ear in the Status tab — adding a language or voice is a registry entry plus a hash-pinned download, not code.
 - **Hearing (STT):** Whisper, running on CUDA
 - **Server:** FastAPI over HTTPS, basic-auth protected
-- **Modules:** 32 capability modules
+- **Modules:** 32 capability modules (plus 16 infrastructure modules — paths, auth, routing, STT/TTS plumbing. *Capability* means a thing she can DO for you; the split is what makes the number checkable rather than a vibe, and it had drifted before)
 - **Tools:** 89 callable functions she can invoke
 
 Her range is wide for a single-author build:
@@ -59,7 +59,7 @@ Her range is wide for a single-author build:
 - **Web search** — Metis, her first step outside the machine, **off by default** and flipped on in the Status tab. Every search is announced and answers are cited from the *actual* result URLs; web pages are treated as untrusted input (summarized with no tools, safety-checked both ways), and a dead backend says so rather than inventing an answer. SearXNG in a localhost-only container, DuckDuckGo fallback.
 - **Argus** — fleet observability: heartbeats from every device, a captures feed (photos, audio, transcripts), and browsable chat history, all in one watchtower tab.
 - **Rhea** — nightly encrypted backups to a dedicated external drive, versioned, with a tested one-script restore. If the server dies tonight, she survives.
-- **32 modules** — ghost hunting, translation, cybersecurity, film, anime, D&D, weather, music, notes, karaoke, a local song generator (Amphion), web search (Metis), a resume analyzer (Ariadne), an on-page utility tray (timer, calc, converter, scratchpad, QR, dice, world clock) and more.
+- **32 modules** — ghost hunting, translation, cybersecurity, film, anime, D&D, weather, music, notes, karaoke, a local song generator (Amphion), a local photo editor (Apelles), web search (Metis), a resume analyzer (Ariadne), an on-page utility tray (timer, calc, converter, scratchpad, QR, dice, world clock) and more.
 - **Persistent memory across sessions** — Mnemosyne, in active development toward full retrieval.
 - **Reflective learning loop.**
 - **Web UI** accessible over Tailscale from anywhere.

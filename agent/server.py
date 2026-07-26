@@ -20,6 +20,7 @@ import httpx
 import getpass
 import shutil
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+import hashlib
 import uuid
 from io import BytesIO
 from PIL import Image  # Morpheus edit-mode upload validation / re-encode
@@ -146,6 +147,7 @@ import intent_registry           # dedicated-module intent claims (precedence ov
 import device_auth               # per-device auth keys (Iris/Dio), decoupled from the human login
 import device_commands           # Iris track-playback voice-command gate (pre-LLM intercept)
 import vad_turns                 # per-turn VAD diagnostics (metadata only — never audio)
+import apelles                   # photo editor — edits only, never generates (ruling A)
 import audio_monitor             # Silero VAD endpointing + level meter (chat cutoff / ghost readout)
 from triage import triage_gate   # clarification guard before main inference
 
@@ -372,6 +374,7 @@ if _SETUP_COMPLETE and AUTH_PASS:
 resume = ResumeModule()
 if amphion.ready():
     log.info("Amphion (music module) ready.")   # exact string the brief specifies
+    log.info("Apelles (photo editor) ready")    # exact string the brief specifies
 else:
     log.warning("Amphion (song generation): ComfyUI or ACE-Step weights unreachable at boot — generation will fail until fixed.")
 network = NetworkModule()
@@ -4448,6 +4451,256 @@ async def morpheus_delete_all():
     failed = [{"job_id": jid, "reason": r["reason"]} for jid, r in results if not r["ok"]]
     freed = sum(r.get("freed_bytes", 0) for _, r in results if r["ok"])
     return {"deleted": deleted, "failed": failed, "freed_bytes": freed}
+
+
+
+# ── Apelles: photo editor ─────────────────────────────────────────────────────
+# Ruling A holds at the HTTP layer too: no route here takes a prompt, so there is
+# no request that produces a picture from nothing. Every route needs an image
+# that was uploaded and confirmed first.
+#
+# NO ROUTE ACCEPTS A URL. Uploads only — Ariadne's SSRF finding is closed and the
+# shape is not coming back. Batch needs a *folder*, which would otherwise be a
+# client-supplied filesystem path, so folders are resolved against a server-side
+# allowlist of roots and anything outside them is refused.
+_APELLES_ROOTS = [Path.home() / "Pictures", Path.home() / "Desktop",
+                  apelles.APELLES_DATA / "uploads"]
+
+_apelles_pending: dict = {}     # session_id -> attach awaiting an explicit yes
+_apelles_files: dict = {}       # file_id -> {"path": Path, "kind": str}
+
+
+def _apelles_register(path: Path, kind: str) -> str:
+    fid = uuid.uuid4().hex[:12]
+    _apelles_files[fid] = {"path": Path(path), "kind": kind}
+    return fid
+
+
+def _apelles_get(image_id: str, need_confirmed: bool = True) -> dict:
+    ent = _apelles_files.get(str(image_id))
+    if not ent:
+        raise HTTPException(404, "no such image")
+    if need_confirmed and ent["kind"] == "upload" and not ent.get("confirmed"):
+        raise HTTPException(409, "that image hasn't been confirmed yet")
+    return ent
+
+
+def _apelles_folder(raw: str) -> Path:
+    """Resolve a batch folder INSIDE an allowed root, or refuse."""
+    try:
+        cand = Path(str(raw)).expanduser().resolve()
+    except Exception:
+        raise HTTPException(400, "that isn't a usable folder")
+    for root in _APELLES_ROOTS:
+        try:
+            r = root.expanduser().resolve()
+        except Exception:
+            continue
+        if cand == r or r in cand.parents:
+            if not cand.is_dir():
+                raise HTTPException(400, "that folder doesn't exist")
+            return cand
+    allowed = ", ".join(str(r) for r in _APELLES_ROOTS)
+    raise HTTPException(403, f"batch folders must be inside: {allowed}")
+
+
+@app.get("/apelles/capabilities")
+async def apelles_capabilities(refresh: bool = False):
+    """What Apelles can actually do on this box, with a reason for anything it
+    can't. The UI renders straight from this — an operation that is missing a
+    model appears DISABLED with its reason, never silently omitted."""
+    return apelles.capabilities(refresh=refresh)
+
+
+@app.get("/apelles/batch/folders")
+async def apelles_batch_folders():
+    out = []
+    for r in _APELLES_ROOTS:
+        try:
+            rr = r.expanduser()
+            if rr.is_dir():
+                out.append(str(rr))
+        except Exception:
+            continue
+    return {"roots": out}
+
+
+@app.post("/apelles/load")
+async def apelles_load(file: UploadFile = File(...), session_id: str = Form("default")):
+    """Stage an image. Validated by HEADER before any decode, then held behind a
+    confirmation gate — same discipline as Kadmos: nothing is operated on until
+    an explicit yes, and there is no timeout that proceeds on its own.
+
+    Deliberate difference from Kadmos: the staged image is kept in Apelles' own
+    pending slot rather than Kadmos's, because Kadmos's pending doubles as the
+    session's active document for 'read this'. A photo attached for EDITING is
+    not the thing 'summarise this' should pick up."""
+    raw = await file.read()
+    try:
+        info = apelles.probe(raw)                      # refuses malformed BEFORE decode
+    except apelles.ApellesError as e:
+        raise HTTPException(400, str(e))
+
+    dest_dir = apelles.APELLES_DATA / "uploads"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", (file.filename or "image"))[:64]
+    dest = dest_dir / f"{uuid.uuid4().hex[:12]}_{safe}"
+    dest.write_bytes(raw)
+
+    fid = _apelles_register(dest, "upload")
+    _apelles_files[fid]["confirmed"] = False
+    kb = info["bytes"] / 1024
+    size = f"{kb:.0f} KB" if kb < 1024 else f"{kb/1024:.1f} MB"
+    prompt = (f"That's {safe} — {info['format']}, {info['width']}x{info['height']}, {size}. "
+              f"Want me to open it for editing?")
+    _apelles_pending[session_id or "default"] = {"image_id": fid, "prompt": prompt}
+    log.info("[apelles] staged %s %dx%d %s — awaiting confirmation",
+             info["format"], info["width"], info["height"], fid)
+    return {"image_id": fid, "filename": safe, **info,
+            "confirmed": False, "gate_prompt": prompt,
+            "metadata_present": apelles.describe_metadata(dest)}
+
+
+@app.post("/apelles/confirm")
+async def apelles_confirm(body: dict):
+    """The explicit yes. Nothing auto-proceeds and nothing expires into a yes."""
+    sid = str(body.get("session_id") or "default")
+    image_id = str(body.get("image_id") or "")
+    pend = _apelles_pending.get(sid)
+    if not pend or (image_id and pend["image_id"] != image_id):
+        raise HTTPException(404, "nothing is waiting for confirmation")
+    if not body.get("confirm"):
+        _apelles_files.pop(pend["image_id"], None)
+        _apelles_pending.pop(sid, None)
+        return {"confirmed": False, "discarded": True}
+    _apelles_files[pend["image_id"]]["confirmed"] = True
+    _apelles_pending.pop(sid, None)
+    return {"confirmed": True, "image_id": pend["image_id"]}
+
+
+@app.post("/apelles/edit")
+async def apelles_edit(body: dict):
+    """Apply an operation pipeline and return a full-resolution preview.
+
+    The ORIGINAL is untouched — the response carries its sha256 so the UI can
+    show that rather than merely assert it."""
+    ent = _apelles_get(body.get("image_id"))
+    steps = body.get("steps") or []
+    if not isinstance(steps, list):
+        raise HTTPException(400, "steps must be a list")
+    for st in steps:
+        blocked = apelles.capability(str(st.get("op", "")))
+        if blocked is not None and not blocked["available"]:
+            raise HTTPException(409, f"{blocked['label']} — unavailable: {blocked['reason']}")
+    src = ent["path"]
+    before = src.stat()
+    sha_before = hashlib.sha256(src.read_bytes()).hexdigest()
+    try:
+        im = apelles._open_source(src)
+        out = apelles.apply_pipeline(im, steps)
+        prev_dir = apelles.APELLES_DATA / "previews"
+        prev_dir.mkdir(parents=True, exist_ok=True)
+        pth = prev_dir / f"{uuid.uuid4().hex[:12]}.png"
+        out.save(pth, format="PNG")
+    except apelles.ApellesError as e:
+        raise HTTPException(400, str(e))
+    if (before.st_size, before.st_mtime_ns) != (src.stat().st_size, src.stat().st_mtime_ns):
+        raise HTTPException(500, "INVARIANT BROKEN: the original changed")
+    pid = _apelles_register(pth, "preview")
+    return {"preview_id": pid, "width": out.width, "height": out.height,
+            "source_width": im.width, "source_height": im.height,
+            "original_intact": True, "original_sha256": sha_before}
+
+
+@app.post("/apelles/export")
+async def apelles_export(body: dict):
+    """Export. Metadata is STRIPPED BY DEFAULT and the response states exactly
+    what was removed, so the UI can show it rather than bury it in a panel."""
+    ent = _apelles_get(body.get("image_id"))
+    src = ent["path"]
+    sha_before = hashlib.sha256(src.read_bytes()).hexdigest()
+    strip = body.get("strip_metadata", True)
+    strip = True if strip is None else bool(strip)
+    try:
+        res = apelles.edit_file(src, body.get("steps") or [],
+                                fmt=str(body.get("format") or "PNG"),
+                                quality=int(body.get("quality") or 92),
+                                strip_metadata=strip)
+    except apelles.ApellesError as e:
+        raise HTTPException(400, str(e))
+    if hashlib.sha256(src.read_bytes()).hexdigest() != sha_before:
+        raise HTTPException(500, "INVARIANT BROKEN: the original changed")
+    fid = _apelles_register(Path(res["path"]), "export")
+    kept = [] if strip else apelles.describe_metadata(src)
+    res.pop("path", None)                       # never hand a filesystem path to a client
+    return {**res, "file_id": fid, "metadata_kept": kept,
+            "original_sha256": sha_before, "original_name": src.name}
+
+
+@app.get("/apelles/file/{file_id}")
+async def apelles_file(file_id: str):
+    ent = _apelles_files.get(str(file_id))
+    if not ent or not Path(ent["path"]).exists():
+        raise HTTPException(404, "no such file")
+    p = Path(ent["path"])
+    mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+            "webp": "image/webp"}.get(p.suffix.lower().lstrip("."), "application/octet-stream")
+    return FileResponse(str(p), media_type=mime, filename=p.name)
+
+
+def _apelles_steps(body: dict) -> list:
+    steps = body.get("steps")
+    if steps:
+        return steps
+    name = str(body.get("pipeline") or "")
+    pipes = apelles.list_pipelines()
+    if name not in pipes:
+        raise HTTPException(400, f"unknown pipeline '{name}'")
+    return pipes[name]
+
+
+@app.post("/apelles/batch/dryrun")
+async def apelles_batch_dryrun(body: dict):
+    """Dry run. Returns the REAL destination paths and writes nothing."""
+    folder = _apelles_folder(body.get("folder") or "")
+    try:
+        return apelles.batch_plan(folder, _apelles_steps(body),
+                                  fmt=str(body.get("format") or "PNG"))
+    except apelles.ApellesError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/apelles/batch/run")
+async def apelles_batch_run(body: dict, background_tasks: BackgroundTasks):
+    folder = _apelles_folder(body.get("folder") or "")
+    try:
+        bid = apelles.batch_start(folder, _apelles_steps(body),
+                                  fmt=str(body.get("format") or "PNG"),
+                                  quality=int(body.get("quality") or 92),
+                                  strip_metadata=bool(body.get("strip_metadata", True)))
+    except apelles.ApellesError as e:
+        raise HTTPException(400, str(e))
+    background_tasks.add_task(asyncio.to_thread, apelles.batch_execute, bid)
+    return {"batch_id": bid, **(apelles.batch_status(bid) or {})}
+
+
+@app.get("/apelles/batch/{batch_id}")
+async def apelles_batch_status(batch_id: str):
+    st = apelles.batch_status(str(batch_id))
+    if st is None:
+        raise HTTPException(404, "no such batch")
+    return st
+
+
+@app.post("/apelles/batch/{batch_id}/cancel")
+async def apelles_batch_cancel(batch_id: str):
+    return {"cancelling": apelles.batch_cancel(str(batch_id))}
+
+
+@app.get("/apelles/pipelines")
+async def apelles_pipelines():
+    return {"pipelines": apelles.list_pipelines(),
+            "builtin": sorted(apelles.BUILTIN_PIPELINES)}
 
 
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")

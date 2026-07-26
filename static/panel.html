@@ -1919,6 +1919,101 @@
 
 </main>
 
+
+<section id="paneApelles" class="pane">
+
+  <div class="card">
+    <div class="card-title">Apelles — photo editor</div>
+    <div class="ari-note">Edits photos <b>entirely on this machine</b> — nothing is uploaded and nothing leaves the box.
+    Apelles <b>edits</b> pictures; it never generates one from nothing (that's Morpheus).
+    <b>Your originals are never modified</b> — every operation writes a new file.</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">1 &middot; Load a photo</div>
+    <input type="file" id="apFile" accept="image/png,image/jpeg,image/webp,image/bmp,image/tiff,image/gif">
+    <div id="apGate" style="display:none;margin-top:10px;padding:10px;border:1px solid #6b8f5b;border-radius:8px">
+      <div id="apGateMsg" style="margin-bottom:6px"></div>
+      <div id="apGateMeta" class="ari-hint" style="margin-bottom:8px"></div>
+      <button type="button" id="apConfirm">Yes, open it</button>
+      <button type="button" id="apDiscard">No, discard</button>
+    </div>
+    <div id="apLoaded" class="ari-hint" style="display:none;margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">What Apelles can do on this box</div>
+    <div class="ari-note">Every operation Apelles knows about is listed. Unavailable ones say <b>why</b>, so
+    "not built yet", "broken", and "needs a file dropped in a folder" are told apart at a glance.</div>
+    <div id="apCaps" style="margin-top:8px">loading&hellip;</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">2 &middot; Operate</div>
+    <label>Aspect preset <select id="apPreset"><option value="">&mdash; none &mdash;</option></select></label>
+    <div style="margin-top:10px">
+      <label>Exposure <span id="apExpV">0</span> stops<br><input type="range" id="apExp" min="-3" max="3" step="0.1" value="0"></label><br>
+      <label>Contrast <span id="apConV">1.00</span><br><input type="range" id="apCon" min="0" max="2.5" step="0.05" value="1"></label><br>
+      <label>Saturation <span id="apSatV">1.00</span><br><input type="range" id="apSat" min="0" max="2.5" step="0.05" value="1"></label><br>
+      <label>Temperature <span id="apTmpV">0</span><br><input type="range" id="apTmp" min="-100" max="100" step="1" value="0"></label><br>
+      <label>Rotate <span id="apRotV">0</span>&deg;<br><input type="range" id="apRot" min="-180" max="180" step="1" value="0"></label><br>
+      <label>Sharpen <span id="apShV">0</span><br><input type="range" id="apSh" min="0" max="3" step="0.1" value="0"></label><br>
+      <label>Denoise <span id="apDnV">0</span><br><input type="range" id="apDn" min="0" max="3" step="0.1" value="0"></label>
+    </div>
+    <div style="margin-top:10px">
+      <button type="button" id="apApply">Apply &rarr; preview</button>
+      <button type="button" id="apReset">Reset</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">3 &middot; Preview</div>
+    <label><input type="checkbox" id="apZoom"> View at 100% (edge inspection)</label>
+    <div style="display:flex;gap:12px;margin-top:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:220px">
+        <div class="ari-hint">Before</div>
+        <div id="apBeforeBox" style="overflow:auto;max-height:420px;border:1px solid #333;border-radius:6px"><img id="apBefore" style="max-width:100%;display:block"></div>
+      </div>
+      <div style="flex:1;min-width:220px">
+        <div class="ari-hint">After</div>
+        <div id="apAfterBox" style="overflow:auto;max-height:420px;border:1px solid #333;border-radius:6px"><img id="apAfter" style="max-width:100%;display:block"></div>
+      </div>
+    </div>
+    <div id="apPrevInfo" class="ari-hint" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">4 &middot; Export</div>
+    <label>Format <select id="apFmt"><option>PNG</option><option>JPEG</option><option>WEBP</option></select></label>
+    <label style="margin-left:12px">Quality <input type="number" id="apQ" min="1" max="100" value="92" style="width:70px"></label>
+    <div style="margin-top:10px;padding:10px;border:1px solid #6b8f5b;border-radius:8px">
+      <label><input type="checkbox" id="apStrip" checked> <b>Strip metadata</b> &mdash; GPS, device, serial, timestamps</label>
+      <div class="ari-hint" id="apStripNote" style="margin-top:6px">On by default. Your location and camera identity do not leave with the picture.</div>
+      <div id="apKeepWarn" style="display:none;margin-top:8px;padding:8px;border:1px solid #e0a33a;border-radius:6px;color:#e0a33a"></div>
+    </div>
+    <div style="margin-top:10px"><button type="button" id="apExport">Export</button></div>
+    <div id="apExportOut" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">5 &middot; Batch a folder</div>
+    <div class="ari-note">Dry run first &mdash; it lists <b>the real destination paths</b> before anything is written.
+    Originals are never touched, and output never goes into the source folder.</div>
+    <label>Folder <input type="text" id="apFolder" placeholder="/home/&hellip;/Pictures/holiday" style="width:58%"></label>
+    <div class="ari-hint" id="apRoots"></div>
+    <div style="margin-top:8px">
+      <label>Pipeline <select id="apPipe"></select></label>
+      <label style="margin-left:12px">Format <select id="apBFmt"><option>PNG</option><option>JPEG</option><option>WEBP</option></select></label>
+    </div>
+    <div style="margin-top:8px">
+      <button type="button" id="apDry">Dry run</button>
+      <button type="button" id="apRun" disabled>Run batch</button>
+    </div>
+    <div id="apBatchOut" style="margin-top:8px"></div>
+  </div>
+
+</section>
+
 <nav class="tabs">
   <button class="tab active" data-pane="Status">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -1947,6 +2042,10 @@
   <button class="tab" data-pane="Ariadne">
     <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
     <span data-i18n="tab.ariadne">Ariadne</span>
+  </button>
+  <button class="tab" data-pane="Apelles">
+    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+    <span data-i18n="tab.apelles">Apelles</span>
   </button>
 </nav>
 
@@ -2024,7 +2123,222 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   document.getElementById('pane' + t.dataset.pane).classList.add('active');
   if (t.dataset.pane === 'Status') { wgRefresh(); egressRefresh(); langInit(); acctInit(); dgInit(); }
   if (t.dataset.pane === 'Amphion') { ampRefreshLibrary(); }
+  if (t.dataset.pane === 'Apelles') { apInit(); }
 }));
+
+
+// ── Apelles — photo editor ────────────────────────────────────────────────────
+// Capability state is RENDERED FROM THE SERVER, never hardcoded here: an
+// operation with no model shows disabled with its reason, so "doesn't exist yet"
+// stays distinguishable from "broken" at a glance.
+let apInit;
+(function(){
+  const $ = id => document.getElementById(id);
+  let imageId = null, srcW = 0, srcH = 0, caps = null, batchTimer = null, curBatch = null;
+  const esc = s => (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+  const SLIDERS = [['apExp','apExpV',1],['apCon','apConV',2],['apSat','apSatV',2],
+                   ['apTmp','apTmpV',0],['apRot','apRotV',0],['apSh','apShV',1],['apDn','apDnV',1]];
+  SLIDERS.forEach(function(t){
+    const el = $(t[0]); if (!el) return;
+    el.addEventListener('input', function(){ $(t[1]).textContent = (+el.value).toFixed(t[2]); });
+  });
+
+  function steps(){
+    const out = [];
+    if ($('apPreset').value) out.push({op:'resize', preset:$('apPreset').value});
+    if (+$('apRot').value !== 0) out.push({op:'rotate', degrees:+$('apRot').value});
+    if (+$('apExp').value !== 0) out.push({op:'exposure', stops:+$('apExp').value});
+    if (+$('apCon').value !== 1) out.push({op:'contrast', amount:+$('apCon').value});
+    if (+$('apSat').value !== 1) out.push({op:'saturation', amount:+$('apSat').value});
+    if (+$('apTmp').value !== 0) out.push({op:'temperature', kelvin_shift:+$('apTmp').value});
+    if (+$('apSh').value > 0) out.push({op:'sharpen', amount:+$('apSh').value});
+    if (+$('apDn').value > 0) out.push({op:'denoise', amount:+$('apDn').value});
+    return out;
+  }
+
+  async function renderCaps(){
+    const r = await fetch('/apelles/capabilities');
+    caps = await r.json();
+    const byTier = {};
+    caps.items.forEach(function(i){ (byTier[i.tier] = byTier[i.tier] || []).push(i); });
+    let h = '';
+    Object.keys(byTier).sort().forEach(function(t){
+      h += '<div style="margin-top:8px"><b>Tier ' + t + '</b></div>';
+      byTier[t].forEach(function(i){
+        h += i.available
+          ? '<div style="color:#7ec87e">&#10003; ' + esc(i.label) + '</div>'
+          : '<div style="opacity:.75">&#10007; ' + esc(i.label) +
+            ' &mdash; <span style="color:#e0a33a">unavailable: ' + esc(i.reason) + '</span>' +
+            (i.fix ? '<div class="ari-hint" style="margin-left:18px">To enable: ' + esc(i.fix) + '</div>' : '') +
+            '</div>';
+      });
+    });
+    (caps.welded || []).forEach(function(w){
+      h += '<div style="margin-top:10px;padding:8px;border:1px solid #a05a5a;border-radius:6px;color:#d98c8c">'
+         + esc(w.label) + ' &mdash; ' + esc(w.reason) + '</div>';
+    });
+    h += '<div class="ari-hint" style="margin-top:8px">' + caps.available + ' of ' + caps.total +
+         ' available' + (caps.comfy_reachable ? '' : ' &middot; ComfyUI is not reachable') + '</div>';
+    $('apCaps').innerHTML = h;
+    const ps = $('apPreset');
+    if (ps.options.length <= 1) (caps.presets||[]).forEach(function(n){ ps.add(new Option(n, n)); });
+    const pp = $('apPipe');
+    if (!pp.options.length) (caps.pipelines||[]).forEach(function(n){ pp.add(new Option(n, n)); });
+  }
+
+  $('apFile').addEventListener('change', async function(e){
+    const f = e.target.files[0]; if (!f) return;
+    imageId = null; $('apLoaded').style.display = 'none';
+    const fd = new FormData(); fd.append('file', f); fd.append('session_id', 'panel');
+    const r = await fetch('/apelles/load', {method:'POST', body:fd});
+    const d = await r.json();
+    if (!r.ok) { $('apGate').style.display='none'; alert(d.detail || 'that image was refused'); return; }
+    $('apGateMsg').textContent = d.gate_prompt;
+    $('apGateMeta').innerHTML = (d.metadata_present && d.metadata_present.length)
+      ? 'Metadata found in this file: <b>' + esc(d.metadata_present.join(', ')) + '</b>'
+      : 'No camera metadata found in this file.';
+    $('apGate').style.display = 'block';
+    $('apGate').dataset.pending = d.image_id;
+    $('apBefore').src = URL.createObjectURL(f);
+    srcW = d.width; srcH = d.height;
+  });
+
+  $('apConfirm').addEventListener('click', async function(){
+    const id = $('apGate').dataset.pending;
+    const r = await fetch('/apelles/confirm', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({session_id:'panel', image_id:id, confirm:true})});
+    if (!r.ok) { alert('confirm failed'); return; }
+    imageId = id; $('apGate').style.display = 'none';
+    $('apLoaded').style.display = 'block';
+    $('apLoaded').innerHTML = 'Open for editing &mdash; ' + srcW + '&times;' + srcH +
+      '. <b>The original on disk is not modified.</b>';
+  });
+
+  $('apDiscard').addEventListener('click', async function(){
+    await fetch('/apelles/confirm', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({session_id:'panel', image_id:$('apGate').dataset.pending, confirm:false})});
+    imageId = null; $('apGate').style.display='none'; $('apFile').value='';
+    $('apBefore').removeAttribute('src');
+  });
+
+  $('apReset').addEventListener('click', function(){
+    $('apPreset').value='';
+    SLIDERS.forEach(function(t){
+      const d = (t[0]==='apCon'||t[0]==='apSat') ? 1 : 0;
+      $(t[0]).value = d; $(t[1]).textContent = (+d).toFixed(t[2]);
+    });
+  });
+
+  $('apApply').addEventListener('click', async function(){
+    if (!imageId) { alert('Load and confirm a photo first.'); return; }
+    $('apPrevInfo').textContent = 'working...';
+    const r = await fetch('/apelles/edit', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({image_id:imageId, steps:steps()})});
+    const d = await r.json();
+    if (!r.ok) { $('apPrevInfo').textContent = d.detail || 'that edit failed'; return; }
+    $('apAfter').src = '/apelles/file/' + d.preview_id + '?t=' + Date.now();
+    $('apPrevInfo').innerHTML = d.source_width + '&times;' + d.source_height + ' &rarr; ' +
+      d.width + '&times;' + d.height +
+      ' &middot; <b>original untouched</b> (sha256 ' + esc(d.original_sha256.slice(0,12)) + '...)';
+  });
+
+  $('apZoom').addEventListener('change', function(){
+    const full = $('apZoom').checked;
+    ['apBefore','apAfter'].forEach(function(id){
+      const im = $(id);
+      im.style.maxWidth = full ? 'none' : '100%';
+      im.style.width = full ? 'auto' : '';
+    });
+  });
+
+  $('apStrip').addEventListener('change', function(){
+    const keep = !$('apStrip').checked;
+    $('apKeepWarn').style.display = keep ? 'block' : 'none';
+    if (keep) $('apKeepWarn').innerHTML =
+      'Metadata will be <b>kept</b> in the exported file &mdash; that can include GPS location, ' +
+      'camera make and model, serial number and timestamps. Anyone you send the photo to can read it.';
+  });
+
+  $('apExport').addEventListener('click', async function(){
+    if (!imageId) { alert('Load and confirm a photo first.'); return; }
+    $('apExportOut').textContent = 'exporting...';
+    const r = await fetch('/apelles/export', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({image_id:imageId, steps:steps(), format:$('apFmt').value,
+                            quality:+$('apQ').value, strip_metadata:$('apStrip').checked})});
+    const d = await r.json();
+    if (!r.ok) { $('apExportOut').textContent = d.detail || 'export failed'; return; }
+    const removed = (d.metadata_removed||[]).length
+      ? '<div style="color:#7ec87e">Metadata stripped: <b>' + esc(d.metadata_removed.join(', ')) + '</b></div>'
+      : (d.metadata_stripped ? '<div style="color:#7ec87e">Metadata stripped (none was present).</div>' : '');
+    const kept = (!d.metadata_stripped)
+      ? '<div style="color:#e0a33a">Metadata <b>kept</b>: ' + esc((d.metadata_kept||[]).join(', ') || 'none present') + '</div>'
+      : '';
+    $('apExportOut').innerHTML = removed + kept +
+      '<div>' + d.width + '&times;' + d.height + ' ' + esc(d.format) + ' &middot; ' +
+      Math.round(d.bytes/1024) + ' KB</div>' +
+      '<div class="ari-hint">Original <b>' + esc(d.original_name) + '</b> untouched (sha256 ' +
+      esc(d.original_sha256.slice(0,12)) + '...)</div>' +
+      '<a href="/apelles/file/' + d.file_id + '" download>Download</a>';
+  });
+
+  $('apDry').addEventListener('click', async function(){
+    $('apBatchOut').textContent = 'planning...'; $('apRun').disabled = true;
+    const r = await fetch('/apelles/batch/dryrun', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({folder:$('apFolder').value, pipeline:$('apPipe').value, format:$('apBFmt').value})});
+    const d = await r.json();
+    if (!r.ok) { $('apBatchOut').innerHTML = '<span style="color:#e0a33a">' + esc(d.detail||'dry run failed') + '</span>'; return; }
+    let h = '<div><b>Dry run &mdash; nothing written.</b> ' + d.ready + ' ready, ' + d.problems + ' problem(s).</div>';
+    h += '<div class="ari-hint">Output folder: ' + esc(d.out_dir) + '</div><div style="max-height:220px;overflow:auto;margin-top:6px">';
+    d.items.forEach(function(i){
+      h += '<div style="' + (i.status==='ready'?'':'color:#e0a33a') + '">' + esc(i.source) + ' &rarr; ' +
+           esc(i.dest) + (i.status==='ready' ? '' : ' [' + esc(i.status) + ': ' + esc(i.reason||'') + ']') + '</div>';
+    });
+    $('apBatchOut').innerHTML = h + '</div>';
+    $('apRun').disabled = d.ready === 0;
+  });
+
+  $('apRun').addEventListener('click', async function(){
+    $('apRun').disabled = true; $('apBatchOut').textContent = 'starting...';
+    const r = await fetch('/apelles/batch/run', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({folder:$('apFolder').value, pipeline:$('apPipe').value,
+                            format:$('apBFmt').value, strip_metadata:true})});
+    const d = await r.json();
+    if (!r.ok) { $('apBatchOut').innerHTML = '<span style="color:#e0a33a">' + esc(d.detail||'batch failed') + '</span>'; return; }
+    curBatch = d.batch_id;
+    clearInterval(batchTimer);
+    batchTimer = setInterval(pollBatch, 1200);
+    pollBatch();
+  });
+
+  async function pollBatch(){
+    if (!curBatch) return;
+    const r = await fetch('/apelles/batch/' + curBatch);
+    if (!r.ok) { clearInterval(batchTimer); return; }
+    const d = await r.json();
+    let h = '<div><b>' + esc(d.state) + '</b> &mdash; ' + d.done + '/' + d.total +
+            ' &middot; ' + d.ok + ' ok, ' + d.failed + ' failed</div><div style="max-height:220px;overflow:auto">';
+    (d.results||[]).forEach(function(x){
+      h += x.ok ? '<div style="color:#7ec87e">&#10003; ' + esc(x.source) + '</div>'
+                : '<div style="color:#e0a33a">&#10007; ' + esc(x.source) + ' &mdash; ' + esc(x.reason||'failed') + '</div>';
+    });
+    h += '</div>';
+    if (d.state !== 'running') {
+      clearInterval(batchTimer);
+      h += '<div style="color:#7ec87e;margin-top:6px"><b>Every original left untouched.</b> Output went to a separate folder.</div>';
+    }
+    $('apBatchOut').innerHTML = h;
+  }
+
+  apInit = async function(){
+    try { await renderCaps(); } catch(e) { $('apCaps').textContent = 'capabilities unavailable'; }
+    try {
+      const r = await fetch('/apelles/batch/folders');
+      const d = await r.json();
+      $('apRoots').textContent = 'Allowed roots: ' + (d.roots||[]).join(', ');
+    } catch(e) {}
+  };
+})();
 
 // ── Amphion — song generation (ACE-Step 1.5) ───────────────────────────────────
 (function(){

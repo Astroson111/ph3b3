@@ -372,7 +372,7 @@ def op_resize(im: Image.Image, width: int | None = None, height: int | None = No
 def export(im: Image.Image, fmt: str = "PNG", quality: int = 92,
            strip_metadata: bool = True, source_exif: bytes | None = None,
            out_dir: Path | None = None, stem: str | None = None,
-           never_overwrite: Path | None = None) -> dict:
+           never_overwrite: Path | None = None, dest: Path | None = None) -> dict:
     """Write a NEW file and report what happened to the metadata.
 
     strip_metadata defaults to True — see the flagship note above. Passing False
@@ -386,10 +386,15 @@ def export(im: Image.Image, fmt: str = "PNG", quality: int = 92,
     if f not in ALLOWED_OUT:
         raise ApellesError(f"can't export as {fmt} (PNG, JPEG, WebP)")
 
-    dest_dir = Path(out_dir) if out_dir else OUT_DIR
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    name = f"{(stem or 'edit')}_{uuid.uuid4().hex[:8]}.{f.lower()}"
-    dest = dest_dir / name
+    if dest is not None:
+        # Batch supplies an exact destination so its dry-run can state the real
+        # path instead of a pattern. Still refuses to land on anything existing.
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        dest_dir = Path(out_dir) if out_dir else OUT_DIR
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{(stem or 'edit')}_{uuid.uuid4().hex[:8]}.{f.lower()}"
 
     # Ruling C, belt and braces: even a caller that constructs its own filename
     # cannot land on the source path.
@@ -486,3 +491,378 @@ def edit_file(src: Path, steps: list[dict], fmt: str = "PNG", quality: int = 92,
         raise ApellesError("INVARIANT BROKEN: the original changed during the edit")
     result["original_intact"] = True
     return result
+
+
+# ── Tier 4: batch ─────────────────────────────────────────────────────────────
+# Ruling C matters most here. A careless pipeline pointed at a folder of
+# irreplaceable photos is exactly the scenario the non-destructive rule exists
+# for, so batch NEVER writes into the source folder: outputs go to a separate
+# directory, and the dry-run shows every destination before a byte is written.
+import json as _json
+import threading as _threading
+
+PIPELINES_PATH: Path = APELLES_DATA / "pipelines.json"
+
+# Shipped recipes, because "the Etsy pipeline" and "the TikTok pipeline" are the
+# actual reason anyone opens a batch tool.
+BUILTIN_PIPELINES: dict[str, list[dict]] = {
+    "etsy":     [{"op": "resize", "preset": "square"}, {"op": "sharpen", "amount": 0.8}],
+    "tiktok":   [{"op": "resize", "preset": "tiktok"}],
+    "linkedin": [{"op": "resize", "preset": "linkedin_headshot"}, {"op": "sharpen", "amount": 0.6}],
+    "youtube":  [{"op": "resize", "preset": "youtube_thumb"}, {"op": "contrast", "amount": 1.1}],
+}
+
+_BATCHES: dict[str, dict] = {}
+_BATCH_LOCK = _threading.Lock()
+
+
+def _valid_name(name: str) -> str:
+    n = re.sub(r"[^a-z0-9_-]+", "_", str(name or "").strip().lower())[:40].strip("_")
+    if not n:
+        raise ApellesError("that pipeline name isn't usable")
+    return n
+
+
+def list_pipelines() -> dict[str, list[dict]]:
+    """Built-ins plus anything the user saved. User entries win on a name clash,
+    so a saved 'etsy' overrides the shipped one rather than silently doing
+    something different from what the name says."""
+    out = dict(BUILTIN_PIPELINES)
+    try:
+        if PIPELINES_PATH.exists():
+            saved = _json.loads(PIPELINES_PATH.read_text(encoding="utf-8"))
+            if isinstance(saved, dict):
+                out.update({k: v for k, v in saved.items() if isinstance(v, list)})
+    except Exception:
+        log.warning("[apelles] saved pipelines unreadable; serving built-ins only")
+    return out
+
+
+def save_pipeline(name: str, steps: list[dict]) -> dict:
+    n = _valid_name(name)
+    # Validate against a scratch image now, so a broken pipeline fails at SAVE
+    # time rather than 400 files into a batch.
+    apply_pipeline(Image.new("RGB", (64, 64)), steps)
+    saved = {}
+    try:
+        if PIPELINES_PATH.exists():
+            saved = _json.loads(PIPELINES_PATH.read_text(encoding="utf-8")) or {}
+    except Exception:
+        saved = {}
+    saved[n] = steps
+    PIPELINES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PIPELINES_PATH.with_suffix(".json.tmp")
+    tmp.write_text(_json.dumps(saved, indent=2), encoding="utf-8")
+    os.replace(tmp, PIPELINES_PATH)
+    return {"name": n, "steps": steps}
+
+
+def delete_pipeline(name: str) -> bool:
+    n = _valid_name(name)
+    if n in BUILTIN_PIPELINES:
+        raise ApellesError(f"'{n}' is a built-in pipeline and can't be deleted")
+    try:
+        saved = _json.loads(PIPELINES_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if n not in saved:
+        return False
+    saved.pop(n)
+    PIPELINES_PATH.write_text(_json.dumps(saved, indent=2), encoding="utf-8")
+    return True
+
+
+def _scan_folder(folder: Path) -> list[Path]:
+    folder = Path(folder)
+    if not folder.is_dir():
+        raise ApellesError("that isn't a folder I can read")
+    exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
+    return sorted(p for p in folder.iterdir()
+                  if p.is_file() and p.suffix.lower() in exts)
+
+
+def batch_plan(folder: Path, steps: list[dict], fmt: str = "PNG",
+               out_dir: Path | None = None) -> dict:
+    """DRY RUN. Lists exactly what would be produced and where — before anything
+    is written. Files that cannot be read are listed as such here, so a batch
+    does not surprise the user halfway through."""
+    folder = Path(folder)
+    f = "JPEG" if str(fmt).upper() == "JPG" else str(fmt).upper()
+    if f not in ALLOWED_OUT:
+        raise ApellesError(f"can't export as {fmt} (PNG, JPEG, WebP)")
+    apply_pipeline(Image.new("RGB", (64, 64)), steps)      # fail early, not mid-run
+
+    dest_dir = Path(out_dir) if out_dir else (OUT_DIR / f"batch_{uuid.uuid4().hex[:8]}")
+    if dest_dir.resolve() == folder.resolve():
+        raise ApellesError("batch output can't go into the source folder — originals stay untouched")
+
+    items, ok = [], 0
+    for src in _scan_folder(folder):
+        dest = dest_dir / f"{src.stem}.{f.lower()}"
+        row = {"source": src.name, "dest": str(dest), "status": "ready", "reason": None}
+        try:
+            info = probe(src)
+            row["size"] = f"{info['width']}x{info['height']}"
+        except ApellesError as e:
+            row.update(status="unreadable", reason=str(e))
+        if row["status"] == "ready" and dest.exists():
+            row.update(status="collision", reason="a file of that name is already there")
+        if row["status"] == "ready":
+            ok += 1
+        items.append(row)
+    return {
+        "folder": str(folder), "out_dir": str(dest_dir), "format": f,
+        "total": len(items), "ready": ok, "problems": len(items) - ok,
+        "items": items, "written": False,
+        "note": "Dry run — nothing has been written. Originals are never modified.",
+    }
+
+
+def batch_start(folder: Path, steps: list[dict], fmt: str = "PNG", quality: int = 92,
+                strip_metadata: bool = True, out_dir: Path | None = None) -> str:
+    """Reserve a batch and FREEZE its plan.
+
+    The plan is stored, not recomputed at execute time: with no explicit out_dir
+    each call would mint a different random directory, so status would report one
+    path while the files landed in another."""
+    plan = batch_plan(folder, steps, fmt=fmt, out_dir=out_dir)
+    bid = uuid.uuid4().hex[:12]
+    with _BATCH_LOCK:
+        _BATCHES[bid] = {"id": bid, "state": "running", "cancel": False,
+                         "total": plan["total"], "done": 0, "ok": 0, "failed": 0,
+                         "out_dir": plan["out_dir"], "results": [],
+                         "_plan": plan, "_steps": steps,
+                         "_quality": quality, "_strip": strip_metadata}
+    return bid
+
+
+def batch_status(bid: str) -> dict | None:
+    with _BATCH_LOCK:
+        b = _BATCHES.get(bid)
+        if not b:
+            return None
+        pub = {k: v for k, v in b.items() if not k.startswith("_")}
+        pub["results"] = list(b["results"])
+        return pub
+
+
+def batch_cancel(bid: str) -> bool:
+    with _BATCH_LOCK:
+        b = _BATCHES.get(bid)
+        if not b or b["state"] != "running":
+            return False
+        b["cancel"] = True
+        return True
+
+
+def batch_execute(bid: str) -> dict:
+    """Run the FROZEN plan from batch_start. One bad file is REPORTED and the run
+    continues — it is not silently skipped, and it does not abort the batch."""
+    with _BATCH_LOCK:
+        b = _BATCHES.get(bid)
+        if b is None:
+            raise ApellesError("that batch is gone")
+        plan, steps = b["_plan"], b["_steps"]
+        quality, strip_metadata = b["_quality"], b["_strip"]
+    f = plan["format"]
+    for row in plan["items"]:
+        with _BATCH_LOCK:
+            b = _BATCHES.get(bid)
+            if b is None:
+                raise ApellesError("that batch is gone")
+            if b["cancel"]:
+                b["state"] = "cancelled"
+                return batch_status(bid)
+        src = Path(plan["folder"]) / row["source"]
+        entry = {"source": row["source"], "dest": row["dest"]}
+        if row["status"] != "ready":
+            entry.update(ok=False, reason=row["reason"])
+        else:
+            try:
+                before = src.stat()
+                im = _open_source(src)
+                res = export(apply_pipeline(im, steps), fmt=f, quality=quality,
+                             strip_metadata=strip_metadata,
+                             source_exif=im.info.get("exif"), dest=Path(row["dest"]),
+                             never_overwrite=src)
+                after = src.stat()
+                if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                    raise ApellesError("INVARIANT BROKEN: original changed during batch")
+                entry.update(ok=True, reason=None, width=res["width"], height=res["height"],
+                             metadata_removed=res["metadata_removed"])
+            except Exception as e:
+                entry.update(ok=False, reason=str(e) if isinstance(e, ApellesError)
+                             else f"{type(e).__name__}")
+        with _BATCH_LOCK:
+            b = _BATCHES[bid]
+            b["results"].append(entry)
+            b["done"] += 1
+            b["ok" if entry["ok"] else "failed"] += 1
+    with _BATCH_LOCK:
+        b = _BATCHES[bid]
+        b["state"] = "done"
+    log.info("[apelles] batch %s finished total=%d ok=%d failed=%d",
+             bid, b["total"], b["ok"], b["failed"])
+    return batch_status(bid)
+
+
+# ── Capability map ────────────────────────────────────────────────────────────
+# THE GOVERNING RULE of the surface: every operation Apelles knows about appears
+# in the interface, and the unavailable ones say WHY. A selector that lists only
+# what happens to work is indistinguishable from a selector that is broken —
+# that was the Amphion Mode-dropdown lesson, and it is a standing rule now.
+#
+# Read from actual node and model presence. Nothing here is hardcoded to
+# "unavailable": drop a model into the right folder, restart, and the feature
+# lights up on its own with no code change.
+_COMFY_HOST = os.getenv("COMFY_HOST", "http://127.0.0.1:8188")
+_COMFY_MODELS = Path(os.getenv("COMFY_MODELS_DIR",
+                               str(Path.home() / "Desktop" / "comfyui" / "models")))
+_PLACEHOLDER = re.compile(r"^put_.*_here$|^\.", re.I)
+
+_caps_cache: dict | None = None
+
+
+def _models_in(subdir: str) -> list[str]:
+    """Real model files in a ComfyUI model folder, ignoring the placeholder
+    'put_x_here' breadcrumbs ComfyUI ships."""
+    d = _COMFY_MODELS / subdir
+    try:
+        return [p.name for p in d.iterdir()
+                if p.is_file() and not _PLACEHOLDER.match(p.name)]
+    except Exception:
+        return []
+
+
+def _comfy_nodes(timeout: float = 3.0) -> set[str] | None:
+    """Node types ComfyUI currently exposes, or None if it isn't reachable.
+
+    None and empty are different answers and must stay different: 'ComfyUI is
+    down' is a fixable outage, 'the node isn't installed' is a missing file."""
+    try:
+        import httpx
+        r = httpx.get(f"{_COMFY_HOST}/object_info", timeout=timeout)
+        if r.status_code != 200:
+            return None
+        return set(r.json().keys())
+    except Exception:
+        return None
+
+
+def capabilities(refresh: bool = False) -> dict:
+    """What Apelles can actually do on THIS box, right now, with reasons.
+
+    The UI renders straight from this, so anything the UI shows disabled has its
+    explanation from the same source the chat tools quote."""
+    global _caps_cache
+    if _caps_cache is not None and not refresh:
+        return _caps_cache
+
+    nodes = _comfy_nodes()
+    comfy_up = nodes is not None
+    have = (lambda *n: comfy_up and any(x in nodes for x in n))
+
+    def _any_node(pattern: str) -> bool:
+        return comfy_up and any(re.search(pattern, n, re.I) for n in nodes)
+
+    upscale_models = _models_in("upscale_models")
+    checkpoints = _models_in("checkpoints")
+    sdxl = [c for c in checkpoints if "xl" in c.lower()]
+
+    try:
+        import rembg  # noqa: F401
+        have_rembg = True
+    except Exception:
+        have_rembg = False
+    bg_node = _any_node(r"birefnet|rembg|removebg|imagesegment")
+
+    def cap(cid, label, tier, ok, reason=None, fix=None):
+        return {"id": cid, "label": label, "tier": tier, "available": bool(ok),
+                "reason": None if ok else reason, "fix": None if ok else fix}
+
+    tier1 = [cap(k, l, 1, True) for k, l in [
+        ("crop", "Crop"), ("rotate", "Rotate / straighten"), ("flip", "Flip"),
+        ("exposure", "Exposure"), ("contrast", "Contrast"), ("saturation", "Saturation"),
+        ("temperature", "Temperature"), ("levels", "Levels"), ("sharpen", "Sharpen"),
+        ("denoise", "Denoise"), ("resize", "Resize / aspect presets"),
+        ("export", "Export (PNG / JPEG / WebP)"), ("strip_metadata", "Strip metadata"),
+    ]]
+
+    comfy_down = "ComfyUI isn't reachable" if not comfy_up else None
+    items = tier1 + [
+        cap("background_removal", "Background removal", 2,
+            have_rembg or bg_node,
+            comfy_down or "BiRefNet/rembg model not installed",
+            "install rembg in the venv, or add a BiRefNet node + model to ComfyUI"),
+        cap("composite", "Composite onto colour / image", 2,
+            have_rembg or bg_node,
+            comfy_down or "needs background removal, which isn't installed",
+            "same as background removal"),
+        cap("edge_refine", "Edge refine (erode / feather)", 2,
+            have_rembg or bg_node,
+            comfy_down or "needs a cutout to refine, and background removal isn't installed",
+            "same as background removal"),
+        cap("upscale", "Upscale (Real-ESRGAN)", 3,
+            bool(upscale_models) and have("ImageUpscaleWithModel"),
+            comfy_down or "no model in models/upscale_models/",
+            "drop a Real-ESRGAN .pth into models/upscale_models/ and restart"),
+        cap("object_removal", "Object removal (inpaint)", 3,
+            bool(sdxl) and have("VAEEncodeForInpaint", "SetLatentNoiseMask"),
+            comfy_down or "no SDXL checkpoint found",
+            "add an SDXL checkpoint to models/checkpoints/"),
+        cap("outpaint", "Canvas extend / outpaint", 3,
+            bool(sdxl) and have("ImagePadForOutpaint"),
+            comfy_down or "no SDXL checkpoint found",
+            "add an SDXL checkpoint to models/checkpoints/"),
+        cap("depth_blur", "Depth-based background blur", 3,
+            _any_node(r"depthanything|midas|zoedepth|depthmap"),
+            comfy_down or "no depth-estimation node in ComfyUI",
+            "install a depth node (Depth Anything / MiDaS) in ComfyUI"),
+        cap("face_restore", "Face restoration", 3,
+            _any_node(r"gfpgan|codeformer|facerestore"),
+            comfy_down or "no GFPGAN/CodeFormer node in ComfyUI",
+            "install a face-restore custom node in ComfyUI"),
+        cap("batch", "Batch a folder through a pipeline", 4, True),
+    ]
+
+    # Ruling B is stated in the capability map too, so the UI can show that face
+    # replacement is REFUSED rather than merely missing. "Not installed" and
+    # "we will not build this" are different claims and must read differently.
+    welded = [{"id": "face_replacement", "label": "Face swap / replacement",
+               "tier": None, "available": False, "welded": True,
+               "reason": "permanently refused — Ph3b3 doesn't put a person somewhere they weren't",
+               "fix": None}]
+
+    out = {
+        "comfy_reachable": comfy_up,
+        "available": sum(1 for i in items if i["available"]),
+        "total": len(items),
+        "items": items,
+        "welded": welded,
+        "presets": sorted(ASPECT_PRESETS),
+        "pipelines": sorted(list_pipelines()),
+    }
+    _caps_cache = out
+    return out
+
+
+def capability(cid: str) -> dict | None:
+    for i in capabilities()["items"] + capabilities()["welded"]:
+        if i["id"] == cid:
+            return i
+    return None
+
+
+def require(cid: str) -> None:
+    """Raise the SPECIFIC reason a blocked operation is blocked.
+
+    Chat and HTTP both call this, so 'remove the background' gets 'the model
+    isn't installed on this box' rather than a generic failure."""
+    c = capability(cid)
+    if c is None:
+        raise ApellesError(f"'{cid}' isn't an operation I have")
+    if not c["available"]:
+        msg = f"{c['label']} — unavailable: {c['reason']}"
+        if c.get("fix"):
+            msg += f". To enable it: {c['fix']}"
+        raise ApellesError(msg)
