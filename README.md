@@ -68,7 +68,7 @@ Her range is wide for a single-author build:
 
 ### Honest limits
 
-This matters more than the feature list. Ph3b3 runs on an **8 GB VRAM ceiling** — large frontier models do not fit, and a single desktop cannot do what a hyperscale facility does at the frontier. That's the trade. What you get in exchange is an assistant that is *yours*: no subscription, no rate limit, no terms that change under you, no model deprecated out from under you, and no data on someone else's server. For the household assistant use case, that trade is the entire point.
+This matters more than the feature list. Ph3b3 runs on a **16 GB VRAM ceiling**, and it is a real ceiling rather than a figure of speech — six things share that card (the language model, speech-to-text, image generation, video, music, and the photo editor), and a training run this month peaked at 15.6 GB of the 16 available. Large frontier models do not fit, and a single desktop cannot do what a hyperscale facility does at the frontier. That's the trade. What you get in exchange is an assistant that is *yours*: no subscription, no rate limit, no terms that change under you, no model deprecated out from under you, and no data on someone else's server. For the household assistant use case, that trade is the entire point.
 
 ---
 
