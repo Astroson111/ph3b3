@@ -4104,6 +4104,54 @@ async def amphion_variations(request: Request, body: dict):
                               f"({basis}); a Wan or SDXL job already running will add to it.")}
 
 
+@app.post("/amphion/remix/{job_id}")
+async def amphion_remix(job_id: str, request: Request, body: dict):
+    """Remix an EXISTING Amphion track. In-house output only.
+
+    THE ONLY INPUT IS A GALLERY ID. This signature is the enforcement: job_id is a
+    path parameter matched against ^[0-9a-f]{6,32}$, and `body` carries generation
+    settings — there is no file field, no path field and no URL field, so there is
+    nothing to smuggle audio in through. A route that needed one would not ship.
+
+    Provenance is verified from our own sidecar before anything queues: a track we
+    cannot confirm we generated is refused by name.
+    """
+    if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
+        raise HTTPException(400, "bad id")
+
+    # Refuse any attempt to hand this route audio by another name. These keys do
+    # not exist in the contract; rejecting them loudly beats ignoring them, so a
+    # caller learns the door is not there rather than assuming it silently worked.
+    smuggling = [k for k in ("file", "path", "url", "audio", "upload", "src", "source_file")
+                 if k in (body or {})]
+    if smuggling:
+        raise HTTPException(400,
+            f"remix takes a gallery track id only — {', '.join(smuggling)} is not accepted. "
+            f"Amphion remixes its own output; outside audio is out of scope by design.")
+
+    overrides = {k: body.get(k) for k in
+                 ("tags", "lyrics", "bpm", "keyscale", "timesig", "language", "seconds", "seed")
+                 if k in (body or {})}
+    params, why = await asyncio.to_thread(amphion.remix_params, job_id, overrides)
+    if params is None:
+        raise HTTPException(400, why)
+
+    # A remix with altered text is new content: floor it like any generation.
+    _amphion_floor_gate(params["tags"], params.get("lyrics", ""), request)
+
+    if params.get("seed") is None:
+        params["seed"] = int.from_bytes(os.urandom(4), "big")
+    params["seconds"] = max(5.0, min(amphion.MAX_DURATION, float(params["seconds"])))
+
+    new_id = amphion.new_job()
+    amphion.register_task(new_id, asyncio.create_task(amphion.run_generation(new_id, params)))
+    log.info("[amphion] remix %s -> %s (chain depth %d)",
+             job_id, new_id, len(params.get("provenance_chain") or []))
+    return {"job_id": new_id, "remix_of": job_id,
+            "provenance_chain": params.get("provenance_chain"),
+            "seed": params["seed"], "seconds": params["seconds"]}
+
+
 @app.get("/amphion/job/{job_id}")
 async def amphion_job(job_id: str):
     j = amphion.jobs.get(job_id)

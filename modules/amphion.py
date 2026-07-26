@@ -190,6 +190,70 @@ def plan_variations(base_seed: int, n: int) -> tuple[list[int], float, str]:
     return seeds, round(per * n, 1), basis
 
 
+
+# ── Remix (addendum item 6) — IN-HOUSE OUTPUT ONLY ───────────────────────────
+# Remixing Amphion's own generations is in scope. Anything originating outside
+# Ph3b3 is not, ever.
+#
+# ENFORCED ARCHITECTURALLY, NOT BY VALIDATION. The distinction matters: a
+# validator is a thing you can get past, and every upload control ever shipped
+# was "temporarily" unguarded at some point. So:
+#   - the only input is a gallery job id, matched against ^[0-9a-f]{6,32}$
+#   - no remix route accepts a file body, a filesystem path, or a URL
+#   - no upload control exists in the UI — not disabled, not hidden, NOT BUILT
+# There is nothing to bypass because there is no second door.
+#
+# Why the line is here: accepting outside audio would make Ph3b3 a laundering
+# path for other people's work, which is the same objection as the
+# copyrighted-lyrics refusal and the no-voice-cloning floor. Same principle,
+# different input.
+_PROVENANCE_MARK = "amphion"
+
+
+def has_provenance(job_id: str) -> tuple[bool, str]:
+    """(ok, reason). A track may only be remixed if OUR OWN record says we made
+    it. No sidecar, or a sidecar without the Amphion mark, is refused by name —
+    it is exactly how a file that did not come from here would present."""
+    src = song_path(job_id)
+    if not src:
+        return False, f"no track {job_id} in the library"
+    side = _sidecar_for(job_id)
+    if not side:
+        return False, (f"{job_id} has no generation record, so I can't confirm Amphion made it "
+                       f"— I only remix tracks this machine generated")
+    mark = str(side.get("generated_by", "")).lower()
+    if _PROVENANCE_MARK not in mark:
+        return False, (f"{job_id} isn't marked as Amphion-generated, so I won't remix it "
+                       f"— outside audio is out of scope by design")
+    return True, "ok"
+
+
+def remix_params(job_id: str, overrides: dict) -> tuple[dict | None, str]:
+    """Build generation params for a remix of an EXISTING track. Returns
+    (params, reason). The source's settings are inherited; only the fields the
+    caller names are changed."""
+    ok, why = has_provenance(job_id)
+    if not ok:
+        return None, why
+    side = _sidecar_for(job_id)
+    chain = list(side.get("provenance_chain") or [])
+    chain.append(job_id)
+    p = {
+        "tags":     overrides.get("tags")     or side.get("tags", ""),
+        "lyrics":   overrides.get("lyrics")   if overrides.get("lyrics") is not None else side.get("lyrics", ""),
+        "bpm":      overrides.get("bpm")      or side.get("bpm") or 120,
+        "keyscale": overrides.get("keyscale") or side.get("keyscale") or "C major",
+        "timesig":  str(overrides.get("timesig") or side.get("timesignature") or "4"),
+        "language": overrides.get("language") or "en",
+        "seconds":  overrides.get("seconds")  or side.get("seconds") or DEFAULT_DURATION,
+        "seed":     overrides.get("seed")     if overrides.get("seed") is not None else side.get("seed"),
+        "variant":  side.get("model_variant", "base"),
+        "remix_of": job_id,
+        "provenance_chain": chain,
+    }
+    return p, "ok"
+
+
 def _write_sidecar(job_id: str, p: dict, path: Path) -> None:
     """Reproducibility sidecar beside the track (prompt/lyrics/variant/seed). Per brief:
     written even on failure so a bad result can be reproduced."""
@@ -208,6 +272,9 @@ def _write_sidecar(job_id: str, p: dict, path: Path) -> None:
             # Which variation set this came from, so a set is traceable back to
             # the seed it was spun off. None for an ordinary single generation.
             "variation_of": p.get("variation_of"),
+            # Remix lineage: which track this came from, and the full ancestry.
+            "remix_of": p.get("remix_of"),
+            "provenance_chain": p.get("provenance_chain"),
             "duration_mode": p.get("duration_mode", "seconds"),
             "bars_requested": p.get("bars"),
             "duration_estimated": p.get("duration_mode") == "bars",
@@ -374,6 +441,10 @@ def _tags_for(job_id: str, p: dict, fmt: str) -> list[str]:
               "-metadata", f"initial_key={key}"]
     if seed is not None:
         m += ["-metadata", f"AMPHION_SEED={seed}"]
+    if p.get("remix_of"):
+        m += ["-metadata", f"AMPHION_REMIX_OF={p['remix_of']}"]
+    if p.get("provenance_chain"):
+        m += ["-metadata", "AMPHION_PROVENANCE_CHAIN=" + ">".join(p["provenance_chain"])]
     if dur:
         m += ["-metadata", f"AMPHION_DURATION={dur}"]
     if lyrics:
