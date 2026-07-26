@@ -165,5 +165,7 @@
   "amphion.custom": "Custom",
   "amphion.unit.secs": "Seconds",
   "amphion.unit.bars": "Bars",
-  "amphion.variations": "Variations"
+  "amphion.variations": "Variations",
+  "amphion.voice": "Voice",
+  "amphion.voice.tone": "Tone"
 }

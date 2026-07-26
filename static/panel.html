@@ -1829,6 +1829,45 @@
           <div class="ari-hint" id="ampEta"></div>
           <div class="ari-hint" id="ampLyrWarn" style="display:none;color:var(--warn,#e0a53a)"></div>
         </div>
+        <!-- Vocal character. ACE-Step 1.5 has NO speaker/voice input (checked the
+             node: no optional inputs), so the voice is shaped by the description
+             and the seed. These are DESCRIPTORS, never names — the same "name the
+             sound, not the person" line the floor draws, turned into controls. -->
+        <div class="amp-row">
+          <label data-i18n="amphion.voice">Voice</label>
+          <select id="ampVoiceType" class="ari-url">
+            <option value="">any singer</option>
+            <option value="female vocal">female</option>
+            <option value="male vocal">male</option>
+            <option value="androgynous vocal">androgynous</option>
+            <option value="choir">choir</option>
+            <option value="duet, male and female vocals">duet</option>
+            <option value="instrumental, no vocals">instrumental</option>
+          </select>
+          <select id="ampVoiceReg" class="ari-url">
+            <option value="">any range</option>
+            <option value="soprano">soprano</option><option value="alto">alto</option>
+            <option value="tenor">tenor</option><option value="baritone">baritone</option>
+            <option value="deep bass">bass</option>
+          </select>
+        </div>
+        <div class="amp-row">
+          <label data-i18n="amphion.voice.tone">Tone</label>
+          <select id="ampVoiceTex" class="ari-url">
+            <option value="">any tone</option>
+            <option value="clear">clear</option><option value="warm">warm</option>
+            <option value="breathy">breathy</option><option value="raspy">raspy</option>
+            <option value="gravelly">gravelly</option><option value="smooth">smooth</option>
+            <option value="weathered">weathered</option><option value="bright">bright</option>
+          </select>
+          <select id="ampVoiceDel" class="ari-url">
+            <option value="">any delivery</option>
+            <option value="belted">belted</option><option value="crooned">crooned</option>
+            <option value="softly sung">soft</option><option value="falsetto">falsetto</option>
+            <option value="spoken word">spoken word</option><option value="shouted">shouted</option>
+          </select>
+        </div>
+        <div class="ari-hint" id="ampVoicePreview"></div>
         <div class="amp-row">
           <label data-i18n="amphion.bpm">BPM</label>
           <input type="number" id="ampBpm" class="ari-url" value="120" min="40" max="220">
@@ -1995,6 +2034,22 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   window.ampUnit = 'seconds';
   window.ampRemixOf = null;
 
+  // Vocal character -> descriptor phrase appended to the prompt. Shown in a
+  // preview so nothing is silently added behind the user's back.
+  window.ampVoicePhrase = function(){
+    const v = ['ampVoiceType','ampVoiceReg','ampVoiceTex','ampVoiceDel']
+      .map(id => (($(id)||{}).value || '').trim()).filter(Boolean);
+    if (!v.length) return '';
+    // instrumental overrides the rest — asking for "instrumental, alto" is incoherent
+    if (v[0] === 'instrumental, no vocals') return 'instrumental, no vocals';
+    return v.join(', ');
+  };
+  window.ampVoiceRefresh = function(){
+    const el = $('ampVoicePreview'); if (!el) return;
+    const ph = ampVoicePhrase();
+    el.textContent = ph ? ('added to your description: “' + ph + '”') : '';
+  };
+
   window.ampBarsEstimate = function(){
     const bars = parseFloat(($('ampBars')||{}).value);
     const bpmRaw = (($('ampBpm')||{}).value || '').trim();
@@ -2071,6 +2126,9 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
     if (bs) bs.addEventListener('click', () => ampSetUnit('seconds'));
     if (bb) bb.addEventListener('click', () => ampSetUnit('bars'));
     ['ampBars','ampBpm'].forEach(id => { const e=$(id); if (e) e.addEventListener('input', ampBarsEstimate); });
+    ['ampVoiceType','ampVoiceReg','ampVoiceTex','ampVoiceDel'].forEach(id => {
+      const e=$(id); if (e) e.addEventListener('change', ampVoiceRefresh); });
+    ampVoiceRefresh();
     const c = $('ampCount'); if (c) c.addEventListener('input', ampUpdateCountNote);
     ampBarsEstimate();
   });
@@ -2092,6 +2150,7 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
           +   '<select class="amp-loud" title="Loudness"><option value="peak">-1 dBTP peak</option><option value="lufs">-14 LUFS</option></select>'
           +   '<select class="amp-fade" title="Fade-out"><option value="0">No fade</option><option value="2">Fade 2s</option><option value="4">Fade 4s</option><option value="8">Fade 8s</option></select>'
           +   '<a class="amp-dl2" data-id="'+esc(s.job_id)+'" href="/amphion/export/'+encodeURIComponent(s.job_id)+'/flac">⬇ Download</a>'
+          +   (s.seed!=null ? '<button class="amp-seed" data-seed="'+esc(String(s.seed))+'" title="Generate again with this exact voice/seed">🎤 Use this voice</button>' : '')
           +   '<button class="amp-remix" data-id="'+esc(s.job_id)+'" title="Remix this track">↻ Remix</button>'
           +   '<button class="amp-del" data-id="'+esc(s.job_id)+'">Delete</button>'
           + '</div></div>';
@@ -2108,6 +2167,14 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
       };
       box.querySelectorAll('.amp-fmt, .amp-loud, .amp-fade').forEach(sel =>
         sel.addEventListener('change', e => syncDl(e.target.closest('.amp-item-a'))));
+      box.querySelectorAll('.amp-seed').forEach(b => b.addEventListener('click', () => {
+        // The voice is a function of the seed. Locking a seed you liked is the
+        // only reliable way to keep a good singer with this engine.
+        $('ampSeed').value = b.dataset.seed;
+        $('ampSettings').style.display = 'block';
+        $('ampSeed').scrollIntoView({behavior:'smooth', block:'center'});
+        $('ampSeed').focus();
+      }));
       box.querySelectorAll('.amp-remix').forEach(b => b.addEventListener('click', () => {
         const item = b.closest('.amp-item');
         const song = (d.songs || []).find(x => x.job_id === b.dataset.id) || {};
@@ -2144,8 +2211,10 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   $('ampGenerate').addEventListener('click', async () => {
     const tags = $('ampTags').value.trim();
     if (!tags){ $('ampTags').focus(); return; }
+    const voice = ampVoicePhrase();
     const body = {
-      tags, lyrics: $('ampLyrics').value.trim(),
+      tags: voice ? (tags + ', ' + voice) : tags,
+      lyrics: $('ampLyrics').value.trim(),
       seconds: parseFloat($('ampSecs').value)||60,
       bpm: parseInt($('ampBpm').value)||120,
       keyscale: ($('ampKey').value.trim()||'C major'),
