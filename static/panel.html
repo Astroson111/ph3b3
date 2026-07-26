@@ -1927,6 +1927,15 @@
     <div class="ari-note">Edits photos <b>entirely on this machine</b> — nothing is uploaded and nothing leaves the box.
     Apelles <b>edits</b> pictures; it never generates one from nothing (that's Morpheus).
     <b>Your originals are never modified</b> — every operation writes a new file.</div>
+    <div class="ari-hint" style="margin-top:8px">
+      <b>Asking in chat:</b> word order doesn't matter for the capability question &mdash;
+      <i>"what can you do to photos?"</i> and <i>"what photo editing can you do?"</i> both work,
+      and both are answered from what is actually installed rather than guessed.
+      To make an actual edit, <b>name the operation</b>: <i>"crop this to square"</i>,
+      <i>"convert it to jpeg"</i>, <i>"resize this for tiktok"</i>,
+      <i>"strip the metadata and export as png"</i>.
+      Naming an operation sends it to the editor; asking what is possible gets you the list.
+    </div>
   </div>
 
   <div class="card">
@@ -1951,6 +1960,19 @@
   <div class="card">
     <div class="card-title">2 &middot; Operate</div>
     <label>Aspect preset <select id="apPreset"><option value="">&mdash; none &mdash;</option></select></label>
+    <div id="apCutRow" style="margin-top:10px;padding:8px;border:1px solid #4a6b8a;border-radius:8px">
+      <label><input type="checkbox" id="apCut"> <b>Remove background</b> (u2net matting, runs on this machine)</label>
+      <label style="margin-left:12px">Behind it
+        <select id="apBg">
+          <option value="white">white</option>
+          <option value="transparent">transparent</option>
+          <option value="black">black</option>
+          <option value="grey">grey</option>
+        </select>
+      </label>
+      <div class="ari-hint" style="margin-top:4px">Edges are eroded and feathered by default &mdash; that's the halo fix,
+      so you don't get a fringe of the old wall around the subject. Transparent needs PNG or WebP; JPEG can't hold it.</div>
+    </div>
     <div style="margin-top:10px">
       <label>Exposure <span id="apExpV">0</span> stops<br><input type="range" id="apExp" min="-3" max="3" step="0.1" value="0"></label><br>
       <label>Contrast <span id="apConV">1.00</span><br><input type="range" id="apCon" min="0" max="2.5" step="0.05" value="1"></label><br>
@@ -2146,6 +2168,10 @@ let apInit;
 
   function steps(){
     const out = [];
+    if ($('apCut') && $('apCut').checked) {
+      const bg = $('apBg').value;
+      out.push(bg === 'transparent' ? {op:'remove_background'} : {op:'composite', background:bg});
+    }
     if ($('apPreset').value) out.push({op:'resize', preset:$('apPreset').value});
     if (+$('apRot').value !== 0) out.push({op:'rotate', degrees:+$('apRot').value});
     if (+$('apExp').value !== 0) out.push({op:'exposure', stops:+$('apExp').value});

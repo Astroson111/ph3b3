@@ -775,6 +775,11 @@ def capabilities(refresh: bool = False) -> dict:
     except Exception:
         have_rembg = False
     bg_node = _any_node(r"birefnet|rembg|removebg|imagesegment")
+    # The u2net matting model was already on this box. We run it directly through
+    # onnxruntime rather than installing the rembg wrapper, which would have meant
+    # a download — the capability was present all along, just not detected.
+    have_matte = u2net_available()
+    bg_ok = have_rembg or bg_node or have_matte
 
     def cap(cid, label, tier, ok, reason=None, fix=None):
         return {"id": cid, "label": label, "tier": tier, "available": bool(ok),
@@ -790,17 +795,14 @@ def capabilities(refresh: bool = False) -> dict:
 
     comfy_down = "ComfyUI isn't reachable" if not comfy_up else None
     items = tier1 + [
-        cap("background_removal", "Background removal", 2,
-            have_rembg or bg_node,
-            comfy_down or "BiRefNet/rembg model not installed",
-            "install rembg in the venv, or add a BiRefNet node + model to ComfyUI"),
-        cap("composite", "Composite onto colour / image", 2,
-            have_rembg or bg_node,
-            comfy_down or "needs background removal, which isn't installed",
+        cap("background_removal", "Background removal (u2net, local)", 2, bg_ok,
+            "no matting model found (~/.u2net/u2net.onnx)",
+            "put a u2net.onnx in ~/.u2net/, or add a BiRefNet node to ComfyUI"),
+        cap("composite", "Composite onto colour / image", 2, bg_ok,
+            "needs background removal, which has no model",
             "same as background removal"),
-        cap("edge_refine", "Edge refine (erode / feather)", 2,
-            have_rembg or bg_node,
-            comfy_down or "needs a cutout to refine, and background removal isn't installed",
+        cap("edge_refine", "Edge refine (erode / feather)", 2, bg_ok,
+            "needs a cutout to refine",
             "same as background removal"),
         cap("upscale", "Upscale (Real-ESRGAN)", 3,
             bool(upscale_models) and have("ImageUpscaleWithModel"),
@@ -866,3 +868,149 @@ def require(cid: str) -> None:
         if c.get("fix"):
             msg += f". To enable it: {c['fix']}"
         raise ApellesError(msg)
+
+
+# ── Intent claims ─────────────────────────────────────────────────────────────
+# "What can you do to photos?" was being answered by the model, which cheerfully
+# described the CAMERA — it talked about taking pictures and LLaVA, none of which
+# is photo editing, and none of which it checked. Same class as Metis: a question
+# about what this machine can actually do must be answered from the machine, not
+# improvised. So the capability question is claimed deterministically.
+#
+# The edit claim only takes turns that are clearly about EDITING an existing
+# picture. "Take a photo" and "what do you see" belong to vision and must not be
+# swallowed here.
+import intent_registry as _ir
+
+_PHOTO_CAP_RE = re.compile(
+    r"\b(?:what|which|can|could|are)\b[^.?]{0,60}"
+    r"(?:"
+    r"(?:do\s+(?:to|with)|edit|editing|editor|adjust|able\s+to\s+edit)"
+    r"[^.?]{0,25}\b(?:photos?|pictures?|images?)\b"
+    r"|\b(?:photos?|pictures?|images?)\b[^.?]{0,25}"
+    r"(?:edit|editing|editor|do\s+(?:to|with)|adjust)"
+    r")"
+    r"|\bwhat\b[^.?]{0,25}\bapelles\b"
+    r"|\bphoto[- ]?editing\b[^.?]{0,25}\b(?:can|able|support|available)\b",
+    re.I,
+)
+
+# Vision owns the camera, and a CONCRETE edit request owns itself. If the turn
+# names an actual operation ("crop this", "convert it to jpeg") it must reach the
+# tools, not be answered with a list of what's possible.
+_NOT_APELLES_RE = re.compile(
+    r"\b(?:take|snap|shoot|capture)\s+(?:a\s+|another\s+)?(?:photo|picture|selfie|shot)\b"
+    r"|\bwhat\s+(?:do|can)\s+you\s+see\b|\bdescribe\s+(?:what|the\s+(?:view|scene))\b"
+    r"|\blook\s+(?:at\s+)?(?:through\s+)?(?:the\s+)?camera\b"
+    r"|\b(?:crop|resize|rotate|straighten|convert|export|brighten|darken|sharpen|"
+    r"denoise|strip|batch)\b",
+    re.I,
+)
+
+_ir.register("apelles", "photo_capabilities", _PHOTO_CAP_RE, exclude=_NOT_APELLES_RE)
+
+
+# ── Tier 2: cutout suite ──────────────────────────────────────────────────────
+# Runs the u2net matting model that is ALREADY on this box (~/.u2net/u2net.onnx)
+# straight through onnxruntime. The `rembg` package is only a thin wrapper around
+# exactly this, and installing it would mean a download; the model is local, so
+# the zero-egress rule is kept rather than argued with. Nothing is fetched.
+U2NET_PATH = Path(os.getenv("APELLES_U2NET", str(Path.home() / ".u2net" / "u2net.onnx")))
+_u2net_session = None
+
+
+def u2net_available() -> bool:
+    try:
+        import onnxruntime  # noqa: F401
+    except Exception:
+        return False
+    return U2NET_PATH.is_file()
+
+
+def _u2net():
+    global _u2net_session
+    if _u2net_session is None:
+        import onnxruntime as ort
+        if not U2NET_PATH.is_file():
+            raise ApellesError("the background-removal model isn't on this machine")
+        # CPU on purpose: the GPU has six tenants and a 168 MB matting pass does not
+        # justify evicting one of them. It costs a couple of seconds.
+        _u2net_session = ort.InferenceSession(str(U2NET_PATH),
+                                              providers=["CPUExecutionProvider"])
+    return _u2net_session
+
+
+def alpha_matte(im: Image.Image) -> Image.Image:
+    """Single-channel foreground matte at the image's own size."""
+    sess = _u2net()
+    rgb = im.convert("RGB")
+    small = rgb.resize((320, 320), Image.LANCZOS)
+    a = np.asarray(small, dtype=np.float32) / 255.0
+    # u2net's normalisation, not ImageNet's — using the wrong one produces a matte
+    # that looks plausible and is subtly wrong at the edges.
+    a = (a - np.array([0.485, 0.456, 0.406], np.float32)) / np.array([0.229, 0.224, 0.225], np.float32)
+    a = np.transpose(a, (2, 0, 1))[None].astype(np.float32)
+    out = sess.run(None, {sess.get_inputs()[0].name: a})[0][0, 0]
+    lo, hi = float(out.min()), float(out.max())
+    out = (out - lo) / (hi - lo) if hi > lo else out * 0
+    m = Image.fromarray((out * 255).astype(np.uint8), "L")
+    return m.resize(rgb.size, Image.LANCZOS)
+
+
+def op_remove_background(im: Image.Image, erode: int = 1, feather: float = 1.5) -> Image.Image:
+    """Cut the subject out. Returns RGBA with a real alpha channel.
+
+    erode/feather are the HALO FIX and are on by default: a cutout that keeps a
+    one-pixel fringe of the original wall is the single most common failure of
+    every tool in this category, and shipping it off-by-default would just mean
+    shipping that failure."""
+    matte = alpha_matte(im)
+    matte = op_edge_refine(matte, erode=erode, feather=feather)
+    out = im.convert("RGBA")
+    out.putalpha(matte)
+    return out
+
+
+def op_edge_refine(mask: Image.Image, erode: int = 1, feather: float = 1.5) -> Image.Image:
+    """Pull the matte in slightly, then soften it. Order matters: feather-then-erode
+    eats the softness you just made."""
+    m = mask.convert("L")
+    e = int(max(0, min(int(erode), 12)))
+    if e:
+        m = m.filter(ImageFilter.MinFilter(size=2 * e + 1))
+    f = float(max(0.0, min(float(feather), 12.0)))
+    if f:
+        m = m.filter(ImageFilter.GaussianBlur(radius=f))
+    return m
+
+
+def _parse_colour(c) -> tuple:
+    if isinstance(c, (list, tuple)) and len(c) in (3, 4):
+        return tuple(int(x) for x in c)
+    s = str(c or "white").strip().lower()
+    named = {"white": (255, 255, 255), "black": (0, 0, 0), "grey": (128, 128, 128),
+             "gray": (128, 128, 128), "transparent": None}
+    if s in named:
+        return named[s]
+    m = re.fullmatch(r"#?([0-9a-f]{6})", s)
+    if m:
+        v = m.group(1)
+        return tuple(int(v[i:i + 2], 16) for i in (0, 2, 4))
+    raise ApellesError(f"I don't recognise the colour '{c}'")
+
+
+def op_composite(im: Image.Image, background="white") -> Image.Image:
+    """Place a cut-out subject on a solid colour (or leave it transparent).
+
+    Accepts an already-RGBA cutout, or does the cutout itself if handed a flat
+    image — so "put me on white" is one step for the user."""
+    src = im if im.mode == "RGBA" else op_remove_background(im)
+    colour = _parse_colour(background)
+    if colour is None:
+        return src
+    bg = Image.new("RGBA", src.size, tuple(colour) + (255,) if len(colour) == 3 else tuple(colour))
+    return Image.alpha_composite(bg, src)
+
+
+_OPS["remove_background"] = op_remove_background
+_OPS["composite"] = op_composite

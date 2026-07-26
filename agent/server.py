@@ -472,6 +472,11 @@ TOOLS = [
     {"type":"function","function":{"name":"match_candidate_to_job","description":"Match the stored candidate profile against a job analysis produced by extract_job_posting. Returns: match score (hard reqs met/total), gap analysis per requirement, application angle suggestion, tailored resume bullets, and a WORTH APPLYING/STRETCH/SKIP verdict. Always verify profile_get has data before calling.","parameters":{"type":"object","properties":{"job_analysis":{"type":"string","description":"The full structured text output from extract_job_posting"}},"required":["job_analysis"]}}},
     {"type":"function","function":{"name":"draft_resume_section","description":"Draft a single polished resume bullet in action-verb, achievement-framed format for a specific job requirement, drawing from a candidate profile entry. No fluff, no filler, no invented metrics.","parameters":{"type":"object","properties":{"requirement":{"type":"string","description":"The specific job requirement to address"},"profile_entry":{"type":"string","description":"The relevant candidate experience, project, or skill to draw from"}},"required":["requirement","profile_entry"]}}},
     {"type":"function","function":{"name":"analyze_resume","description":"Analyze a pasted plain-text resume for ATS-readiness: parse-cleanliness score, formatting red flags, section completeness, and (if a job description is provided) the keyword gap split into GROUNDED (skill the resume shows under other words) vs UNSUPPORTED (no evidence — must be earned, never auto-added). Use when the user pastes their resume text and asks for a review/ATS check.","parameters":{"type":"object","properties":{"resume_text":{"type":"string","description":"The full plain-text resume the user pasted"},"job_description":{"type":"string","description":"Optional job description text to compute the keyword gap against"}},"required":["resume_text"]}}},
+    {"type": "function", "function": {"name": "photo_capabilities", "description": "Report what photo editing Apelles can actually do on this machine RIGHT NOW, including which operations are unavailable and exactly why (a missing model file is different from a broken feature). Use when the user asks what you can do to photos, or when they ask for a photo operation you're unsure is installed.", "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "edit_photo", "description": "Adjust the photo currently open in the Apelles tab and produce a PREVIEW. Use for crop/resize to a named aspect preset and for exposure, contrast, saturation, temperature, rotation, sharpen and denoise. Does NOT save a file — follow with export_photo. The user's original is never modified. Presets: tiktok, square, portrait_4_5, widescreen, linkedin_headshot, youtube_thumb.", "parameters": {"type": "object", "properties": {"remove_background": {"type": "boolean", "description": "Cut the subject out of the background (u2net matting, runs locally)"}, "background": {"type": "string", "description": "What to put behind the cut-out subject: white, black, grey, transparent, or a #rrggbb hex colour"}, "preset": {"type": "string", "description": "Aspect preset: tiktok, square, portrait_4_5, widescreen, linkedin_headshot, youtube_thumb"}, "exposure": {"type": "number", "description": "Exposure in stops; +1 doubles the light, -1 halves it"}, "contrast": {"type": "number", "description": "Contrast multiplier; 1.0 is unchanged"}, "saturation": {"type": "number", "description": "Colour intensity; 1.0 unchanged, 0 is greyscale"}, "temperature": {"type": "number", "description": "Warm/cool, -100 (cool) to +100 (warm)"}, "rotate": {"type": "number", "description": "Rotation in degrees; small values straighten"}, "sharpen": {"type": "number", "description": "Sharpen strength 0-4"}, "denoise": {"type": "number", "description": "Noise reduction 0-3"}}, "required": []}}},
+    {"type": "function", "function": {"name": "convert_photo", "description": "Convert the open photo to a different FILE FORMAT with no other changes — e.g. PNG to JPEG, JPEG to WebP. Use when the user just wants a different format or a smaller file. Metadata is stripped on the way out. Writes a new file; the original is untouched.", "parameters": {"type": "object", "properties": {"format": {"type": "string", "enum": ["PNG", "JPEG", "WEBP"], "description": "Target format"}, "quality": {"type": "number", "description": "1-100 for JPEG/WebP; default 92"}}, "required": ["format"]}}},
+    {"type": "function", "function": {"name": "export_photo", "description": "Save the open photo to a new file, optionally applying adjustments in the same step. Metadata (GPS, camera make/model, serial, timestamps) is STRIPPED BY DEFAULT — only set keep_metadata true if the user explicitly asks to keep it, and tell them what's being kept. Presets: tiktok, square, portrait_4_5, widescreen, linkedin_headshot, youtube_thumb.", "parameters": {"type": "object", "properties": {"remove_background": {"type": "boolean", "description": "Cut the subject out of the background (u2net matting, runs locally)"}, "background": {"type": "string", "description": "What to put behind the cut-out subject: white, black, grey, transparent, or a #rrggbb hex colour"}, "format": {"type": "string", "enum": ["PNG", "JPEG", "WEBP"], "description": "Output format; default PNG"}, "quality": {"type": "number", "description": "1-100 for JPEG/WebP; default 92"}, "keep_metadata": {"type": "boolean", "description": "Keep EXIF/GPS instead of stripping it. Default false. Only when explicitly asked."}, "preset": {"type": "string", "description": "Optional aspect preset: tiktok, square, portrait_4_5, widescreen, linkedin_headshot, youtube_thumb"}, "exposure": {"type": "number", "description": "Exposure in stops; +1 doubles the light, -1 halves it"}, "contrast": {"type": "number", "description": "Contrast multiplier; 1.0 is unchanged"}, "saturation": {"type": "number", "description": "Colour intensity; 1.0 unchanged, 0 is greyscale"}, "temperature": {"type": "number", "description": "Warm/cool, -100 (cool) to +100 (warm)"}, "rotate": {"type": "number", "description": "Rotation in degrees; small values straighten"}, "sharpen": {"type": "number", "description": "Sharpen strength 0-4"}, "denoise": {"type": "number", "description": "Noise reduction 0-3"}}, "required": []}}},
+    {"type": "function", "function": {"name": "run_photo_batch", "description": "Apply a saved pipeline to every image in a folder. ALWAYS call once WITHOUT confirm first to show the user the dry run (how many files, where output goes), then only call again with confirm true if they agree. Originals are never modified and output never lands in the source folder.", "parameters": {"type": "object", "properties": {"folder": {"type": "string", "description": "Folder path; must be inside an allowed root (Pictures, Desktop, or the Apelles uploads dir)"}, "pipeline": {"type": "string", "description": "Saved pipeline name, e.g. etsy, tiktok, linkedin, youtube"}, "format": {"type": "string", "enum": ["PNG", "JPEG", "WEBP"], "description": "Output format; default PNG"}, "confirm": {"type": "boolean", "description": "False/omitted = dry run only. True = actually write files."}}, "required": ["folder", "pipeline"]}}},
     {"type":"function","function":{"name":"generate_song","description":"MUSIC AND SONGS. Use for any request to make, write, compose or generate a song, track, tune, melody, jingle, ballad, anthem or instrumental — anything the user will LISTEN to. This is audio, not video. Generates locally with Amphion (ACE-Step). Describe the music in 'description' (genre, instruments, mood, and the SINGER as a description like 'male baritone, gravelly' — never a real artist's name). Optional 'lyrics' for a vocal track; omit for an instrumental. Generation takes about a minute and runs in the background — tell the user it has started and that you'll let them know.","parameters":{"type":"object","properties":{"description":{"type":"string","description":"The music: genre, instruments, mood, tempo feel, and the singer described (e.g. 'outlaw country, acoustic guitar, male baritone, gravelly, crooned')"},"lyrics":{"type":"string","description":"Optional lyrics. Leave empty for an instrumental."},"seconds":{"type":"number","description":"Length in seconds (5-240). Default 60."},"singer":{"type":"string","description":"Optional name of a SAVED singer profile to use (see list_singers). Not a real artist's name."}},"required":["description"]}}},
     {"type":"function","function":{"name":"list_songs","description":"List the songs Amphion has generated, newest first, with their descriptions and seeds. Use when the user asks what songs exist, what was made, or wants to hear one.","parameters":{"type":"object","properties":{"count":{"type":"integer","description":"How many to list (default 5)"}},"required":[]}}},
     {"type":"function","function":{"name":"list_singers","description":"List the saved and built-in Amphion singer profiles (voice descriptions, and a seed when one is pinned). Use when the user asks which singers/voices are available.","parameters":{"type":"object","properties":{},"required":[]}}},
@@ -711,6 +716,16 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "profile_add_note": result = resume.profile_add_note(args["note"])
         elif name == "match_candidate_to_job": result = resume.match_candidate_to_job(args["job_analysis"])
         elif name == "draft_resume_section": result = resume.draft_resume_section(args["requirement"], args["profile_entry"])
+        elif name == "photo_capabilities":
+            result = await asyncio.to_thread(_tool_photo_capabilities)
+        elif name == "edit_photo":
+            result = await asyncio.to_thread(_tool_edit_photo, args, session_id)
+        elif name == "convert_photo":
+            result = await asyncio.to_thread(_tool_convert_photo, args, session_id)
+        elif name == "export_photo":
+            result = await asyncio.to_thread(_tool_export_photo, args, session_id)
+        elif name == "run_photo_batch":
+            result = await asyncio.to_thread(_tool_run_photo_batch, args)
         elif name == "generate_song":
             result = await _tool_generate_song(args, device)
         elif name == "list_songs":
@@ -1303,6 +1318,11 @@ async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
         return _answer_fleet(user_msg)                   # Argus latest, freshness always attached
     if claim.module == "document":
         return await _answer_pdf(user_msg, session_id)   # None → no doc staged → fall through
+    if claim.module == "apelles":
+        # Deterministic, like the music claims: what this box can do to a photo is a
+        # FACT read from installed models, not something to improvise. The model
+        # previously answered this by describing the camera.
+        return await asyncio.to_thread(_tool_photo_capabilities)
     if claim.module == "music":
         # Deterministic: a music request never reaches the tool picker, so it can
         # never come back as generate_video, and a question about our singers is
@@ -1785,6 +1805,17 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # toward the very thing the voice-clone floor refuses. If a claim exists, the
     # module has the answer; asking the model to second-guess it adds a round trip
     # and a chance to derail.
+    # Ruling B on the chat path. A face-swap request must get the honest refusal
+    # from apelles.identity_refusal(), not a generic failure and not a model
+    # improvisation — the whole point is that this line is stated, not stumbled
+    # into. Runs before routing so no tool can be reached by rephrasing.
+    _swap_refusal = apelles.identity_refusal(user_msg)
+    if _swap_refusal:
+        log.info("[apelles] identity refusal fired")
+        session.add("user", user_msg)
+        session.add("assistant", _swap_refusal)
+        return _swap_refusal
+
     _early_claim = intent_registry.resolve(user_msg)
     _triage = (_TriagePass() if _early_claim
                else await triage_gate(user_msg, _triage_context(session.messages())))
@@ -4468,6 +4499,7 @@ _APELLES_ROOTS = [Path.home() / "Pictures", Path.home() / "Desktop",
 
 _apelles_pending: dict = {}     # session_id -> attach awaiting an explicit yes
 _apelles_files: dict = {}       # file_id -> {"path": Path, "kind": str}
+_apelles_current: dict = {}     # session_id -> the confirmed photo chat acts on
 
 
 def _apelles_register(path: Path, kind: str) -> str:
@@ -4575,6 +4607,11 @@ async def apelles_confirm(body: dict):
         return {"confirmed": False, "discarded": True}
     _apelles_files[pend["image_id"]]["confirmed"] = True
     _apelles_pending.pop(sid, None)
+    # The confirmed photo becomes the session's CURRENT photo, so chat can act on
+    # "it" without the user repeating which picture they mean. Set only after the
+    # gate passes — an unconfirmed image is never something Phoebe can touch.
+    _apelles_current[sid] = pend["image_id"]
+    _apelles_current["_last"] = pend["image_id"]
     return {"confirmed": True, "image_id": pend["image_id"]}
 
 
@@ -4701,6 +4738,198 @@ async def apelles_batch_cancel(batch_id: str):
 async def apelles_pipelines():
     return {"pipelines": apelles.list_pipelines(),
             "builtin": sorted(apelles.BUILTIN_PIPELINES)}
+
+
+
+# ── Apelles chat tools ────────────────────────────────────────────────────────
+# So Phoebe can actually say what she did to a photo rather than reporting a
+# generic success. Each of these returns the concrete change — dimensions before
+# and after, what was adjusted, what metadata was removed — because "done!" is
+# not an answer when the whole point of the module is that you can trust it.
+_AP_ADJUST = {
+    "exposure": ("stops", "exposure"), "contrast": ("amount", "contrast"),
+    "saturation": ("amount", "saturation"), "temperature": ("kelvin_shift", "temperature"),
+    "rotate": ("degrees", "rotation"), "sharpen": ("amount", "sharpen"),
+    "denoise": ("amount", "denoise"),
+}
+
+
+def _ap_photo(session_id: str = "default"):
+    """The photo chat is talking about, or a plain explanation of why there isn't one."""
+    fid = _apelles_current.get(session_id or "default") or _apelles_current.get("_last")
+    ent = _apelles_files.get(fid or "")
+    if not ent or not Path(ent["path"]).exists():
+        return None, ("There's no photo open. Load one in the Apelles tab and confirm it "
+                      "first — I don't touch a picture until it's been confirmed.")
+    return ent, None
+
+
+def _ap_steps_from_args(args: dict) -> tuple[list, list]:
+    steps, said = [], []
+    preset = str(args.get("preset") or "").strip().lower()
+    if preset:
+        if preset not in apelles.ASPECT_PRESETS:
+            raise apelles.ApellesError(
+                f"'{preset}' isn't a preset I have — try: {', '.join(sorted(apelles.ASPECT_PRESETS))}")
+        w, h = apelles.ASPECT_PRESETS[preset]
+        steps.append({"op": "resize", "preset": preset})
+        said.append(f"resized to the {preset} preset ({w}x{h})")
+    bg = args.get("background")
+    if bg or args.get("remove_background"):
+        if bg and str(bg).lower() not in ("transparent", "none", ""):
+            steps.append({"op": "composite", "background": str(bg)})
+            said.append(f"cut the subject out and put it on {str(bg).lower()}")
+        else:
+            steps.append({"op": "remove_background"})
+            said.append("removed the background (transparent)")
+    for key, (argname, label) in _AP_ADJUST.items():
+        if args.get(key) is None:
+            continue
+        val = float(args[key])
+        steps.append({"op": key, argname: val})
+        said.append(f"{label} {val:+g}" if key in ("exposure", "temperature", "rotate")
+                    else f"{label} to {val:g}")
+    return steps, said
+
+
+def _tool_photo_capabilities() -> str:
+    c = apelles.capabilities(refresh=True)
+    ok = [i["label"] for i in c["items"] if i["available"]]
+    no = [f"{i['label']} (unavailable: {i['reason']})" for i in c["items"] if not i["available"]]
+    out = [f"Right now I can do {len(ok)} of {len(c['items'])} photo operations on this box.",
+           "Available: " + ", ".join(ok) + "."]
+    if no:
+        out.append("Not available: " + "; ".join(no) + ". Those need model files that aren't "
+                   "installed here — it's a missing file, not a broken feature.")
+    out.append("Face swap or face replacement I won't do at all — that one is permanent, "
+               "not a missing model.")
+    return " ".join(out)
+
+
+def _tool_edit_photo(args: dict, session_id: str = "default") -> str:
+    ent, err = _ap_photo(session_id)
+    if err:
+        return err
+    src = ent["path"]
+    try:
+        steps, said = _ap_steps_from_args(args)
+    except apelles.ApellesError as e:
+        return str(e)
+    if not steps:
+        return "Tell me what to change — a preset, or exposure, contrast, saturation, temperature, rotation, sharpen or denoise."
+    sha_before = hashlib.sha256(src.read_bytes()).hexdigest()
+    try:
+        im = apelles._open_source(src)
+        before = f"{im.width}x{im.height}"
+        out = apelles.apply_pipeline(im, steps)
+        prev_dir = apelles.APELLES_DATA / "previews"
+        prev_dir.mkdir(parents=True, exist_ok=True)
+        pth = prev_dir / f"{uuid.uuid4().hex[:12]}.png"
+        out.save(pth, format="PNG")
+    except apelles.ApellesError as e:
+        return f"That edit didn't work: {e}"
+    if hashlib.sha256(src.read_bytes()).hexdigest() != sha_before:
+        return "Something changed the original — I stopped rather than continue."
+    _apelles_register(pth, "preview")
+    size = (f" It went from {before} to {out.width}x{out.height}."
+            if before != f"{out.width}x{out.height}" else f" Still {out.width}x{out.height}.")
+    return (f"Done — I {', '.join(said)}.{size} That's a preview; your original file is "
+            f"untouched. Say export when you want it saved.")
+
+
+def _tool_convert_photo(args: dict, session_id: str = "default") -> str:
+    """Straight format conversion — no adjustments. 'Turn this PNG into a JPEG'."""
+    ent, err = _ap_photo(session_id)
+    if err:
+        return err
+    fmt = str(args.get("format") or "JPEG").upper().lstrip(".")
+    if fmt == "JPG":
+        fmt = "JPEG"
+    if fmt not in apelles.ALLOWED_OUT:
+        return f"I can convert to PNG, JPEG or WebP — not {fmt}."
+    src = ent["path"]
+    try:
+        was = apelles.probe(src)
+        res = apelles.edit_file(src, [], fmt=fmt, quality=int(args.get("quality") or 92),
+                                strip_metadata=True)
+    except apelles.ApellesError as e:
+        return f"That conversion didn't work: {e}"
+    fid = _apelles_register(Path(res["path"]), "export")
+    removed = res.get("metadata_removed") or []
+    meta = (f" I stripped the metadata on the way out — {', '.join(removed)}."
+            if removed else " There was no metadata to strip.")
+    kb = res["bytes"] / 1024
+    return (f"Converted from {was['format']} to {fmt} at {res['width']}x{res['height']}, "
+            f"{kb:.0f} KB.{meta} Your original {was['format']} is untouched — this is a new "
+            f"file. Download it from /apelles/file/{fid}.")
+
+
+def _tool_export_photo(args: dict, session_id: str = "default") -> str:
+    ent, err = _ap_photo(session_id)
+    if err:
+        return err
+    src = ent["path"]
+    keep = bool(args.get("keep_metadata"))
+    fmt = str(args.get("format") or "PNG").upper()
+    transparent = (args.get("remove_background") and
+                   str(args.get("background") or "transparent").lower()
+                   in ("transparent", "none", ""))
+    if transparent and fmt in ("JPEG", "JPG"):
+        # Saying yes here would silently fill the transparency with black. Refuse
+        # and explain rather than hand back a picture they didn't ask for.
+        return ("JPEG can't hold transparency — a cut-out saved as JPEG comes back with "
+                "a black background. Want PNG or WebP instead, or a solid colour behind it?")
+    try:
+        steps, said = _ap_steps_from_args(args)
+        res = apelles.edit_file(src, steps, fmt=fmt,
+                                quality=int(args.get("quality") or 92),
+                                strip_metadata=not keep)
+    except apelles.ApellesError as e:
+        return f"That export didn't work: {e}"
+    fid = _apelles_register(Path(res["path"]), "export")
+    if keep:
+        kept = apelles.describe_metadata(src)
+        meta = (f" I KEPT the metadata because you asked — that includes {', '.join(kept)}, "
+                f"which anyone you send it to can read." if kept
+                else " You asked me to keep the metadata, but there wasn't any.")
+    else:
+        rm = res.get("metadata_removed") or []
+        meta = (f" Metadata stripped: {', '.join(rm)}." if rm
+                else " Metadata stripped (there wasn't any to begin with).")
+    did = f"I {', '.join(said)}, then exported" if said else "Exported"
+    return (f"{did} as {res['format']} at {res['width']}x{res['height']}, "
+            f"{res['bytes'] / 1024:.0f} KB.{meta} The original is untouched. "
+            f"Download from /apelles/file/{fid}.")
+
+
+def _tool_run_photo_batch(args: dict) -> str:
+    folder_raw = str(args.get("folder") or "")
+    pipeline = str(args.get("pipeline") or "")
+    pipes = apelles.list_pipelines()
+    if pipeline not in pipes:
+        return f"I don't have a '{pipeline}' pipeline. I have: {', '.join(sorted(pipes))}."
+    try:
+        folder = _apelles_folder(folder_raw)
+    except HTTPException as e:
+        return str(e.detail)
+    try:
+        plan = apelles.batch_plan(folder, pipes[pipeline],
+                                  fmt=str(args.get("format") or "PNG"))
+    except apelles.ApellesError as e:
+        return f"I can't plan that batch: {e}"
+    if not args.get("confirm"):
+        bad = [i for i in plan["items"] if i["status"] != "ready"]
+        note = (f" {len(bad)} can't be read and I'd report them rather than skip them."
+                if bad else "")
+        return (f"Dry run only — nothing written yet. {plan['ready']} of {plan['total']} files "
+                f"are ready, going to {plan['out_dir']}.{note} Every original stays untouched. "
+                f"Say run it and confirm to go ahead.")
+    bid = apelles.batch_start(folder, pipes[pipeline], fmt=str(args.get("format") or "PNG"))
+    st = apelles.batch_execute(bid)
+    fails = [r for r in st["results"] if not r["ok"]]
+    tail = (" Failed: " + "; ".join(f"{r['source']} ({r['reason']})" for r in fails)) if fails else ""
+    return (f"Batch done — {st['ok']} of {st['total']} processed into {st['out_dir']}.{tail} "
+            f"Every original is byte-identical to before.")
 
 
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
