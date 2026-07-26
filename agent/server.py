@@ -3955,6 +3955,25 @@ def _prune_image_subdirs() -> None:
 
 
 # ── Amphion — song generation (ACE-Step 1.5), Morpheus's sibling ───────────────
+async def _amphion_music_floor(tags: str, lyrics: str) -> None:
+    """The two MUSIC-specific floor items — copyrighted lyrics and named-artist
+    voice cloning. Separate from _amphion_floor_gate because the copyright check
+    calls the local model and must not block the event loop.
+
+    These refuse BY NAME with a reason, unlike the generic content-policy 403:
+    "not permitted" tells a songwriter nothing about what to change, and both
+    briefs specify declining by name.
+    """
+    why = amphion.voice_clone_refusal(tags, lyrics)          # pattern-only, instant
+    if why:
+        log.warning("[safety] amphion voice-clone refusal")   # never the text itself
+        raise HTTPException(403, detail=why)
+    if (lyrics or "").strip():
+        why = await asyncio.to_thread(amphion.copyright_refusal, lyrics)
+        if why:
+            raise HTTPException(403, detail=why)              # module logs it, without the lyrics
+
+
 def _amphion_floor_gate(tags: str, lyrics: str, request: Request) -> None:
     """Content floor for Amphion — the SAME Morpheus floor, run on the prompt AND the
     lyrics (never a parallel floor). Floor → localhost interlock → profile. Raises 403
@@ -3986,7 +4005,8 @@ async def amphion_generate(request: Request, body: dict):
     if not tags:
         raise HTTPException(400, "a song description is required")
     lyrics = (body.get("lyrics") or "").strip()
-    _amphion_floor_gate(tags, lyrics, request)   # floor on prompt AND lyrics, before anything queues
+    _amphion_floor_gate(tags, lyrics, request)
+    await _amphion_music_floor(tags, lyrics)   # music-specific floor: voice-clone + copyright
     # Duration: seconds is the default unit; bars converts to an ESTIMATE.
     # An unusable bars request is REFUSED with its reason rather than quietly
     # falling back to 60s — silently generating a different length than asked for
@@ -4077,6 +4097,7 @@ async def amphion_variations(request: Request, body: dict):
     lyrics = (body.get("lyrics") or "").strip()
     # Same floor as a single generation, on prompt AND lyrics, before anything queues.
     _amphion_floor_gate(tags, lyrics, request)
+    await _amphion_music_floor(tags, lyrics)
 
     try:
         n = int(body.get("count", 4))
@@ -4155,6 +4176,7 @@ async def amphion_remix(job_id: str, request: Request, body: dict):
 
     # A remix with altered text is new content: floor it like any generation.
     _amphion_floor_gate(params["tags"], params.get("lyrics", ""), request)
+    await _amphion_music_floor(params["tags"], params.get("lyrics", ""))
 
     if params.get("seed") is None:
         params["seed"] = int.from_bytes(os.urandom(4), "big")
