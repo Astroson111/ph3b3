@@ -31,6 +31,24 @@ they paste, a Piper voice downloaded once at setup). Every row below inherits th
 Recorded here rather than left in a commit message, because a guardrail with a
 known soft spot is a different claim from one without.
 
+- **Ariadne — the JD-URL fetch was an SSRF hole.** ✅ **CLOSED 2026-07-25.**
+  `fetch_jd` takes a URL from the user and fetches it **server-side** with
+  `allow_redirects=True` and no address validation — a confused deputy running
+  inside the LAN, reaching ollama `:11434`, ph3b3 `:7331`, SearXNG `:8888`,
+  ComfyUI `:8188`, LAN peers, the tailnet and `169.254` metadata. Because the
+  fetched page is extracted and shown back to the user it is a **read** channel,
+  not a blind one. Now guarded by Metis's `_host_ok`/`_ip_forbidden` — imported,
+  not reimplemented, because that module owns the network surface and a second
+  copy of a security check is a second copy to get wrong. Redirects are followed
+  **manually, every hop re-validated**: Metis refuses redirects outright, but
+  career pages redirect constantly, and `allow_redirects=True` inspects only the
+  first host, which is exactly how a public URL that 302s to `127.0.0.1` defeats
+  a naive guard. Verified against 14 attacks — loopback by IP/name/IPv6/decimal,
+  LAN, LAN peer, tailnet, metadata, `file://`, `gopher://`, and four live 302s
+  into loopback services including a relative `Location` — **0 leaked**, while a
+  real career host still resolves. If `metis` is unavailable the fetch is
+  **disabled** rather than running unguarded. **Residual:** DNS rebinding between
+  the check and the request remains possible — the same limitation Metis carries.
 - **Ariadne — "grounded" is a model judgement, and it can be loose.** ✅ **ADDRESSED
   2026-07-25** — every surviving grounding claim now faces a second, deliberately
   skeptical pass (`_verify_grounding`) that sees only that one line and that one
