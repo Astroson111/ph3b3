@@ -4071,6 +4071,29 @@ async def amphion_generate(request: Request, body: dict):
             "duration_note": duration_note}
 
 
+@app.get("/amphion/voices")
+async def amphion_voices():
+    """Built-in and saved voice profiles. Descriptors + seed only — no audio is
+    stored anywhere in this feature."""
+    return {"voices": amphion.list_voices()}
+
+
+@app.post("/amphion/voices")
+async def amphion_voice_save(body: dict):
+    prof, why = await asyncio.to_thread(amphion.save_voice, body or {})
+    if prof is None:
+        raise HTTPException(400, why)
+    return {"saved": prof}
+
+
+@app.delete("/amphion/voices/{name}")
+async def amphion_voice_delete(name: str):
+    ok = await asyncio.to_thread(amphion.delete_voice, name)
+    if not ok:
+        raise HTTPException(404, "no such voice (built-ins can't be deleted)")
+    return {"deleted": name}
+
+
 @app.get("/amphion/estimate")
 async def amphion_estimate(count: int = 1):
     """How long N variations would take, BEFORE committing to them.

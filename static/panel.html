@@ -1838,6 +1838,12 @@
              and the seed. These are DESCRIPTORS, never names — the same "name the
              sound, not the person" line the floor draws, turned into controls. -->
         <div class="amp-row">
+          <label data-i18n="amphion.voice.preset">Singer</label>
+          <select id="ampVoicePreset" class="ari-url" style="min-width:12rem"></select>
+          <button type="button" class="amp-preset" id="ampVoiceSave" title="Keep the current singer">💾 Save this singer</button>
+          <button type="button" class="amp-preset" id="ampVoiceDel" title="Delete the selected saved singer">🗑</button>
+        </div>
+        <div class="amp-row">
           <label data-i18n="amphion.voice">Voice</label>
           <select id="ampVoiceType" class="ari-url">
             <option value="">any singer</option>
@@ -2040,6 +2046,56 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
 
   // Vocal character -> descriptor phrase appended to the prompt. Shown in a
   // preview so nothing is silently added behind the user's back.
+  // ── Voice profiles: pick a singer, or keep one you liked ──────────────────
+  // A "singer" here is descriptors + a seed, because that is literally what
+  // determines the voice — there is no sample to load. Selecting one fills the
+  // controls; saving one captures what is currently set.
+  window.ampVoices = [];
+
+  window.ampVoicesLoad = async function(sel){
+    try {
+      const d = await fetch('/amphion/voices').then(r => r.json());
+      window.ampVoices = d.voices || [];
+    } catch(e){ window.ampVoices = []; }
+    const el = $('ampVoicePreset'); if (!el) return;
+    const cur = sel || el.value;
+    el.innerHTML = '<option value="">— custom —</option>' + window.ampVoices.map(v =>
+      '<option value="'+esc(v.name)+'">'+esc(v.name)
+      + (v.seed!=null ? ' ★' : '') + (v.builtin ? '' : ' ·saved') + '</option>').join('');
+    if (cur) el.value = cur;
+  };
+
+  window.ampVoiceApply = function(){
+    const name = ($('ampVoicePreset')||{}).value;
+    if (!name) return;
+    const v = window.ampVoices.find(x => x.name === name); if (!v) return;
+    $('ampVoiceType').value = v.type || '';
+    $('ampVoiceReg').value  = v.register || '';
+    $('ampVoiceTex').value  = v.tone || '';
+    $('ampVoiceDel').value  = v.delivery || '';
+    // A saved seed is the half that actually pins the timbre; a built-in has none.
+    if (v.seed != null) $('ampSeed').value = v.seed;
+    ampVoiceRefresh();
+  };
+
+  window.ampVoiceSaveCurrent = async function(){
+    const name = (prompt('Name this singer (a label for you — it is never sent to the model):') || '').trim();
+    if (!name) return;
+    const seedRaw = ($('ampSeed').value || '').trim();
+    const body = {name,
+      type: $('ampVoiceType').value, register: $('ampVoiceReg').value,
+      tone: $('ampVoiceTex').value,  delivery: $('ampVoiceDel').value,
+      seed: seedRaw === '' ? null : parseInt(seedRaw, 10)};
+    const r = await fetch('/amphion/voices', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (!r.ok){ $('ampVoicePreview').textContent = 'could not save: ' + (d.detail||''); return; }
+    await ampVoicesLoad(name);
+    $('ampVoicePreview').textContent = seedRaw
+      ? ('saved “'+name+'” with its seed — picking it brings this exact singer back')
+      : ('saved “'+name+'” (no seed — the description only; roll a seed and re-save to pin the timbre)');
+  };
+
   window.ampVoicePhrase = function(){
     const v = ['ampVoiceType','ampVoiceReg','ampVoiceTex','ampVoiceDel']
       .map(id => (($(id)||{}).value || '').trim()).filter(Boolean);
@@ -2196,7 +2252,18 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
     if (bb) bb.addEventListener('click', () => ampSetUnit('bars'));
     ['ampBars','ampBpm'].forEach(id => { const e=$(id); if (e) e.addEventListener('input', ampBarsEstimate); });
     ['ampVoiceType','ampVoiceReg','ampVoiceTex','ampVoiceDel'].forEach(id => {
-      const e=$(id); if (e) e.addEventListener('change', ampVoiceRefresh); });
+      const e=$(id); if (e) e.addEventListener('change', () => {
+        $('ampVoicePreset').value = '';        // hand-edited: no longer that preset
+        ampVoiceRefresh(); }); });
+    const vp=$('ampVoicePreset'); if (vp) vp.addEventListener('change', ampVoiceApply);
+    const vs=$('ampVoiceSave');   if (vs) vs.addEventListener('click', ampVoiceSaveCurrent);
+    const vd=$('ampVoiceDel');    if (vd) vd.addEventListener('click', async () => {
+      const n=$('ampVoicePreset').value; if(!n) return;
+      if(!confirm('Delete the saved singer \u201c'+n+'\u201d?')) return;
+      const r=await fetch('/amphion/voices/'+encodeURIComponent(n),{method:'DELETE'});
+      if(!r.ok){ $('ampVoicePreview').textContent='built-in singers cannot be deleted.'; return; }
+      await ampVoicesLoad(''); ampVoiceRefresh(); });
+    ampVoicesLoad();
     ampVoiceRefresh();
     const c = $('ampCount'); if (c) c.addEventListener('input', ampUpdateCountNote);
     const sb = $('ampSingBtn'); if (sb) sb.addEventListener('click', ampSingStart);

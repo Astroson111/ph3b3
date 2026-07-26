@@ -167,5 +167,6 @@
   "amphion.unit.bars": "Bars",
   "amphion.variations": "Variations",
   "amphion.voice": "Voice",
-  "amphion.voice.tone": "Tone"
+  "amphion.voice.tone": "Tone",
+  "amphion.voice.preset": "Singer"
 }

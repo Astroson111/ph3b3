@@ -89,6 +89,89 @@ def profile_ok(tags: str, lyrics: str = "") -> bool:
     return True
 
 
+# ── Voice profiles (a "voice" here = descriptors + seed) ─────────────────────
+# ACE-Step 1.5 has no speaker input, so a singer is not a sample you load — it is
+# the DESCRIPTION you give plus the SEED you rolled. Both are just data, which is
+# why a pickable voice list needs no model, no training and no audio: save the two
+# numbers-and-words that produced a singer you liked, and you can have them back.
+#
+# Nothing here stores audio. A profile NAME is a label for you and is never sent
+# to the model — only the descriptors are — so what you call a voice cannot
+# influence what it sounds like, and cannot smuggle a person's name into the
+# prompt.
+VOICES_PATH = PH3B3_DATA / "amphion_voices.json"
+
+# Shipped starting points, so the dropdown is useful before you have saved any.
+# Descriptions only: each names a sound, never a person.
+BUILTIN_VOICES = [
+    {"name": "Weathered Baritone",  "type": "male vocal",   "register": "baritone",
+     "tone": "weathered", "delivery": "crooned", "seed": None, "builtin": True},
+    {"name": "Bright Soprano",      "type": "female vocal", "register": "soprano",
+     "tone": "bright",    "delivery": "belted",  "seed": None, "builtin": True},
+    {"name": "Smoky Alto",          "type": "female vocal", "register": "alto",
+     "tone": "smooth",    "delivery": "crooned", "seed": None, "builtin": True},
+    {"name": "Raspy Rock Tenor",    "type": "male vocal",   "register": "tenor",
+     "tone": "raspy",     "delivery": "belted",  "seed": None, "builtin": True},
+    {"name": "Breathy Dream-Pop",   "type": "female vocal", "register": "",
+     "tone": "breathy",   "delivery": "softly sung", "seed": None, "builtin": True},
+    {"name": "Deep Gospel Choir",   "type": "choir",        "register": "",
+     "tone": "warm",      "delivery": "belted",  "seed": None, "builtin": True},
+    {"name": "Spoken Word",         "type": "androgynous vocal", "register": "",
+     "tone": "clear",     "delivery": "spoken word", "seed": None, "builtin": True},
+    {"name": "Instrumental",        "type": "instrumental, no vocals", "register": "",
+     "tone": "",          "delivery": "",        "seed": None, "builtin": True},
+]
+
+_VOICE_FIELDS = ("name", "type", "register", "tone", "delivery", "seed")
+
+
+def _load_saved_voices() -> list[dict]:
+    try:
+        return json.loads(VOICES_PATH.read_text("utf-8"))
+    except Exception:
+        return []
+
+
+def list_voices() -> list[dict]:
+    """Built-ins first, then whatever the user has kept."""
+    return BUILTIN_VOICES + _load_saved_voices()
+
+
+def save_voice(v: dict) -> tuple[dict | None, str]:
+    """Persist one voice profile. Descriptors and an optional seed — never audio."""
+    name = str(v.get("name") or "").strip()[:48]
+    if not name:
+        return None, "give the voice a name"
+    if any(x["name"].lower() == name.lower() for x in list_voices()):
+        return None, f"there is already a voice called \u201c{name}\u201d"
+    seed = v.get("seed")
+    try:
+        seed = int(seed) if seed not in (None, "") else None
+    except (TypeError, ValueError):
+        seed = None
+    prof = {"name": name,
+            "type": str(v.get("type") or "")[:40],
+            "register": str(v.get("register") or "")[:24],
+            "tone": str(v.get("tone") or "")[:24],
+            "delivery": str(v.get("delivery") or "")[:24],
+            "seed": seed, "builtin": False}
+    saved = _load_saved_voices()
+    saved.append(prof)
+    VOICES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    VOICES_PATH.write_text(json.dumps(saved, indent=2))
+    log.info("[amphion] voice profile saved (descriptors+seed, no audio)")
+    return prof, "ok"
+
+
+def delete_voice(name: str) -> bool:
+    saved = _load_saved_voices()
+    keep = [v for v in saved if v.get("name", "").lower() != (name or "").lower()]
+    if len(keep) == len(saved):
+        return False
+    VOICES_PATH.write_text(json.dumps(keep, indent=2))
+    return True
+
+
 # ── Music-specific floor items ───────────────────────────────────────────────
 # The Morpheus floor is an IMAGE floor: its categories are minor-sexual,
 # real-person-compromising and nonconsensual. Two harms specific to MUSIC are not
