@@ -1276,3 +1276,78 @@ _RESTORE_RE_CLAIM = re.compile(
 # The face half is refused earlier by blocked_request(), which runs BEFORE intent
 # resolution, so a face request can never land here.
 _ir.register("apelles", "restore_scan", _RESTORE_RE_CLAIM)
+
+
+def descratch_stats(im: Image.Image, strength: float = 1.0, max_speck: int = 5) -> dict:
+    """How much `descratch` would change, WITHOUT changing it.
+
+    Exists because of a values-audit finding: at two pixels across, a dust speck
+    and a freckle are the same object to any local-contrast test. There is no
+    threshold that removes one and keeps the other — that is physics, not a bug
+    to fix. So the honest move is to report the damage rather than choose
+    silently: how many specks, and how much of the frame they cover. A user who
+    can see "412 specks, 0.08% of the image" alongside a before/after has what
+    they need to notice a mole went missing.
+    """
+    import cv2
+    s = _clamp(strength, 0.0, 3.0)
+    if s == 0:
+        return {"specks": 0, "pixels": 0, "percent": 0.0}
+    src = _cv(im)
+    grey = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
+    diff = cv2.absdiff(grey, cv2.medianBlur(grey, 5))
+    sigma = float(np.std(diff)) or 1.0
+    thresh = max(6.0, (14.0 / max(s, 0.05)) * (sigma / 8.0))
+    mask = (diff > thresh).astype(np.uint8) * 255
+    k = int(max(1, min(int(max_speck), 15)))
+    opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
+                              cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    mask = cv2.subtract(mask, opened)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    px = int((mask > 0).sum())
+    total = mask.shape[0] * mask.shape[1]
+    return {"specks": max(0, n - 1), "pixels": px,
+            "percent": round(100.0 * px / total, 3) if total else 0.0}
+
+
+def assess(im: Image.Image) -> dict:
+    """Does this actually look like a damaged scan?
+
+    Values-audit finding: the restore preset IMPROVES a faded scan (PSNR 14.9 →
+    21.1 dB) and DEGRADES a photo that was already fine (19.7 dB against the
+    original, with the dust pass flagging 3.8% of the frame). Worse, the speck
+    count is inverted as a signal — a sharp, detailed photo produces MORE
+    "specks" than a dusty one, because hair and skin texture look exactly like
+    dirt to a local-contrast test. So degradation is judged on things that do not
+    invert: dynamic range, colour cast and high-frequency energy.
+
+    This is advisory. It never blocks — the user may know something the numbers
+    don't — but running restoration on a healthy photo should say so first.
+    """
+    import cv2
+    # Measure at a CANONICAL size. Laplacian variance scales with resolution, so
+    # thresholds tuned on a thumbnail silently invert on a full-size scan — which
+    # is exactly how the first version of this passed its unit test and then
+    # failed to warn on a 2544x3392 photo through the live service.
+    probe_im = im.convert("RGB")
+    if max(probe_im.size) > 1000:
+        probe_im = probe_im.copy()
+        probe_im.thumbnail((1000, 1000), Image.LANCZOS)
+    arr = np.asarray(probe_im, dtype=np.float32)
+    grey = cv2.cvtColor(np.asarray(probe_im), cv2.COLOR_RGB2GRAY)
+    lo, hi = np.percentile(grey, (1, 99))
+    rng = float(hi - lo)                       # faded prints lose the ends
+    cast = float(np.std([arr[..., i].mean() for i in range(3)]))
+    focus = float(cv2.Laplacian(grey, cv2.CV_64F).var())
+    faded = rng < 170
+    casted = cast > 14.0
+    soft = focus < 120.0
+    reasons = []
+    if faded:
+        reasons.append(f"washed-out range ({rng:.0f}/255)")
+    if casted:
+        reasons.append(f"colour cast ({cast:.1f})")
+    if soft:
+        reasons.append(f"soft focus (detail energy {focus:.0f})")
+    return {"degraded": bool(faded or casted or soft), "range": round(rng, 1),
+            "cast": round(cast, 1), "focus": round(focus, 1), "reasons": reasons}

@@ -4940,11 +4940,36 @@ def _tool_restore_scan(args: dict, session_id: str = "default") -> str:
     if hashlib.sha256(src.read_bytes()).hexdigest() != sha_before:
         return "Something changed the original — I stopped rather than continue."
     _apelles_register(pth, "preview")
+    try:
+        st = apelles.descratch_stats(im, strength=1.0)
+        health = apelles.assess(im)
+    except Exception:
+        st, health = None, None
+    # Running this on a photo that is already fine SOFTENS it. Say so rather than
+    # let the user assume a restoration pass is free.
+    if health and not health["degraded"]:
+        return ("I ran it, but honestly — this photo doesn't look like it needs "
+                f"restoring (range {health['range']}/255, cast {health['cast']}, "
+                f"detail energy {health['focus']}). On an already-good photo this "
+                "preset softens real texture rather than recovering anything, "
+                "because at a pixel or two across, skin and hair look the same as "
+                "dust to it. Compare the before/after and keep it only if it's "
+                "actually better. Your original is untouched either way.")
+    # Say what the dust pass actually removed. At two pixels across a speck and a
+    # freckle are indistinguishable, so the number is the user's only warning that
+    # a real mark may have gone with the dirt.
+    dust = ""
+    if st and st["specks"]:
+        dust = (f" The dust pass removed {st['specks']} specks covering "
+                f"{st['percent']}% of the frame — worth a look at the before/after, "
+                f"because a freckle or a small mole is the same size as a speck and "
+                f"can go with it. Turn the dust slider down if you spot one missing.")
     return ("Ran the scan restoration — dust and scratch removal, age colour-cast "
             "correction, fade recovery and a deconvolution sharpen. That's all "
             "non-generative: every pixel came from your picture, nothing was "
-            "invented, so what you're seeing is recovery rather than reconstruction. "
-            "It's a preview and your original is untouched. Say export to save it.")
+            "invented, so what you're seeing is recovery rather than reconstruction."
+            + dust +
+            " It's a preview and your original is untouched. Say export to save it.")
 
 
 def _tool_run_photo_batch(args: dict) -> str:

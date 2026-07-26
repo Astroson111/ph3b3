@@ -150,6 +150,61 @@ known soft spot is a different claim from one without.
   being added casually — it needs its own decision, recorded, rather than arriving
   as a convenience feature.
 
+- **Apelles scan restoration — the non-generative claim holds, and it is narrower
+  than it sounds.** *(audited 2026-07-26)* Tested rather than asserted: output is
+  **bit-identical across repeated runs** (no sampling, no seed); fed a flat grey
+  frame and pure noise it **imprinted no structure** (edge energy 0.0 on grey — a
+  face prior asked to "restore" a blank frame does not stay blank); and `decast`,
+  `clahe` and `deblur` are pointwise or frequency transforms of the input with no
+  external data. So the claim *"it cannot produce a face that isn't the person's"*
+  is sound. But the honest reading is narrower than "safe": **non-generative means
+  it cannot invent — not that it cannot harm.** The two findings below are what
+  that leaves.
+
+- **Apelles — dust removal erases small real features.** *(found in this audit,
+  mitigated not solved, 2026-07-26)* On a synthetic face, `descratch` at the
+  preset strength **erased a freckle** — local contrast 70.5 → 2.0 — while pupils,
+  a mole and a catchlight survived. This is not a tuning bug: **at two pixels
+  across, a dust speck and a freckle are the same object** to any local-contrast
+  test. Measured trade-off: aggressive removes 96% of dust and the freckle; gentle
+  (strength 0.4) keeps the freckle and only half the dust. There is no threshold
+  that separates them, so the module does not pretend to have one. **Mitigation is
+  disclosure:** `descratch_stats()` reports specks removed and percent of frame
+  without modifying anything, the chat reply states the count and warns in words
+  that a freckle or small mole can go with the dirt, and the control carries the
+  same warning next to it. The before/after view is the actual safeguard.
+  **Recorded as open**: a restored family photo can come back with a birthmark
+  missing, and the only thing standing between that and the archive is a user
+  looking at the comparison.
+
+- **Apelles — the restore preset degrades a photo that was already fine.**
+  *(found and mitigated in this audit, 2026-07-26)* On a genuinely aged scan the
+  preset is a clear win (PSNR 14.9 → 21.1 dB, cast halved, contrast recovered to
+  within 1% of the true original). On a healthy photo it **loses**: 19.7 dB
+  against the original, with the dust pass flagging **3.8% of the frame** as
+  specks. The speck count is **inverted as a signal** — a sharp, detailed photo
+  produces *more* "specks" than a dusty one, because hair and skin texture look
+  exactly like dirt to the detector. Mitigated with `assess()`, which judges
+  degradation on measures that do not invert (dynamic range, colour cast,
+  high-frequency energy) and makes the tool **say so before flattering itself**:
+  *"I ran it, but honestly — this photo doesn't look like it needs restoring."*
+  Advisory, never blocking. **Sub-finding worth its own line:** the first version
+  of `assess()` passed its unit test on a 900 px thumbnail and then **failed to
+  warn on the full 2544×3392 photo through the live service**, because Laplacian
+  variance scales with resolution. It now measures at a canonical size and returns
+  the same verdict at half scale. Same lesson as the Amphion floor, in a new
+  costume: the unit test agreed with me and the running service did not.
+
+- **Apelles — deblur ringing looks like detail.** *(open, by design)* Wiener
+  deconvolution overshoots at a hard edge: measured +11 grey levels above true
+  white at radius 2, +35 at radius 4, and clean at the shipped preset radius 1.4.
+  The overshoot is bounded and symmetric — it is the deconvolution being honest
+  about frequencies the blur destroyed, not new content — but it **reads as
+  sharpness** to a user pushing the slider. Not filtered out, because suppressing
+  it would mean inventing what should be there instead; the default stays in the
+  clean range and the artifact is left visible rather than smoothed into a
+  confident-looking lie.
+
 ## How to use this trail
 
 - **Adding a capability?** Add its row *before* it ships. If you can't name the
