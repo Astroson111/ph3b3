@@ -1816,6 +1816,15 @@ async def _run_chat_pipeline(body: dict, request: Request):
         session.add("assistant", _swap_refusal)
         return _swap_refusal
 
+    # Fail-closed on capabilities we do not have. Without this the model happily
+    # narrated a face restoration it never performed (found in the values audit).
+    _blocked = apelles.blocked_request(user_msg)
+    if _blocked:
+        log.info("[apelles] blocked-capability request answered honestly")
+        session.add("user", user_msg)
+        session.add("assistant", _blocked)
+        return _blocked
+
     _early_claim = intent_registry.resolve(user_msg)
     _triage = (_TriagePass() if _early_claim
                else await triage_gate(user_msg, _triage_context(session.messages())))

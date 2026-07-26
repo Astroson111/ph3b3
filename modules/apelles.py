@@ -82,12 +82,20 @@ class ApellesError(Exception):
 _IDENTITY_TERMS = (
     r"face[\s\-_]*swap", r"swap[\s\-_]*(?:the[\s\-_]*)?faces?", r"faceswap",
     r"deep[\s\-_]*fake", r"deepfake",
-    r"replace\s+(?:the\s+|his\s+|her\s+|their\s+|my\s+)?face",
-    r"put\s+(?:my|his|her|their|\w+'s)\s+face\s+(?:on|onto|in|into)",
-    r"swap\s+(?:my|his|her|their)\s+face",
-    r"(?:his|her|their|my|\w+'s)\s+face\s+on\s+(?:another|someone|a\s+different)",
     r"identity\s+transfer", r"face\s+transplant",
-    r"make\s+it\s+look\s+like\s+\w+\s+(?:was|were)\s+(?:there|in\s+the\s+photo)",
+    # A possessive can be a CHAIN — "my brother's face", "her friend's face" — and
+    # an earlier version only allowed a single token, so "put my brother's face on
+    # my body" walked straight through. Allow up to three words between the verb
+    # and "face"; that covers the phrasings people actually use without swallowing
+    # unrelated sentences, because the trailing preposition still has to be there.
+    r"\bput\s+(?:[\w'’]+\s+){0,3}faces?\s+(?:on|onto|in|into)\b",
+    r"\bswap\s+(?:[\w'’]+\s+){0,3}faces?\b",
+    r"\breplace\s+(?:[\w'’]+\s+){0,3}faces?\b",
+    r"\bstick\s+(?:[\w'’]+\s+){0,3}faces?\s+(?:on|onto)\b",
+    r"\bpaste\s+(?:[\w'’]+\s+){0,3}faces?\s+(?:on|onto|in|into)\b",
+    r"\bfaces?\s+(?:on|onto)\s+(?:[\w'’]+\s+){0,3}(?:body|head|photo|picture|someone|another)\b",
+    r"\bmake\s+it\s+look\s+like\s+[\w'’ ]{1,24}\s+(?:was|were)\s+(?:there|in\s+the\s+(?:photo|picture|shot))\b",
+    r"\bput\s+(?:[\w'’]+\s+){0,3}(?:in|into)\s+(?:this|the|that)\s+(?:photo|picture)\s+with\b",
 )
 _IDENTITY_RE = re.compile("|".join(_IDENTITY_TERMS), re.I)
 
@@ -820,10 +828,18 @@ def capabilities(refresh: bool = False) -> dict:
             _any_node(r"depthanything|midas|zoedepth|depthmap"),
             comfy_down or "no depth-estimation node in ComfyUI",
             "install a depth node (Depth Anything / MiDaS) in ComfyUI"),
-        cap("face_restore", "Face restoration", 3,
-            _any_node(r"gfpgan|codeformer|facerestore"),
-            comfy_down or "no GFPGAN/CodeFormer node in ComfyUI",
-            "install a face-restore custom node in ComfyUI"),
+        # RESTORATION is the in-scope half of ruling B and genuinely wanted (old
+        # photos, graphic-design work). But the popular ComfyUI "face" nodes —
+        # ReActor above all — are face SWAPPERS that happen to bundle restoration.
+        # Telling someone to "install a face-restore node" would hand them the exact
+        # capability this module welds shut. So the advice names restoration-only
+        # options and says why, rather than sending them to the top search result.
+        cap("face_restore", "Face restoration (in-photo only)", 3,
+            _any_node(r"gfpgan|codeformer|restoreformer|facerestore(?!.*reactor)"),
+            comfy_down or "no restoration model on this box",
+            "drop a GFPGAN or CodeFormer model in and restart. Use a RESTORATION-ONLY "
+            "package — do NOT install ReActor or any 'face swap' node: those add "
+            "identity replacement, which Apelles refuses by design"),
         cap("batch", "Batch a folder through a pipeline", 4, True),
     ]
 
@@ -1014,3 +1030,56 @@ def op_composite(im: Image.Image, background="white") -> Image.Image:
 
 _OPS["remove_background"] = op_remove_background
 _OPS["composite"] = op_composite
+
+
+# ── Blocked-operation requests must fail CLOSED ───────────────────────────────
+# Found during the values audit: asked to "restore the blurry face in this old
+# photo", the model replied "Let me use my camera... [camera sound] There we go.
+# The restored version shows much greater detail" — a confident description of
+# work that never happened, for a capability with no model installed. Exactly the
+# Metis fabrication class: an unavailable capability answered from imagination.
+#
+# So a request naming a SPECIFIC operation is resolved against the capability map
+# before the model ever sees it. Unavailable → the honest reason, deterministically.
+# Available → return None and let normal tool routing do its job; this gate exists
+# to prevent invention, not to intercept work that can actually be done.
+_OP_PHRASES: tuple = (
+    ("face_restore", re.compile(
+        r"\b(?:restore|restoration|deblur|unblur|repair|enhance|fix|clean\s*up|sharpen)\b"
+        r"[^.?]{0,40}\bfaces?\b"
+        r"|\bfaces?\b[^.?]{0,40}\b(?:restore|restoration|deblur|unblur|repair|clean\s*up)\b"
+        r"|\brestore\b[^.?]{0,30}\b(?:old|damaged|scratched|faded|vintage)\s+"
+        r"(?:photo|photos|picture|pictures|portrait)\b", re.I)),
+    ("upscale", re.compile(
+        r"\b(?:upscale|up-?res|enlarge|super[\s-]?resolution|make\s+it\s+(?:bigger|larger|higher\s+res)"
+        r"|increase\s+the\s+resolution|4k\s+it)\b", re.I)),
+    ("depth_blur", re.compile(
+        r"\b(?:bokeh|depth\s+blur|blur\s+the\s+background|portrait\s+mode)\b", re.I)),
+    ("object_removal", re.compile(
+        r"\b(?:remove|erase|get\s+rid\s+of|delete)\b[^.?]{0,30}"
+        r"\b(?:object|person|thing|photobomber|sign|car|logo)\b", re.I)),
+    ("background_removal", re.compile(
+        r"\b(?:remove|cut\s+out|knock\s+out|delete)\b[^.?]{0,20}\bbackgrounds?\b"
+        r"|\bbackgrounds?\b[^.?]{0,20}\b(?:removed?|cut\s+out)\b"
+        r"|\bwhite\s+background\b", re.I)),
+)
+
+
+def blocked_request(text: str) -> str | None:
+    """If the turn asks for an operation this box cannot do, say so honestly.
+
+    Returns None when the operation IS available (normal routing proceeds) and
+    when no specific operation is named."""
+    t = _normalize(text or "")
+    for cid, rx in _OP_PHRASES:
+        if not rx.search(t):
+            continue
+        c = capability(cid)
+        if c is None or c.get("available"):
+            return None                     # we can do it — don't intercept
+        msg = (f"I can't do that one on this machine. {c['label']} is unavailable: "
+               f"{c['reason']}.")
+        if c.get("fix"):
+            msg += f" To enable it: {c['fix']}."
+        return msg + (" I'd rather tell you that than describe a result I didn't produce.")
+    return None
