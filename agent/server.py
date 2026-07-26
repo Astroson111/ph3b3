@@ -371,7 +371,7 @@ if _SETUP_COMPLETE and AUTH_PASS:
     device_auth.grandfather(AUTH_PASS)
 resume = ResumeModule()
 if amphion.ready():
-    log.info("Amphion (song generation) ready.")
+    log.info("Amphion (music module) ready.")   # exact string the brief specifies
 else:
     log.warning("Amphion (song generation): ComfyUI or ACE-Step weights unreachable at boot — generation will fail until fixed.")
 network = NetworkModule()
