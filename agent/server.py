@@ -140,6 +140,7 @@ from screenshot_module import ScreenshotModule
 from kadmos_module import KadmosModule, KadmosError  # Kadmos — PDF reader (untrusted-input firewall)
 from recipes import RecipeStore
 import morpheus
+import amphion                    # song generation (ACE-Step 1.5) — Morpheus's sibling (shares gpu_lock + floor)
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
 import intent_registry           # dedicated-module intent claims (precedence over Metis)
 import device_auth               # per-device auth keys (Iris/Dio), decoupled from the human login
@@ -369,6 +370,10 @@ clock = TimeModule()
 if _SETUP_COMPLETE and AUTH_PASS:
     device_auth.grandfather(AUTH_PASS)
 resume = ResumeModule()
+if amphion.ready():
+    log.info("Amphion (song generation) ready.")
+else:
+    log.warning("Amphion (song generation): ComfyUI or ACE-Step weights unreachable at boot — generation will fail until fixed.")
 network = NetworkModule()
 bluetooth = BluetoothModule()
 system = SystemModule()
@@ -2086,6 +2091,8 @@ async def vad_stream(websocket: WebSocket):
     dev = websocket.headers.get("X-Ph3b3-Device", "stackchan")
     mon = audio_monitor.AudioMonitor()
     sent_endpoint = False
+    _dmax_prob = 0.0; _dmax_rms = -120.0   # DIAG: received-frame telemetry (numbers only, no audio)
+    _diag_first = True
     log.info("[vad] %s connected — VAD endpointing (in-memory only, not persisted)", dev)
     try:
         while True:
@@ -2099,19 +2106,36 @@ async def vad_stream(websocket: WebSocket):
                 if "reset" in (msg.get("text") or ""):
                     mon.reset(); sent_endpoint = False
                 continue
+            # DIAG (temporary): identify byte-swap vs misalignment. Aggregate numbers
+            # only (len/rms/peak) — NEVER logs raw sample bytes; privacy invariant intact.
+            if _diag_first and len(raw) >= 4:
+                _diag_first = False
+                import numpy as np
+                _n2 = (len(raw) // 2) * 2
+                _le = np.frombuffer(raw[:_n2], dtype="<i2").astype(np.float32)
+                _be = np.frombuffer(raw[:_n2], dtype=">i2").astype(np.float32)
+                log.info("[vad] %s DIAG first-frame len=%d le_rms=%.0f le_peak=%d be_rms=%.0f be_peak=%d",
+                         dev, len(raw), float(np.sqrt((_le**2).mean())), int(np.abs(_le).max()),
+                         float(np.sqrt((_be**2).mean())), int(np.abs(_be).max()))
             # Feed the frames; NOTHING here stores raw — feed_bytes buffers a sub-frame
             # tail in memory only. We look at telemetry, not the samples.
             for r in mon.feed_bytes(raw):
+                if r["speech_prob"] > _dmax_prob: _dmax_prob = r["speech_prob"]
+                if r["rms_db"] > _dmax_rms: _dmax_rms = r["rms_db"]
                 if r["endpoint"] and not sent_endpoint:
                     sent_endpoint = True
                     await websocket.send_json({"event": "endpoint", "t": r["t"]})
+                    log.info("[vad] %s endpoint fired at t=%.2fs (frame-time)", dev, r["t"])
     except WebSocketDisconnect:
         pass
     except Exception as e:
         log.info("[vad] %s error: %s", dev, e)
     finally:
+        # DIAGNOSTIC (Phase 3b): flags/counts only — NEVER audio (privacy invariant intact).
+        # Splits "Silero never fired" (had_speech / endpoint_sent) from "Dio didn't receive it".
+        log.info("[vad] %s closed — frames=%d had_speech=%s endpoint_sent=%s max_prob=%.3f max_rms_db=%.1f",
+                 dev, mon._n, mon.had_speech, sent_endpoint, _dmax_prob, _dmax_rms)
         mon.reset()   # drop state + the sub-frame byte tail immediately; nothing persists
-        log.info("[vad] %s closed", dev)
 
 
 @app.post("/vad/turn")
@@ -3928,6 +3952,275 @@ def _prune_image_subdirs() -> None:
                     child.rmdir()
             except Exception:
                 pass
+
+
+# ── Amphion — song generation (ACE-Step 1.5), Morpheus's sibling ───────────────
+def _amphion_floor_gate(tags: str, lyrics: str, request: Request) -> None:
+    """Content floor for Amphion — the SAME Morpheus floor, run on the prompt AND the
+    lyrics (never a parallel floor). Floor → localhost interlock → profile. Raises 403
+    on any violation; logs field/category only, never the text."""
+    fields = ((tags, "tags"), (lyrics, "lyrics"))
+    for field, which in fields:
+        if not (field or "").strip():
+            continue
+        cat = morpheus.floor_check(field)
+        if cat:
+            log.warning("[safety] amphion floor-blocked (%s) — category: %s", which, cat)
+            raise HTTPException(403, detail="Content policy: not permitted")
+    forced = None
+    if morpheus.ACTIVE_PROFILE == "permissive":
+        host = (request.client.host if request.client else "") or ""
+        if host not in _MORPHEUS_LOCAL_ADDRS:
+            forced = morpheus.STRICT_DENYLIST
+    for field, which in fields:
+        if not (field or "").strip():
+            continue
+        if not morpheus.profile_check(field, denylist=forced):
+            log.warning("[safety] amphion profile-blocked (%s)", which)
+            raise HTTPException(403, detail="Content policy: not permitted")
+
+
+@app.post("/amphion/generate")
+async def amphion_generate(request: Request, body: dict):
+    tags = (body.get("tags") or "").strip()
+    if not tags:
+        raise HTTPException(400, "a song description is required")
+    lyrics = (body.get("lyrics") or "").strip()
+    _amphion_floor_gate(tags, lyrics, request)   # floor on prompt AND lyrics, before anything queues
+    # Duration: seconds is the default unit; bars converts to an ESTIMATE.
+    # An unusable bars request is REFUSED with its reason rather than quietly
+    # falling back to 60s — silently generating a different length than asked for
+    # is the failure this switch exists to avoid.
+    # bpm serves two different jobs and they must not be conflated. As
+    # CONDITIONING it has a harmless default of 120. As the BASIS OF A BAR
+    # CONVERSION it must have been genuinely supplied — `int(x or 120)` turns an
+    # explicit 0 into 120 (zero is falsy), which silently produces a length the
+    # user never asked for. That is precisely the silent rewrite this switch
+    # exists to prevent, so the two are tracked separately.
+    _raw_bpm = body.get("bpm")
+    try:
+        bpm_supplied = int(_raw_bpm) if _raw_bpm not in (None, "") else None
+    except (TypeError, ValueError):
+        bpm_supplied = None
+    if bpm_supplied is not None and bpm_supplied <= 0:
+        bpm_supplied = None                      # 0 / negative == not usable
+    bpm = bpm_supplied if bpm_supplied is not None else 120
+    timesig = str(body.get("timesig", "4"))
+    duration_mode = (body.get("duration_mode") or "seconds").lower()
+    duration_note = ""
+    if duration_mode == "bars":
+        est, why = amphion.bars_to_seconds(body.get("bars"), bpm_supplied, timesig)
+        if est is None:
+            raise HTTPException(400, why)
+        seconds, duration_note = est, why
+    else:
+        try:
+            seconds = float(body.get("seconds", amphion.DEFAULT_DURATION))
+        except (TypeError, ValueError):
+            seconds = amphion.DEFAULT_DURATION
+    clamped = max(5.0, min(amphion.MAX_DURATION, seconds))
+    if duration_mode == "bars" and clamped != seconds:
+        duration_note += f" — clamped to {clamped:g}s (limit {amphion.MAX_DURATION:g}s)"
+    seconds = clamped
+    try:
+        seed = int(body.get("seed"))
+        if seed < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        seed = int.from_bytes(os.urandom(4), "big")
+    variant = body.get("variant") if body.get("variant") in amphion.DIT_BY_VARIANT else "base"
+    params = {
+        "tags": tags, "lyrics": lyrics,
+        "bpm": bpm, "keyscale": body.get("keyscale", "C major"),
+        "timesig": timesig, "language": body.get("language", "en"),
+        "seconds": seconds, "seed": seed, "variant": variant,
+        "duration_mode": duration_mode, "bars": body.get("bars") if duration_mode == "bars" else None,
+    }
+    job_id = amphion.new_job()
+    task = asyncio.create_task(amphion.run_generation(job_id, params))
+    amphion.register_task(job_id, task)
+    # duration_estimated says plainly that the length was DERIVED, not measured.
+    return {"job_id": job_id, "seconds": seconds,
+            "duration_estimated": duration_mode == "bars",
+            "duration_note": duration_note}
+
+
+@app.get("/amphion/estimate")
+async def amphion_estimate(count: int = 1):
+    """How long N variations would take, BEFORE committing to them.
+
+    The variations route returns an estimate too, but by then the jobs are
+    queued — and "shown up front" is the actual requirement. This is the
+    read-only version the UI can call as the user moves the dial.
+    """
+    n = max(1, min(int(count or 1), amphion.MAX_VARIATIONS))
+    per, basis = amphion.estimate_seconds_per_track()
+    total = round(per * n, 1)
+    return {"count": n, "seconds_per_track": per, "seconds_total": total,
+            "basis": basis,
+            "note": (f"about {total/60:.1f} min for {n} track{'s' if n != 1 else ''} "
+                     f"— they run one after another ({basis}); anything already on the GPU adds to it")}
+
+
+@app.post("/amphion/variations")
+async def amphion_variations(request: Request, body: dict):
+    """N variations of one prompt, on sequential seeds.
+
+    These are ORDINARY jobs — each takes morpheus.gpu_lock in turn, so they
+    serialise behind Wan/SDXL and behind each other. No second queue exists and
+    none is wanted. The consequence is the wait, which is why the estimate is
+    returned BEFORE anything is queued rather than discovered forty minutes in.
+    """
+    tags = (body.get("tags") or "").strip()
+    if not tags:
+        raise HTTPException(400, "a song description is required")
+    lyrics = (body.get("lyrics") or "").strip()
+    # Same floor as a single generation, on prompt AND lyrics, before anything queues.
+    _amphion_floor_gate(tags, lyrics, request)
+
+    try:
+        n = int(body.get("count", 4))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "count must be a whole number")
+    if n < 1:
+        raise HTTPException(400, "count must be at least 1")
+    if n > amphion.MAX_VARIATIONS:
+        raise HTTPException(400, f"at most {amphion.MAX_VARIATIONS} variations at a time "
+                                 f"— each one is a full generation and they run one after another")
+    try:
+        base_seed = int(body.get("seed"))
+    except (TypeError, ValueError):
+        base_seed = int.from_bytes(os.urandom(4), "big")
+
+    seeds, est_total, basis = amphion.plan_variations(base_seed, n)
+    try:
+        seconds = max(5.0, min(amphion.MAX_DURATION, float(body.get("seconds", amphion.DEFAULT_DURATION))))
+    except (TypeError, ValueError):
+        seconds = amphion.DEFAULT_DURATION
+
+    job_ids = []
+    for sd in seeds:
+        params = {
+            "tags": tags, "lyrics": lyrics,
+            "bpm": int(body.get("bpm", 120) or 120), "keyscale": body.get("keyscale", "C major"),
+            "timesig": str(body.get("timesig", "4")), "language": body.get("language", "en"),
+            "seconds": seconds, "seed": sd,
+            "variant": body.get("variant") if body.get("variant") in amphion.DIT_BY_VARIANT else "base",
+            "variation_of": base_seed,
+        }
+        jid = amphion.new_job()
+        amphion.register_task(jid, asyncio.create_task(amphion.run_generation(jid, params)))
+        job_ids.append(jid)
+
+    log.info("[amphion] queued %d variations (seeds %d..%d), est %.0fs — %s",
+             len(seeds), seeds[0], seeds[-1], est_total, basis)
+    return {"job_ids": job_ids, "seeds": seeds, "count": len(seeds),
+            "estimate_seconds_total": est_total, "estimate_basis": basis,
+            "estimate_note": (f"{len(seeds)} generations run one after another — "
+                              f"roughly {est_total/60:.1f} min in total. This is an estimate "
+                              f"({basis}); a Wan or SDXL job already running will add to it.")}
+
+
+@app.post("/amphion/remix/{job_id}")
+async def amphion_remix(job_id: str, request: Request, body: dict):
+    """Remix an EXISTING Amphion track. In-house output only.
+
+    THE ONLY INPUT IS A GALLERY ID. This signature is the enforcement: job_id is a
+    path parameter matched against ^[0-9a-f]{6,32}$, and `body` carries generation
+    settings — there is no file field, no path field and no URL field, so there is
+    nothing to smuggle audio in through. A route that needed one would not ship.
+
+    Provenance is verified from our own sidecar before anything queues: a track we
+    cannot confirm we generated is refused by name.
+    """
+    if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
+        raise HTTPException(400, "bad id")
+
+    # Refuse any attempt to hand this route audio by another name. These keys do
+    # not exist in the contract; rejecting them loudly beats ignoring them, so a
+    # caller learns the door is not there rather than assuming it silently worked.
+    smuggling = [k for k in ("file", "path", "url", "audio", "upload", "src", "source_file")
+                 if k in (body or {})]
+    if smuggling:
+        raise HTTPException(400,
+            f"remix takes a gallery track id only — {', '.join(smuggling)} is not accepted. "
+            f"Amphion remixes its own output; outside audio is out of scope by design.")
+
+    overrides = {k: body.get(k) for k in
+                 ("tags", "lyrics", "bpm", "keyscale", "timesig", "language", "seconds", "seed")
+                 if k in (body or {})}
+    params, why = await asyncio.to_thread(amphion.remix_params, job_id, overrides)
+    if params is None:
+        raise HTTPException(400, why)
+
+    # A remix with altered text is new content: floor it like any generation.
+    _amphion_floor_gate(params["tags"], params.get("lyrics", ""), request)
+
+    if params.get("seed") is None:
+        params["seed"] = int.from_bytes(os.urandom(4), "big")
+    params["seconds"] = max(5.0, min(amphion.MAX_DURATION, float(params["seconds"])))
+
+    new_id = amphion.new_job()
+    amphion.register_task(new_id, asyncio.create_task(amphion.run_generation(new_id, params)))
+    log.info("[amphion] remix %s -> %s (chain depth %d)",
+             job_id, new_id, len(params.get("provenance_chain") or []))
+    return {"job_id": new_id, "remix_of": job_id,
+            "provenance_chain": params.get("provenance_chain"),
+            "seed": params["seed"], "seconds": params["seconds"]}
+
+
+@app.get("/amphion/job/{job_id}")
+async def amphion_job(job_id: str):
+    j = amphion.jobs.get(job_id)
+    if not j:
+        raise HTTPException(404, "no such job")
+    return j
+
+
+@app.delete("/amphion/job/{job_id}")
+async def amphion_cancel(job_id: str):
+    return {"cancelled": await amphion.cancel(job_id)}
+
+
+@app.get("/amphion/library")
+async def amphion_library():
+    return {"songs": await asyncio.to_thread(amphion.library, 100)}
+
+
+@app.get("/amphion/file/{job_id}")
+async def amphion_file(job_id: str):
+    if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
+        raise HTTPException(400, "bad id")
+    p = amphion.song_path(job_id)
+    if not p:
+        raise HTTPException(404, "not found")
+    return FileResponse(str(p), media_type="audio/flac", filename=f"{job_id}.flac")
+
+
+@app.get("/amphion/export/{job_id}/{fmt}")
+async def amphion_export(job_id: str, fmt: str, loudness: str = "peak", fade: float = 0.0):
+    """Download the master converted to flac/wav/mp3, export-only (master on disk
+    is never touched). WAV = 44.1k/16-bit, Dio-ready.
+    loudness=peak (-1 dBTP, default) | lufs (-14 LUFS).  fade=seconds, 0 = off."""
+    if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
+        raise HTTPException(400, "bad id")
+    if fmt not in amphion.EXPORT_FORMATS:
+        raise HTTPException(400, "format must be flac, wav or mp3")
+    if loudness not in amphion.LOUDNESS_MODES:
+        raise HTTPException(400, "loudness must be peak or lufs")
+    res = await asyncio.to_thread(amphion.export_bytes, job_id, fmt, loudness, fade)
+    if not res:
+        raise HTTPException(404, "not found or conversion failed")
+    data, media_type, filename = res
+    return Response(content=data, media_type=media_type,
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.delete("/amphion/song/{job_id}")
+async def amphion_delete_song(job_id: str):
+    if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
+        raise HTTPException(400, "bad id")
+    return {"deleted": await asyncio.to_thread(amphion.delete_song, job_id)}
 
 
 @app.post("/morpheus/delete_all")

@@ -879,6 +879,24 @@
     .ari-opt, .ari-hint { color: var(--dim); font-size: .75rem; font-weight: 400; }
     .ari-hint { margin-top: .35rem; }
     .ari-actions { display: flex; gap: .6rem; }
+    .amp-tog { cursor: pointer; user-select: none; }
+    .amp-row { display: flex; align-items: center; gap: .6rem; margin-bottom: .5rem; }
+    .amp-row label { flex: 0 0 5.5rem; font-size: .82rem; opacity: .8; }
+    .amp-row input { flex: 1; }
+    .amp-lib { display: flex; flex-direction: column; gap: .7rem; }
+    .amp-item { background: rgba(0,0,0,.22); border-radius: 8px; padding: .6rem .7rem; }
+    .amp-item-t { font-weight: 600; margin-bottom: .15rem; }
+    .amp-item audio { width: 100%; margin: .45rem 0 .2rem; }
+    .amp-item-a { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
+    .amp-del { background: none; border: 1px solid var(--err, #e66); color: var(--err, #e66); border-radius: 6px; padding: .25rem .6rem; cursor: pointer; font-size: .8rem; }
+    .amp-dur { margin-bottom: .6rem; }
+    .amp-dur > label { display: block; font-size: .82rem; opacity: .8; margin-bottom: .35rem; }
+    .amp-presets { display: flex; gap: .35rem; flex-wrap: wrap; }
+    .amp-preset { flex: 1; min-width: 3.2rem; background: rgba(0,0,0,.28); color: var(--text); border: 1px solid rgba(255,255,255,.14); border-radius: 7px; padding: .4rem .3rem; cursor: pointer; font-size: .82rem; }
+    .amp-preset.active { border-color: var(--pink, #e28); background: rgba(226,40,136,.16); }
+    .amp-item-a { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+    .amp-fmt { background: rgba(0,0,0,.28); color: var(--text); border: 1px solid rgba(255,255,255,.14); border-radius: 6px; padding: .25rem .35rem; font-size: .8rem; }
+    .amp-dl2 { background: none; border: 1px solid var(--cyan, #4cc); color: var(--cyan, #4cc); border-radius: 6px; padding: .25rem .6rem; cursor: pointer; font-size: .8rem; text-decoration: none; }
     .ari-btn { flex: 1; border-radius: 8px; padding: .6rem; }
     .ari-out { white-space: pre-wrap; word-break: break-word; font: 12px/1.5 ui-monospace, monospace;
                background: rgba(0,0,0,.32); border: 1px solid var(--border); border-radius: 8px;
@@ -1768,6 +1786,87 @@
     </div>
   </section>
 
+  <section id="paneAmphion" class="pane">
+    <div class="card">
+      <div class="card-title" data-i18n="amphion.title">Amphion — song generation</div>
+      <div class="ari-note" data-i18n-html="amphion.note">Full songs are generated <b>locally and never leave this machine</b> — your prompt and lyrics <b>are never uploaded</b>. There's <b>no cost per song</b>, so generate as many times as it takes.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" data-i18n="amphion.describe">Describe the song</div>
+      <textarea id="ampTags" class="ari-ta" rows="4" placeholder="indie rock, live band, electric guitars, real drums, 120 bpm, warm analog production…" data-i18n-ph="amphion.describe.ph" autocomplete="off"></textarea>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span data-i18n="amphion.lyrics">Lyrics</span> <span class="ari-opt" data-i18n="amphion.lyrics.opt">— optional</span></div>
+      <textarea id="ampLyrics" class="ari-ta" rows="5" placeholder="[Verse] … [Chorus] …   (leave blank for an instrumental)" data-i18n-ph="amphion.lyrics.ph" autocomplete="off"></textarea>
+      <div class="ari-hint" data-i18n-html="amphion.lyrics.hint">Record/upload of sung lyrics (transcribed by Whisper) is coming — transcription is rough on singing, so you'll edit before generating.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title amp-tog" id="ampSettingsTog"><span data-i18n="amphion.settings">Settings</span> <span class="ari-opt" data-i18n="amphion.settings.opt">— optional</span></div>
+      <div id="ampSettings" style="display:none;margin-top:8px">
+        <div class="amp-dur">
+          <label data-i18n="amphion.duration">Length</label>
+          <div class="amp-presets" id="ampPresets">
+            <button type="button" class="amp-preset" data-secs="30">30s</button>
+            <button type="button" class="amp-preset active" data-secs="60">1 min</button>
+            <button type="button" class="amp-preset" data-secs="120">2 min</button>
+            <button type="button" class="amp-preset" data-secs="180">3 min</button>
+            <button type="button" class="amp-preset" data-secs="custom" data-i18n="amphion.custom">Custom</button>
+          </div>
+          <input type="number" id="ampSecs" class="ari-url" value="60" min="5" max="480" step="5" style="display:none;margin-top:6px">
+          <!-- Seconds stays the default unit. Bars is an optional layer for people
+               who think in musical time; it converts to an ESTIMATE because bpm is
+               requested, never measured. -->
+          <div class="amp-unit" style="margin-top:6px;display:flex;gap:6px;align-items:center">
+            <button type="button" class="amp-preset active" id="ampUnitSecs" data-i18n="amphion.unit.secs">Seconds</button>
+            <button type="button" class="amp-preset" id="ampUnitBars" data-i18n="amphion.unit.bars">Bars</button>
+            <input type="number" id="ampBars" class="ari-url" value="16" min="1" max="512" step="1"
+                   style="display:none;width:5.5rem" aria-label="bars">
+          </div>
+          <div class="ari-hint" id="ampBarsNote" style="display:none"></div>
+          <div class="ari-hint" id="ampEta"></div>
+          <div class="ari-hint" id="ampLyrWarn" style="display:none;color:var(--warn,#e0a53a)"></div>
+        </div>
+        <div class="amp-row">
+          <label data-i18n="amphion.bpm">BPM</label>
+          <input type="number" id="ampBpm" class="ari-url" value="120" min="40" max="220">
+        </div>
+        <div class="amp-row">
+          <label data-i18n="amphion.key">Key</label>
+          <input type="text" id="ampKey" class="ari-url" value="C major" placeholder="C major">
+        </div>
+        <div class="amp-row">
+          <label data-i18n="amphion.seed">Seed</label>
+          <input type="number" id="ampSeed" class="ari-url" placeholder="random" min="0">
+        </div>
+      </div>
+    </div>
+
+    <div class="amp-row" style="margin-bottom:8px">
+      <label data-i18n="amphion.variations">Variations</label>
+      <input type="number" id="ampCount" class="ari-url" value="1" min="1" max="8" step="1" style="width:5rem">
+      <span class="ari-hint" id="ampCountNote" style="margin-left:8px"></span>
+    </div>
+    <div class="ari-hint" id="ampRemixBanner" style="display:none;margin-bottom:8px"></div>
+    <div class="ari-actions">
+      <button class="btn-send ari-btn" id="ampGenerate" data-i18n="amphion.generate">Generate</button>
+      <button class="btn-send ari-btn" id="ampStrip" disabled title="Coming next" data-i18n="amphion.strip">Strip vocals — karaoke</button>
+    </div>
+
+    <div class="card" id="ampJobCard" style="display:none">
+      <div class="card-title" data-i18n="amphion.working">Generating…</div>
+      <div id="ampJobState" class="ari-hint"></div>
+      <button class="btn-send ari-btn" id="ampCancel" data-i18n="amphion.cancel">Cancel</button>
+    </div>
+
+    <div class="card">
+      <div class="card-title" data-i18n="amphion.library">Library</div>
+      <div id="ampLibrary" class="amp-lib"><div class="ari-hint" data-i18n="amphion.empty">No songs yet.</div></div>
+    </div>
+  </section>
+
 </main>
 
 <nav class="tabs">
@@ -1782,6 +1881,10 @@
   <button class="tab" data-pane="Karaoke">
     <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
     <span data-i18n="tab.karaoke">Karaoke</span>
+  </button>
+  <button class="tab" data-pane="Amphion">
+    <svg viewBox="0 0 24 24"><line x1="4" y1="10" x2="4" y2="14"/><line x1="8" y1="6" x2="8" y2="18"/><line x1="12" y1="9" x2="12" y2="15"/><line x1="16" y1="4" x2="16" y2="20"/><line x1="20" y1="10" x2="20" y2="14"/></svg>
+    <span data-i18n="tab.amphion">Amphion</span>
   </button>
   <button class="tab" data-pane="Argus">
     <svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -1870,7 +1973,263 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   t.classList.add('active');
   document.getElementById('pane' + t.dataset.pane).classList.add('active');
   if (t.dataset.pane === 'Status') { wgRefresh(); egressRefresh(); langInit(); acctInit(); dgInit(); }
+  if (t.dataset.pane === 'Amphion') { ampRefreshLibrary(); }
 }));
+
+// ── Amphion — song generation (ACE-Step 1.5) ───────────────────────────────────
+(function(){
+  const $ = id => document.getElementById(id);
+  let pollTimer = null, curJob = null;
+
+  $('ampSettingsTog').addEventListener('click', () => {
+    const s = $('ampSettings');
+    s.style.display = s.style.display === 'none' ? 'block' : 'none';
+  });
+
+  function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  // ── Amphion duration unit, variations estimate, remix state ───────────────
+  // Seconds is the default and stays selected on a fresh load. Bars is opt-in and
+  // ALWAYS labelled an estimate: bpm is a value we request, not one we measure, so
+  // a bar count can only say how long those bars WOULD be at that tempo.
+  window.ampUnit = 'seconds';
+  window.ampRemixOf = null;
+
+  window.ampBarsEstimate = function(){
+    const bars = parseFloat(($('ampBars')||{}).value);
+    const bpmRaw = (($('ampBpm')||{}).value || '').trim();
+    const bpm = parseInt(bpmRaw, 10);
+    const note = $('ampBarsNote');
+    if (!note) return null;
+    if (!bpmRaw || !isFinite(bpm) || bpm <= 0){
+      // Disabled WITH A REASON, never a silent fallback to some default length.
+      $('ampUnitBars').disabled = true;
+      note.style.display = 'block';
+      note.textContent = 'Bars needs a BPM — set one above, or use Seconds.';
+      return null;
+    }
+    $('ampUnitBars').disabled = false;
+    if (window.ampUnit !== 'bars'){ note.style.display = 'none'; return null; }
+    if (!isFinite(bars) || bars <= 0){
+      note.style.display = 'block';
+      note.textContent = 'Bars must be greater than zero.';
+      return null;
+    }
+    const beats = 4;                       // 4/4 unless a time-signature field exists
+    const secs = bars * beats * 60 / bpm;
+    note.style.display = 'block';
+    note.textContent = bars + ' bars at ' + bpm + ' bpm ≈ ' + secs.toFixed(1)
+                     + 's (estimated — the engine may not hold the tempo exactly)';
+    return secs;
+  };
+
+  window.ampSetUnit = function(u){
+    window.ampUnit = u;
+    const secsBtn = $('ampUnitSecs'), barsBtn = $('ampUnitBars');
+    secsBtn.classList.toggle('active', u === 'seconds');
+    barsBtn.classList.toggle('active', u === 'bars');
+    $('ampBars').style.display = (u === 'bars') ? '' : 'none';
+    document.getElementById('ampPresets').style.opacity = (u === 'bars') ? .45 : 1;
+    ampBarsEstimate();
+  };
+
+  // The wait is shown BEFORE anything queues — that is the whole point of the
+  // estimate. Refreshed from the server so it uses measured history when it exists.
+  window.ampUpdateCountNote = async function(){
+    const n = Math.max(1, Math.min(8, parseInt(($('ampCount')||{}).value || '1', 10) || 1));
+    const el = $('ampCountNote'); if (!el) return;
+    if (n === 1){ el.textContent = ''; return; }
+    try {
+      const d = await fetch('/amphion/estimate?count=' + n).then(r => r.json());
+      el.textContent = '≈ ' + d.note;
+    } catch (e) { el.textContent = n + ' tracks, run one after another.'; }
+  };
+
+  window.ampSetRemix = function(id, tags, lyrics){
+    window.ampRemixOf = id;
+    const b = $('ampRemixBanner');
+    b.style.display = 'block';
+    b.innerHTML = 'Remixing <b>' + esc(id) + '</b> — edit anything above, then Generate. '
+                + '<a href="#" id="ampRemixCancel">cancel</a>';
+    if (tags != null)   $('ampTags').value = tags;
+    if (lyrics != null) $('ampLyrics').value = lyrics;
+    $('ampGenerate').textContent = 'Remix';
+    document.getElementById('ampRemixCancel').addEventListener('click', ev => {
+      ev.preventDefault(); window.ampClearRemix();
+    });
+    $('ampTags').scrollIntoView({behavior:'smooth', block:'center'});
+  };
+  window.ampClearRemix = function(){
+    window.ampRemixOf = null;
+    $('ampRemixBanner').style.display = 'none';
+    $('ampGenerate').textContent = t('amphion.generate') || 'Generate';
+  };
+
+  document.addEventListener('DOMContentLoaded', function(){
+    const bs = $('ampUnitSecs'), bb = $('ampUnitBars');
+    if (bs) bs.addEventListener('click', () => ampSetUnit('seconds'));
+    if (bb) bb.addEventListener('click', () => ampSetUnit('bars'));
+    ['ampBars','ampBpm'].forEach(id => { const e=$(id); if (e) e.addEventListener('input', ampBarsEstimate); });
+    const c = $('ampCount'); if (c) c.addEventListener('input', ampUpdateCountNote);
+    ampBarsEstimate();
+  });
+
+  window.ampRefreshLibrary = async function(){
+    try {
+      const d = await fetch('/amphion/library').then(r => r.json());
+      const box = $('ampLibrary');
+      if (!d.songs || !d.songs.length){ box.innerHTML = '<div class="ari-hint">'+ (t('amphion.empty')||'No songs yet.') +'</div>'; return; }
+      box.innerHTML = d.songs.map(s => {
+        const label = esc(s.tags || '(untitled)').slice(0,90);
+        const meta = [s.bpm?s.bpm+' bpm':'', s.keyscale||'', s.seed!=null?'seed '+s.seed:''].filter(Boolean).join(' · ');
+        return '<div class="amp-item">'
+          + '<div class="amp-item-t">'+label+'</div>'
+          + '<div class="ari-hint">'+esc(meta)+'</div>'
+          + '<audio controls preload="none" src="/amphion/file/'+encodeURIComponent(s.job_id)+'"></audio>'
+          + '<div class="amp-item-a">'
+          +   '<select class="amp-fmt"><option value="flac">FLAC</option><option value="wav">WAV · Dio</option><option value="mp3">MP3 320</option></select>'
+          +   '<select class="amp-loud" title="Loudness"><option value="peak">-1 dBTP peak</option><option value="lufs">-14 LUFS</option></select>'
+          +   '<select class="amp-fade" title="Fade-out"><option value="0">No fade</option><option value="2">Fade 2s</option><option value="4">Fade 4s</option><option value="8">Fade 8s</option></select>'
+          +   '<a class="amp-dl2" data-id="'+esc(s.job_id)+'" href="/amphion/export/'+encodeURIComponent(s.job_id)+'/flac">⬇ Download</a>'
+          +   '<button class="amp-remix" data-id="'+esc(s.job_id)+'" title="Remix this track">↻ Remix</button>'
+          +   '<button class="amp-del" data-id="'+esc(s.job_id)+'">Delete</button>'
+          + '</div></div>';
+      }).join('');
+      // Any of format / loudness / fade changes the download URL. Rebuilt from
+      // all three so they compose instead of overwriting each other.
+      const syncDl = row => {
+        const a = row.querySelector('.amp-dl2');
+        const fmt = row.querySelector('.amp-fmt').value;
+        const loud = row.querySelector('.amp-loud').value;
+        const fade = row.querySelector('.amp-fade').value;
+        a.href = '/amphion/export/' + encodeURIComponent(a.dataset.id) + '/' + fmt
+               + '?loudness=' + encodeURIComponent(loud) + '&fade=' + encodeURIComponent(fade);
+      };
+      box.querySelectorAll('.amp-fmt, .amp-loud, .amp-fade').forEach(sel =>
+        sel.addEventListener('change', e => syncDl(e.target.closest('.amp-item-a'))));
+      box.querySelectorAll('.amp-remix').forEach(b => b.addEventListener('click', () => {
+        const item = b.closest('.amp-item');
+        const song = (d.songs || []).find(x => x.job_id === b.dataset.id) || {};
+        ampSetRemix(b.dataset.id, song.tags || '', song.lyrics || '');
+      }));
+      box.querySelectorAll('.amp-del').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this song?')) return;
+        await fetch('/amphion/song/'+encodeURIComponent(b.dataset.id), {method:'DELETE'});
+        ampRefreshLibrary();
+      }));
+    } catch(e){ /* leave prior */ }
+  };
+
+  async function poll(){
+    if (!curJob) return;
+    try {
+      const j = await fetch('/amphion/job/'+curJob).then(r => r.json());
+      const map = {queued:'Queued…', loading:'Loading the model…', generating:'Composing…', done:'Done.', error:'Failed.', cancelled:'Cancelled.'};
+      $('ampJobState').textContent = map[j.state] || j.state;
+      if (['done','error','cancelled'].includes(j.state)){
+        clearInterval(pollTimer); pollTimer = null;
+        $('ampGenerate').disabled = false;
+        if (j.state === 'error') $('ampJobState').textContent = 'Failed: ' + (j.error||'').slice(0,120);
+        setTimeout(() => { $('ampJobCard').style.display='none'; }, j.state==='done'?800:4000);
+        curJob = null;
+        if (j.state === 'done') ampRefreshLibrary();
+      }
+    } catch(e){ /* keep polling */ }
+  }
+
+  $('ampGenerate').addEventListener('click', async () => {
+    const tags = $('ampTags').value.trim();
+    if (!tags){ $('ampTags').focus(); return; }
+    const body = {
+      tags, lyrics: $('ampLyrics').value.trim(),
+      seconds: parseFloat($('ampSecs').value)||60,
+      bpm: parseInt($('ampBpm').value)||120,
+      keyscale: ($('ampKey').value.trim()||'C major'),
+    };
+    const sd = $('ampSeed').value.trim(); if (sd !== '') body.seed = parseInt(sd);
+
+    // Bars mode sends the unit, not a pre-converted length — the server owns the
+    // arithmetic and the refusal, so the browser cannot quietly disagree with it.
+    if (window.ampUnit === 'bars'){
+      const bars = parseFloat($('ampBars').value);
+      if (!isFinite(bars) || bars <= 0){ ampBarsEstimate(); $('ampBars').focus(); return; }
+      body.duration_mode = 'bars';
+      body.bars = bars;
+      delete body.seconds;
+    }
+
+    const count = Math.max(1, Math.min(8, parseInt($('ampCount').value || '1', 10) || 1));
+    const remixOf = window.ampRemixOf;
+
+    // The wait is confirmed BEFORE queuing, not discovered afterwards.
+    if (count > 1 && !remixOf){
+      let note = count + ' tracks, one after another.';
+      try { note = (await fetch('/amphion/estimate?count='+count).then(r=>r.json())).note; } catch(e){}
+      if (!confirm('Generate ' + count + ' variations?\n\n' + note)) return;
+    }
+
+    let url = '/amphion/generate';
+    if (remixOf)      url = '/amphion/remix/' + encodeURIComponent(remixOf);
+    else if (count>1) { url = '/amphion/variations'; body.count = count; }
+
+    $('ampGenerate').disabled = true;
+    $('ampJobCard').style.display = 'block';
+    $('ampJobState').textContent = 'Queued…';
+    try {
+      const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+      if (r.status === 403){ $('ampJobState').textContent = 'That prompt or lyrics can’t be generated (content policy).'; $('ampGenerate').disabled=false; setTimeout(()=>{$('ampJobCard').style.display='none';},4000); return; }
+      const d = await r.json();
+      if (!r.ok){ $('ampJobState').textContent = 'Error: ' + (d.detail||'could not start'); $('ampGenerate').disabled=false; return; }
+      if (remixOf) ampClearRemix();
+      // A variation set returns job_ids; follow the first and let the library
+      // show the rest as they land.
+      const jid = d.job_id || (d.job_ids && d.job_ids[0]);
+      if (!jid){ $('ampJobState').textContent = 'Error: could not start'; $('ampGenerate').disabled=false; return; }
+      if (d.job_ids && d.job_ids.length > 1)
+        $('ampJobState').textContent = 'Queued ' + d.job_ids.length + ' variations…';
+      if (d.duration_note) $('ampJobState').textContent += ' (' + d.duration_note + ')';
+      curJob = jid;
+      pollTimer = setInterval(poll, 1500); poll();
+    } catch(e){ $('ampJobState').textContent = 'Network error.'; $('ampGenerate').disabled=false; }
+  });
+
+  $('ampCancel').addEventListener('click', async () => {
+    if (!curJob) return;
+    await fetch('/amphion/job/'+curJob, {method:'DELETE'});
+    $('ampJobState').textContent = 'Cancelled.';
+  });
+
+  // ── Duration control (measured curve: ~0.36 s gen per audio-second; cap 480s) ──
+  const GEN_PER_S = 0.36, MAX_SECS = 480;
+  const etaFor = s => Math.max(6, Math.round(s * GEN_PER_S));
+  function checkLyrics(secs){
+    const lines = $('ampLyrics').value.split('\n').filter(l => l.trim() && !/^\s*\[/.test(l)).length;
+    const w = $('ampLyrWarn');
+    if (lines > 0 && lines * 4 > secs * 1.3){   // ~4s/sung line; warn if they won't fit
+      w.style.display = 'block';
+      w.textContent = '⚠ ' + lines + ' lyric lines may be long for ' + secs + 's — they can get compressed or dropped. Lengthen, or trim the lyrics.';
+    } else w.style.display = 'none';
+  }
+  function updateEta(){
+    const secs = parseFloat($('ampSecs').value) || 60;
+    $('ampEta').textContent = '≈ ' + etaFor(secs) + 's to generate';
+    checkLyrics(secs);
+  }
+  $('ampPresets').querySelectorAll('.amp-preset').forEach(b => b.addEventListener('click', () => {
+    $('ampPresets').querySelectorAll('.amp-preset').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    if (b.dataset.secs === 'custom'){ $('ampSecs').style.display = 'block'; $('ampSecs').focus(); }
+    else { $('ampSecs').style.display = 'none'; $('ampSecs').value = b.dataset.secs; }
+    updateEta();
+  }));
+  $('ampSecs').addEventListener('input', () => {
+    let v = parseInt($('ampSecs').value);
+    if (v > MAX_SECS){ v = MAX_SECS; $('ampSecs').value = MAX_SECS; }
+    updateEta();
+  });
+  $('ampLyrics').addEventListener('input', () => checkLyrics(parseFloat($('ampSecs').value) || 60));
+  updateEta();
+})();
 
 // ── Language & Voice card ──────────────────────────────────────────────────────
 // LANGUAGE is the master setting; the VOICE follows it (Piper models are
