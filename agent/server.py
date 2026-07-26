@@ -472,6 +472,7 @@ TOOLS = [
     {"type":"function","function":{"name":"match_candidate_to_job","description":"Match the stored candidate profile against a job analysis produced by extract_job_posting. Returns: match score (hard reqs met/total), gap analysis per requirement, application angle suggestion, tailored resume bullets, and a WORTH APPLYING/STRETCH/SKIP verdict. Always verify profile_get has data before calling.","parameters":{"type":"object","properties":{"job_analysis":{"type":"string","description":"The full structured text output from extract_job_posting"}},"required":["job_analysis"]}}},
     {"type":"function","function":{"name":"draft_resume_section","description":"Draft a single polished resume bullet in action-verb, achievement-framed format for a specific job requirement, drawing from a candidate profile entry. No fluff, no filler, no invented metrics.","parameters":{"type":"object","properties":{"requirement":{"type":"string","description":"The specific job requirement to address"},"profile_entry":{"type":"string","description":"The relevant candidate experience, project, or skill to draw from"}},"required":["requirement","profile_entry"]}}},
     {"type":"function","function":{"name":"analyze_resume","description":"Analyze a pasted plain-text resume for ATS-readiness: parse-cleanliness score, formatting red flags, section completeness, and (if a job description is provided) the keyword gap split into GROUNDED (skill the resume shows under other words) vs UNSUPPORTED (no evidence — must be earned, never auto-added). Use when the user pastes their resume text and asks for a review/ATS check.","parameters":{"type":"object","properties":{"resume_text":{"type":"string","description":"The full plain-text resume the user pasted"},"job_description":{"type":"string","description":"Optional job description text to compute the keyword gap against"}},"required":["resume_text"]}}},
+    {"type": "function", "function": {"name": "upscale_photo", "description": "Enlarge the open photo with a learned upscaler (Real-ESRGAN via ComfyUI), adding real detail rather than resampling. SLOW - it holds the GPU and queues behind any video or music job. Requires an upscale model to be installed; if none is, the tool says so plainly. Use for \"upscale\", \"enlarge\", \"make it higher resolution\".", "parameters": {"type": "object", "properties": {"model": {"type": "string", "description": "Optional specific model filename; omit to use the installed one"}}}}},
     {"type": "function", "function": {"name": "restore_scan", "description": "Restore a faded, dusty, scratched or softly-blurred SCAN of an old photograph. Runs dust and scratch removal, age colour-cast correction, fade recovery and deconvolution sharpening. This is NON-GENERATIVE - it recovers detail present in the picture and invents nothing, so it cannot rebuild a face that is genuinely gone. Use for \"restore this old photo\" requests.", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "photo_capabilities", "description": "Report what photo editing Apelles can actually do on this machine RIGHT NOW, including which operations are unavailable and exactly why (a missing model file is different from a broken feature). Use when the user asks what you can do to photos, or when they ask for a photo operation you're unsure is installed.", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "edit_photo", "description": "Adjust the photo currently open in the Apelles tab and produce a PREVIEW. Use for crop/resize to a named aspect preset and for exposure, contrast, saturation, temperature, rotation, sharpen and denoise. Does NOT save a file — follow with export_photo. The user's original is never modified. Presets: tiktok, square, portrait_4_5, widescreen, linkedin_headshot, youtube_thumb.", "parameters": {"type": "object", "properties": {"remove_background": {"type": "boolean", "description": "Cut the subject out of the background (u2net matting, runs locally)"}, "background": {"type": "string", "description": "What to put behind the cut-out subject: white, black, grey, transparent, or a #rrggbb hex colour"}, "preset": {"type": "string", "description": "Aspect preset: tiktok, square, portrait_4_5, widescreen, linkedin_headshot, youtube_thumb"}, "exposure": {"type": "number", "description": "Exposure in stops; +1 doubles the light, -1 halves it"}, "contrast": {"type": "number", "description": "Contrast multiplier; 1.0 is unchanged"}, "saturation": {"type": "number", "description": "Colour intensity; 1.0 unchanged, 0 is greyscale"}, "temperature": {"type": "number", "description": "Warm/cool, -100 (cool) to +100 (warm)"}, "rotate": {"type": "number", "description": "Rotation in degrees; small values straighten"}, "sharpen": {"type": "number", "description": "Sharpen strength 0-4"}, "denoise": {"type": "number", "description": "Noise reduction 0-3"}}, "required": []}}},
@@ -717,6 +718,8 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "profile_add_note": result = resume.profile_add_note(args["note"])
         elif name == "match_candidate_to_job": result = resume.match_candidate_to_job(args["job_analysis"])
         elif name == "draft_resume_section": result = resume.draft_resume_section(args["requirement"], args["profile_entry"])
+        elif name == "upscale_photo":
+            result = await _tool_upscale_photo(args, session_id)
         elif name == "restore_scan":
             result = await asyncio.to_thread(_tool_restore_scan, args, session_id)
         elif name == "photo_capabilities":
@@ -4748,6 +4751,112 @@ async def apelles_batch_cancel(batch_id: str):
     return {"cancelling": apelles.batch_cancel(str(batch_id))}
 
 
+
+
+async def _apelles_comfy_reason(http, pid: str, model: str) -> str:
+    """Turn a failed ComfyUI run into a sentence the user can act on."""
+    try:
+        h = (await http.get(f"{morpheus.COMFY_HOST}/history/{pid}", timeout=10.0)).json()
+        st = h.get(pid, {}).get("status", {})
+        for m in st.get("messages", []):
+            if m[0] == "execution_error":
+                d = m[1] or {}
+                node = d.get("node_type", "a node")
+                exc = str(d.get("exception_message", ""))[:200]
+                if node == "UpscaleModelLoader" or "load_torch_file" in exc or "Unpickling" in exc:
+                    return (f"'{model}' isn't a model I can load — it's either corrupt, "
+                            f"incomplete, or not actually an upscale model. Re-download it "
+                            f"and drop it back into {apelles.UPSCALE_DIR_HINT}. "
+                            f"(ComfyUI said: {exc[:120]})")
+                if "out of memory" in exc.lower() or "OutOfMemory" in exc:
+                    return ("the GPU ran out of memory partway through the upscale. "
+                            "Try a smaller image, or wait for the video/music jobs to finish.")
+                return f"{node} failed: {exc}"
+    except Exception:
+        pass
+    return ("the upscaler produced no image and ComfyUI didn't say why — check its log. "
+            "Nothing was written.")
+
+
+async def _apelles_do_upscale(src: Path, model_name: str | None = None) -> dict:
+    """Run one upscale through ComfyUI on the SHARED gpu_lock.
+
+    Fails LOUD and leaves nothing behind: a missing model, a ComfyUI that won't
+    come up, an OOM or a timeout all raise with a readable reason rather than
+    returning a half-file the user might mistake for a result."""
+    model, err = apelles.upscale_precheck(model_name)
+    if err:
+        raise HTTPException(409, err)
+
+    staged = morpheus._COMFY_INPUT / f"apelles_up_{uuid.uuid4().hex[:10]}.png"
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    im = apelles._open_source(src)                 # validates before decode
+    im.convert("RGB").save(staged, format="PNG")
+    before = (im.width, im.height)
+    try:
+        async with morpheus.gpu_lock:              # one queue, six tenants
+            async with httpx.AsyncClient() as http:
+                await morpheus.ensure_comfy_up(http)
+                await morpheus.evict_hermes(http)  # make room, same as Morpheus
+                wf = apelles.build_upscale_workflow(staged.name, model)
+                pid = await morpheus.comfy_queue(http, wf)
+                outs = await morpheus.comfy_wait(http, pid, timeout_s=600)
+                node = next((v for v in outs.values() if v.get("images")), None)
+                if not node:
+                    # "returned no image" is loud but useless. The reason is sitting
+                    # in ComfyUI's history — usually a model file that is corrupt or
+                    # isn't actually an upscaler — and the user can only act on it if
+                    # we say so.
+                    raise HTTPException(502, await _apelles_comfy_reason(http, pid, model))
+                info = node["images"][0]
+                r = await http.get(f"{morpheus.COMFY_HOST}/view",
+                                   params={"filename": info["filename"],
+                                           "subfolder": info.get("subfolder", ""),
+                                           "type": info.get("type", "output")},
+                                   timeout=120.0)
+                r.raise_for_status()
+                data = r.content
+    except HTTPException:
+        raise
+    except Exception as e:
+        # No partial file, and the reason is named.
+        raise HTTPException(502, f"upscale failed: {type(e).__name__}: {e}")
+    finally:
+        staged.unlink(missing_ok=True)
+
+    out_dir = apelles.APELLES_DATA / "edits"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dest = out_dir / f"upscaled_{uuid.uuid4().hex[:8]}.png"
+    dest.write_bytes(data)
+    with Image.open(dest) as up:
+        after = (up.width, up.height)
+    return {"model": model, "before": before, "after": after,
+            "factor": round(after[0] / max(1, before[0]), 2),
+            "path": dest, "bytes": dest.stat().st_size}
+
+
+@app.post("/apelles/upscale")
+async def apelles_upscale(body: dict):
+    """Upscale the confirmed image. Slow — it queues behind any Wan/ACE-Step job."""
+    ent = _apelles_get(body.get("image_id"))
+    src = ent["path"]
+    sha_before = hashlib.sha256(src.read_bytes()).hexdigest()
+    res = await _apelles_do_upscale(src, body.get("model"))
+    if hashlib.sha256(src.read_bytes()).hexdigest() != sha_before:
+        raise HTTPException(500, "INVARIANT BROKEN: the original changed")
+    fid = _apelles_register(res["path"], "export")
+    return {"file_id": fid, "model": res["model"],
+            "source_width": res["before"][0], "source_height": res["before"][1],
+            "width": res["after"][0], "height": res["after"][1],
+            "factor": res["factor"], "bytes": res["bytes"],
+            "original_intact": True, "original_sha256": sha_before}
+
+
+@app.get("/apelles/upscale/models")
+async def apelles_upscale_models():
+    return {"models": apelles.upscale_models(), "dir": apelles.UPSCALE_DIR_HINT}
+
+
 @app.get("/apelles/pipelines")
 async def apelles_pipelines():
     return {"pipelines": apelles.list_pipelines(),
@@ -4970,6 +5079,27 @@ def _tool_restore_scan(args: dict, session_id: str = "default") -> str:
             "invented, so what you're seeing is recovery rather than reconstruction."
             + dust +
             " It's a preview and your original is untouched. Say export to save it.")
+
+
+
+async def _tool_upscale_photo(args: dict, session_id: str = "default") -> str:
+    ent, err = _ap_photo(session_id)
+    if err:
+        return err
+    model, perr = apelles.upscale_precheck(args.get("model"))
+    if perr:
+        return perr + " I'd rather say that than pretend I enlarged it."
+    try:
+        res = await _apelles_do_upscale(ent["path"], model)
+    except HTTPException as e:
+        return f"The upscale didn't work: {e.detail}"
+    fid = _apelles_register(res["path"], "export")
+    b, a = res["before"], res["after"]
+    return (f"Upscaled with {res['model']} — {b[0]}x{b[1]} to {a[0]}x{a[1]}, "
+            f"{res['factor']}x. That's a learned upscaler, so the added pixels are "
+            f"reconstructed detail rather than a plain resample; it's very good on "
+            f"real texture and it can invent plausible edges where the original was "
+            f"mush. Your original is untouched. Download from /apelles/file/{fid}.")
 
 
 def _tool_run_photo_batch(args: dict) -> str:

@@ -1995,6 +1995,16 @@
       <label>Deblur radius <span id="apDbV">0</span><br><input type="range" id="apDb" min="0" max="6" step="0.1" value="0"></label>
       <div style="margin-top:6px"><button type="button" id="apRestore">Apply restore-scan preset</button></div>
     </div>
+    <div id="apUpWrap" style="margin-top:12px;padding:8px;border:1px solid #4a6b8a;border-radius:8px">
+      <div><b>Upscale</b> &mdash; learned enlargement (Real-ESRGAN, via ComfyUI)</div>
+      <div class="ari-hint" id="apUpNote" style="margin:4px 0 8px">checking&hellip;</div>
+      <label>Model <select id="apUpModel"></select></label>
+      <button type="button" id="apUpscale" style="margin-left:8px">Upscale</button>
+      <div class="ari-hint" style="margin-top:4px">Slow &mdash; it holds the GPU and queues behind any video or music job.
+      Unlike everything above it, this one <b>is</b> generative: it reconstructs detail, so it can invent plausible edges
+      where the original was mush.</div>
+      <div id="apUpOut" style="margin-top:6px"></div>
+    </div>
     <div style="margin-top:10px">
       <button type="button" id="apApply">Apply &rarr; preview</button>
       <button type="button" id="apReset">Reset</button>
@@ -2383,8 +2393,45 @@ let apInit;
     $('apBatchOut').innerHTML = h;
   }
 
+  async function apUpInit(){
+    try {
+      const r = await fetch('/apelles/upscale/models');
+      const d = await r.json();
+      const sel = $('apUpModel'); sel.innerHTML = '';
+      (d.models||[]).forEach(function(m){ sel.add(new Option(m, m)); });
+      const has = (d.models||[]).length > 0;
+      $('apUpscale').disabled = !has;
+      sel.disabled = !has;
+      $('apUpNote').innerHTML = has
+        ? 'Installed: <b>' + (d.models||[]).map(esc).join(', ') + '</b>'
+        : '<span style="color:#e0a33a">Unavailable: no model in <b>' + esc(d.dir) +
+          '</b>. Drop a Real-ESRGAN file in there and restart &mdash; this turns on by itself, no code change.</span>';
+    } catch(e) { $('apUpNote').textContent = 'could not check for upscale models'; }
+  }
+
+  $('apUpscale').addEventListener('click', async function(){
+    if (!imageId) { alert('Load and confirm a photo first.'); return; }
+    $('apUpscale').disabled = true;
+    $('apUpOut').textContent = 'upscaling… this holds the GPU and can take a while';
+    try {
+      const r = await fetch('/apelles/upscale', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({image_id:imageId, model:$('apUpModel').value})});
+      const d = await r.json();
+      if (!r.ok) { $('apUpOut').innerHTML = '<span style="color:#e0a33a">' + esc(d.detail||'upscale failed') + '</span>'; }
+      else {
+        $('apAfter').src = '/apelles/file/' + d.file_id + '?t=' + Date.now();
+        $('apUpOut').innerHTML = esc(d.model) + ': ' + d.source_width + '&times;' + d.source_height +
+          ' &rarr; <b>' + d.width + '&times;' + d.height + '</b> (' + d.factor + '&times;), ' +
+          Math.round(d.bytes/1024) + ' KB &middot; original untouched' +
+          ' &middot; <a href="/apelles/file/' + d.file_id + '" download>Download</a>';
+      }
+    } catch(e) { $('apUpOut').textContent = 'upscale failed: ' + e; }
+    $('apUpscale').disabled = false;
+  });
+
   apInit = async function(){
     try { await renderCaps(); } catch(e) { $('apCaps').textContent = 'capabilities unavailable'; }
+    try { await apUpInit(); } catch(e) {}
     try {
       const r = await fetch('/apelles/batch/folders');
       const d = await r.json();

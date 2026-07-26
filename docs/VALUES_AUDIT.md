@@ -195,6 +195,26 @@ known soft spot is a different claim from one without.
   the same verdict at half scale. Same lesson as the Amphion floor, in a new
   costume: the unit test agreed with me and the running service did not.
 
+- **Apelles upscale — the one operation here that IS generative, labelled as such.**
+  *(2026-07-26)* Real-ESRGAN reconstructs detail rather than resampling, so unlike
+  the rest of the module it **can invent plausible edges** where the original was
+  mush. The UI says so next to the button and the chat reply says so in words,
+  rather than letting "upscale" read as a neutral enlargement. No scale slider is
+  exposed: the factor is a property of the model, and a knob implying otherwise
+  would be a lie about what ran. Runs on the **shared `morpheus.gpu_lock`** — one
+  queue for six tenants, no second inference path. **Capability is read from disk,
+  proven by test:** with the folder empty the endpoint refuses 409 with the reason
+  and the chat tool says so; dropping a file in and restarting flipped it to
+  available (23/26 → 24/26) with **no code change**; removing it reverted cleanly.
+  **Failure is loud and empty-handed** — a corrupt model produced HTTP 502, no
+  partial file, the staged temp removed, and the original byte-identical. The first
+  version reported only *"the upscaler returned no image"*, which is loud but
+  useless; it now reads ComfyUI's execution error and says *"'X' isn't a model I
+  can load — it's either corrupt, incomplete, or not actually an upscale model"*,
+  and names OOM separately. **Known gap:** detection is by file presence, so a
+  wrong or corrupt file reports *available* until it is actually run — the
+  runtime message is what closes that, not the capability map
+
 - **Apelles — deblur ringing looks like detail.** *(open, by design)* Wiener
   deconvolution overshoots at a hard edge: measured +11 grey levels above true
   white at radius 2, +35 at radius 4, and clean at the shipped preset radius 1.4.

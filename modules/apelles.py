@@ -1351,3 +1351,55 @@ def assess(im: Image.Image) -> dict:
         reasons.append(f"soft focus (detail energy {focus:.0f})")
     return {"degraded": bool(faded or casted or soft), "range": round(rng, 1),
             "cast": round(cast, 1), "focus": round(focus, 1), "reasons": reasons}
+
+
+# ── Tier 3: upscale ───────────────────────────────────────────────────────────
+# Through ComfyUI, on the SAME queue and gpu_lock as Morpheus and Amphion — the
+# brief is explicit that a second inference path does not get stood up, and the
+# GPU already has six tenants arguing over 16 GB.
+#
+# Nothing here is conditional on a model existing: the graph is built the same way
+# whether or not one is installed, and the capability map decides whether it can
+# run. Drop a Real-ESRGAN file into models/upscale_models/, restart, and it works
+# with no code change — that is the whole point of reading capability from disk.
+UPSCALE_DIR_HINT = "models/upscale_models/"
+
+
+def upscale_models() -> list[str]:
+    """Installed upscale models, newest-looking name first for a stable default."""
+    return sorted(_models_in("upscale_models"))
+
+
+def build_upscale_workflow(input_filename: str, model_name: str,
+                           out_prefix: str = "apelles/upscale") -> dict:
+    """LoadImage → UpscaleModelLoader → ImageUpscaleWithModel → SaveImage.
+
+    The scale factor is a property of the MODEL (a 4x ESRGAN is 4x), not a knob —
+    exposing a scale slider here would be a lie about what the model does. If the
+    user wants a specific size afterwards, that is `resize`, which is honest about
+    being a resample."""
+    return {
+        "1": {"class_type": "LoadImage", "inputs": {"image": input_filename}},
+        "2": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": model_name}},
+        "3": {"class_type": "ImageUpscaleWithModel",
+              "inputs": {"upscale_model": ["2", 0], "image": ["1", 0]}},
+        "4": {"class_type": "SaveImage",
+              "inputs": {"images": ["3", 0], "filename_prefix": out_prefix}},
+    }
+
+
+def upscale_precheck(model_name: str | None = None) -> tuple[str, str | None]:
+    """Resolve which model to use, or say plainly why we can't.
+
+    Returns (model_name, error). Never guesses: a named model that isn't there is
+    an error, not a silent fallback to whichever file happens to be first."""
+    have = upscale_models()
+    if not have:
+        return "", ("There's no upscale model on this machine. Drop a Real-ESRGAN "
+                    f"file into {UPSCALE_DIR_HINT} and restart, and this turns on by "
+                    "itself — no code change needed.")
+    if model_name:
+        if model_name not in have:
+            return "", (f"I don't have '{model_name}'. Installed: {', '.join(have)}.")
+        return model_name, None
+    return have[0], None
