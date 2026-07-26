@@ -789,9 +789,20 @@ def capabilities(refresh: bool = False) -> dict:
     have_matte = u2net_available()
     bg_ok = have_rembg or bg_node or have_matte
 
-    def cap(cid, label, tier, ok, reason=None, fix=None):
-        return {"id": cid, "label": label, "tier": tier, "available": bool(ok),
-                "reason": None if ok else reason, "fix": None if ok else fix}
+    # `built` is separate from `ok` on purpose. A capability needs BOTH code that
+    # can run it and the resources to run it, and conflating them is how a
+    # capability map starts lying: object_removal and outpaint were reported
+    # available because SDXL is installed, when no inpainting code had been
+    # written at all — a request would have fallen through to the model and been
+    # improvised, which is the exact failure this map exists to prevent.
+    def cap(cid, label, tier, ok, reason=None, fix=None, built=True):
+        avail = bool(ok) and bool(built)
+        if not built:
+            reason = "not built yet"
+            fix = "the capability is scoped, not implemented — see docs/"
+        return {"id": cid, "label": label, "tier": tier, "available": avail,
+                "built": bool(built),
+                "reason": None if avail else reason, "fix": None if avail else fix}
 
     tier1 = [cap(k, l, 1, True) for k, l in [
         ("crop", "Crop"), ("rotate", "Rotate / straighten"), ("flip", "Flip"),
@@ -820,14 +831,14 @@ def capabilities(refresh: bool = False) -> dict:
             bool(upscale_models) and have("ImageUpscaleWithModel"),
             comfy_down or "no model in models/upscale_models/",
             "drop a Real-ESRGAN .pth into models/upscale_models/ and restart"),
+        # Models and nodes are present for both; the code is not written. Marked
+        # NOT BUILT rather than available, because "we have SDXL" is not the same
+        # claim as "Apelles can remove an object".
         cap("object_removal", "Object removal (inpaint)", 3,
             bool(sdxl) and have("VAEEncodeForInpaint", "SetLatentNoiseMask"),
-            comfy_down or "no SDXL checkpoint found",
-            "add an SDXL checkpoint to models/checkpoints/"),
+            built=False),
         cap("outpaint", "Canvas extend / outpaint", 3,
-            bool(sdxl) and have("ImagePadForOutpaint"),
-            comfy_down or "no SDXL checkpoint found",
-            "add an SDXL checkpoint to models/checkpoints/"),
+            bool(sdxl) and have("ImagePadForOutpaint"), built=False),
         # Two capabilities, not one. Subject blur works today off the matte;
         # graduated depth blur needs a model. Merging them under "portrait mode"
         # would quietly hand someone the binary version when they asked for depth.
@@ -846,12 +857,14 @@ def capabilities(refresh: bool = False) -> dict:
         # Telling someone to "install a face-restore node" would hand them the exact
         # capability this module welds shut. So the advice names restoration-only
         # options and says why, rather than sending them to the top search result.
-        cap("face_restore", "Face restoration (in-photo only)", 3,
+        # No execution path exists: generative face restoration needs face
+        # detection and 5-point alignment before a model can be applied, and that
+        # is scoped (docs/apelles-face-restore-scope.md) rather than written. Left
+        # NOT BUILT so installing a node can never flip it to "available" with
+        # nothing behind it.
+        cap("face_restore", "Face restoration (generative, in-photo only)", 3,
             _any_node(r"gfpgan|codeformer|restoreformer|facerestore(?!.*reactor)"),
-            comfy_down or "no restoration model on this box",
-            "drop a GFPGAN or CodeFormer model in and restart. Use a RESTORATION-ONLY "
-            "package — do NOT install ReActor or any 'face swap' node: those add "
-            "identity replacement, which Apelles refuses by design"),
+            built=False),
         cap("batch", "Batch a folder through a pipeline", 4, True),
     ]
 
