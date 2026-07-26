@@ -127,7 +127,68 @@ the input surface is the centrepiece, exactly as the remix ruling was.
 
 ---
 
-## 7. Verify (for B, if it is ever built)
+## 7. SPIKE RESULT — option C, run 2026-07-26
+
+**The engine works.** §2 said this was unverified and should not be assumed. It
+has now been tested, and the assumption that it would need an install was wrong:
+the entire path exists inside ComfyUI already, with **zero new dependencies** —
+no `acestep`, no `peft`, no `accelerate`.
+
+```
+LoadAudio → VAEEncodeAudio → TrainLoraNode → SaveLoRA
+                                  ↓
+                       LoraLoaderModelOnly → normal Amphion graph
+```
+
+`TrainLoraNode` accepts ACE-Step's DiT on its `MODEL` socket and audio latents on
+`LATENT` — the image-diffusion sockets are generic enough. Measured:
+
+| Result | Evidence |
+|---|---|
+| Gradients flow through the audio DiT | `bwd_loss.backward()` executes; loss emitted per step |
+| Optimizer genuinely steps the weights | `lora_down` absmax scales with step count: 4→2.01e-3, 12→5.68e-3, 60→2.29e-2 (≈ lr 5e-4 per step, AdamW's signature). Not initialization. |
+| Loss descends | 60-step run: first-half mean 0.6367 → second-half 0.4246 |
+| Adapter is real and loadable | rank 8 → 1436 tensors, 32 MB; loads into inference with **zero key-mismatch warnings**; generation succeeds |
+| Speed | **1.25 s/step** (rank 8, 20 s clip, batch 1, grad checkpointing on) |
+
+### What this does NOT prove
+
+The loss descent is on a **single clip** — that is memorization, and it
+demonstrates the optimizer works, *not* that a LoRA carries a voice. Voice
+transfer remains unproven and needs a real dataset (§2's 10+ minutes of clean
+isolated vocal) plus an A/B listen. Do not let this table be read as "voice
+cloning works here."
+
+### The real constraint is VRAM, and it is severe
+
+Peak **15,624 MiB of 16,380** — with the card otherwise empty. Training does not
+merely evict Hermes3; it needs **ph3b3 stopped entirely** (Whisper's 4.5 GB), and
+even then leaves ~750 MiB of headroom. Attempted with ph3b3 resident it OOMs, and
+neither a shorter clip (60 s → 20 s) nor `offloading: True` helps — allocation
+stays pinned at 9.2 GiB because the base model and optimizer states dominate.
+
+So training is **strictly exclusive**: the assistant is offline for the whole
+run. At 1.25 s/step a plausible 2,000-step voice is ~40 minutes of total
+downtime, and observed restarts are slow and occasionally hit a D-Bus timeout on
+`systemctl start` (recovered with `--no-block` + polling). §7-for-B item 7
+("training evicts and restores the GPU tenants cleanly") is therefore not a
+nice-to-have — it is the hard part, and the current orchestration does not do it.
+
+### Re-decision
+
+**B is no longer blocked on technical feasibility; it is blocked on the consent
+problem in §3 and on an exclusive-GPU orchestration that does not exist.** The
+spike removed the engine unknown and nothing else. If B is ever picked up, the
+outstanding unknown to kill next is voice transfer on a real dataset — before any
+enrolment UI is drawn, because that is still the assumption everything rests on.
+
+Nothing shipped. All spike artifacts (training clips, adapters, staged LoRA,
+outputs) were deleted; `models/loras/` and `input/` are back to their prior
+contents.
+
+---
+
+## 8. Verify (for B, if it is ever built)
 
 1. Enrolment accepts live microphone capture only; no file picker exists.
 2. A pre-recorded clip fails the challenge phrase.
