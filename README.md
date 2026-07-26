@@ -143,6 +143,44 @@ she is.
 
 ---
 
+## The one thing that has to arrive from outside
+
+The claim above is "no API calls leaving your network." That's true in use, and
+it would be dishonest to leave it unqualified, so here is the exception.
+
+**Memory (Mnemosyne) needs a model.** Every memory is turned into a 384-dimension
+vector so she can recall by *meaning* rather than keyword — "what did we decide
+about the microphone" finding the right note even when you didn't use those
+words. That runs on `all-MiniLM-L6-v2`, on the CPU, deliberately, so memory never
+competes with the GPU. It is about 88 MB and it has to get onto your disk once,
+from Hugging Face, on first run. That download is a real outbound connection.
+
+**The part that was worse, and is fixed.** After the model is cached, the
+`sentence-transformers` library still revalidates it against Hugging Face at
+*every boot* — 29 metadata requests asking "has this file changed?" No memory,
+no prompt, no audio, no image is in any of them, and no account token is attached.
+But it discloses your IP address, your Python and torch versions, the model name
+and revision, and — repeated once per startup — roughly when this machine is
+switched on. That is a small fingerprint on a schedule, and it does not belong in
+a project that says nothing leaves.
+
+Ph3b3 now ships with `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` set. After
+the first run the socket is never opened again — verified at the socket layer,
+not assumed. If the cache is ever missing, startup **fails loudly** instead of
+quietly downloading, which is the right way round for this.
+
+**The embeddings themselves never leave.** They're generated on your CPU and
+stored in your SQLite file. What crossed the wire was only ever *"this machine
+uses that public model"* — never anything you said, made, or asked her.
+
+Same shape as the Piper voices: one deliberate, hash-pinned fetch at setup, then
+nothing. A local assistant still has to be *installed* from somewhere. The honest
+version of the promise is that after setup, nothing about you goes out — not that
+the software materialised on your disk by itself.
+
+
+---
+
 ## The body she's growing
 
 Ph3b3 started as one box you typed at. She's becoming an ecosystem — and every device in it is a client of *her* local API. None of them touch the cloud, and none of them talk to each other; they all talk to her.
