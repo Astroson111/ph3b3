@@ -811,33 +811,60 @@ def delete_song(job_id: str) -> bool:
 # and image phrasing so "make a video with music in it" still belongs to Morpheus.
 import intent_registry as _ir
 
-_MUSIC_INTENT_RE = _re_music = __import__("re").compile(
+_re = __import__("re")
+
+# Genre words and genre-derived adjectives. A request can be unmistakably musical
+# without ever saying "song": "make me something bluesy" has no noun to match on.
+_GENRE = (r"blues|jazz|rock|pop|folk|country|metal|punk|soul|funk|gospel|techno|house|"
+          r"trance|ambient|classical|orchestral|symphonic|hip[\s-]?hop|rap|reggae|ska|"
+          r"disco|grunge|indie|edm|lo[\s-]?fi|synthwave|synthpop|bluegrass|r&b|rnb|opera|"
+          r"choral|electronica|shoegaze|americana|motown|drum\s?and\s?bass|dubstep")
+_GENRE_ADJ = (r"bluesy|jazzy|funky|folky|punky|poppy|soulful|melodic|orchestral|symphonic|"
+              r"acoustic|electronic|upbeat|danceable|anthemic|operatic")
+
+_MUSIC_INTENT_RE = _re.compile(
+    # 1. names the thing outright — "write me a song", "generate a tune"
     r"\b(?:make|write|generate|create|compose|produce|give me|can you (?:make|write))\b"
     r"[\w\s,'-]{0,30}?\b(?:song|music|track|tune|melody|instrumental|jingle|ballad|anthem)\b"
-    r"|\b(?:sing|play)\s+me\s+(?:a|an|some)\b[\w\s]{0,20}?\b(?:song|tune|music)\b",
-    __import__("re").I)
+    r"|\b(?:sing|play)\s+me\s+(?:a|an|some)\b[\w\s]{0,20}?\b(?:song|tune|music)\b"
+    # 2. describes it by genre instead — "make me something bluesy", "some jazz"
+    rf"|\b(?:make|write|generate|create|compose|produce|give)\s+(?:me\s+)?"
+    rf"(?:something|some|a|an)\s+(?:[\w'-]+\s+){{0,3}}(?:{_GENRE}|{_GENRE_ADJ})\b",
+    _re.I)
 
-_NOT_MUSIC_RE = __import__("re").compile(
+_NOT_MUSIC_RE = _re.compile(
     r"\b(video|clip|animate|animation|image|picture|photo|render a video|"
-    r"karaoke|spotify|play the song|play that song|resume|cv)\b", __import__("re").I)
+    r"karaoke|spotify|play the song|play that song|resume|cv)\b"
+    # Genre words that are ordinary words elsewhere. "give me some rock climbing
+    # tips" is not a music request, and hijacking it would be worse than missing
+    # a genuine one — a wrong claim is silent and unrecoverable for that turn.
+    # \w* on each tail so plurals and inflections are covered — "country roads"
+    # slipped through a bare "road" because the word boundary landed mid-word.
+    r"|\b(?:rock\s+(?:climb\w*|garden\w*|salt\w*|band[\s-]?aid\w*)"
+    r"|pop\s+(?:quiz\w*|tart\w*|corn\w*|up\w*)"
+    r"|metal\s+(?:detector\w*|work\w*|sheet\w*)"
+    r"|house\s+(?:plant\w*|work\w*|clean\w*|keep\w*|hold\w*|sit\w*)"
+    r"|country\s+(?:road\w*|side\w*|code\w*|club\w*)"
+    r"|soul\s+food\w*|rap\s+sheet\w*|folk\s+remed\w*"
+    r"|blues\s+clues)\b",
+    _re.I)
 
 # Three music sub-intents, all deterministic. "what singers can you use" was
-# reaching the model, which answered with REAL ARTIST NAMES (Elle King, Melissa
-# Etheridge...) — actively steering the user toward the exact request the
-# voice-clone floor refuses. A question about our own singer list must be
-# answered from our own singer list.
-_MUSIC_STATUS_RE = __import__("re").compile(
+# reaching the model, which answered with REAL ARTIST NAMES — actively steering
+# the user toward the exact request the voice-clone floor refuses. A question
+# about our own singer list must be answered from our own singer list.
+_MUSIC_STATUS_RE = _re.compile(
     r"\b(?:is|are)\b[\w\s]{0,16}\b(?:song|track|tune|music)\b[\w\s]{0,12}\b(?:ready|done|finished)\b"
     r"|\b(?:song|track|tune)\s+(?:ready|done|finished)\b"
-    r"|\bhow(?:'s| is)\s+(?:my|the)\s+(?:song|track|tune)\b", __import__("re").I)
+    r"|\bhow(?:'s| is)\s+(?:my|the)\s+(?:song|track|tune)\b", _re.I)
 
-_MUSIC_SINGERS_RE = __import__("re").compile(
+_MUSIC_SINGERS_RE = _re.compile(
     r"\b(?:what|which|list|show)\b[\w\s]{0,20}\b(?:singers?|voices?|vocalists?)\b"
-    r"|\bsingers?\s+(?:are\s+)?available\b", __import__("re").I)
+    r"|\bsingers?\s+(?:are\s+)?available\b", _re.I)
 
-_MUSIC_LIST_RE = __import__("re").compile(
+_MUSIC_LIST_RE = _re.compile(
     r"\b(?:what|which|list|show)\b[\w\s]{0,16}\b(?:songs|tracks|music)\b[\w\s]{0,16}\b(?:made|generated|have|are there|exist)\b"
-    r"|\blist\s+(?:my\s+)?songs\b", __import__("re").I)
+    r"|\blist\s+(?:my\s+)?songs\b", _re.I)
 
 _ir.register("music", "generate_song", _MUSIC_INTENT_RE, exclude=_NOT_MUSIC_RE)
 _ir.register("music", "song_status",   _MUSIC_STATUS_RE)
