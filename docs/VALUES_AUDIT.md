@@ -13,6 +13,7 @@ they paste, a Piper voice downloaded once at setup). Every row below inherits th
 |---|---|---|---|
 | **Safety gating** | Harm — the six welded refusal categories | Refuses on known-refused prompts, and refuses **in every language** (the "filter only speaks English" i18n hole is closed) | server pipeline + the response-language directive that carries refusals into the target language (`modules/voices.py` — *"Your safety rules and refusals are unchanged and apply…"*) |
 | **Ariadne** (résumé ATS) | Truth — never invent a person's qualifications | Aligns only truthful experience to ATS vocabulary; a keyword you don't genuinely evidence is **reported, never inserted**; résumé analyzed locally, only outbound call is a URL you paste | Ariadne module + the permanent never-fabricate floor (README "align truthful experience… never fabricate qualifications") |
+| **Ariadne v1.1** (render-verify + relevance-weighted cutting) | Truth, autonomy, honesty — a machine deciding what to delete from someone's career history, and reporting on work nobody looked at | **Cutting changes emphasis, never the record:** name, contact, education/certifications and any dated line (role, tenure, gap-of-record) are uncuttable **structurally** — by block kind, section and date regex, not by asking a model nicely. The cutter contains no LLM and no network call, so it can only remove and reorder; fabrication is not a path it has. **Recency is deliberately not a scoring term** — an older bullet that answers the posting outranks a recent one that doesn't. **Autonomy:** every cut is reported with the score that justified it, so the user can overrule it. **Honesty:** verification is three-state (pass / fail / **unverified**) — a missing LibreOffice, a failed conversion or a check that couldn't run is never reported as clean, and `checks_skipped` means an absent check can't be mistaken for a passing one; a document that still fails after 3 repair attempts is **returned anyway with the defect named**, never silently, never endlessly. **Privacy:** pages rasterise to JPEG **in memory** (no image file is written), the vision pass reuses the existing **local** llava lane and is scoped to layout — it is asked about *a page*, never told it is a résumé, and forbidden from commenting on the person; renders live in a temp dir removed in a `finally`. **Untrusted input:** the posting is fenced `<<<JOB POSTING>>>` in every prompt that ingests it — including the keyword list, which is posting-derived and carries the same taint | `modules/resume_fit.py` (protected sets, scoring, `plan_cuts` rationale), `modules/render_verify.py` (three states, `_VISION_PROMPT`, `_workspace`), `modules/resume_module.py` (`_JD_ARMOUR` fence, `_fit_document` repair cap, Tier-2 gate) |
 | **Morpheus** (image gen) | Harm — generated imagery | Permanent content-safety floor (strict content profile); refuses disallowed prompts | `modules/morpheus_floor.py`, `modules/content_profiles/strict.py` |
 | **Photo tools** (`take_photo` / `describe_view`) | Privacy — the camera | **Explicit-ask only** (never autonomous); every capture **announced** and **logged to Argus**; frames never leave Nyx | `agent/server.py` photo endpoints + `argus_store` logging; `modules/vision_module.py` |
 | **Dio native photo loop** | Privacy — Dio's camera | Her camera → her own screen → described aloud; captures stay local; authenticated POST only | `modules/vision_module.py` (+ `dio_host` guard, below) |
@@ -24,6 +25,28 @@ they paste, a Piper voice downloaded once at setup). Every row below inherits th
 | **Cybersec / network modules** | Harm — dual-use tooling | Defensive tools, **own-network-only**; scans and OS-detection are for networks you own or have permission to scan | Responsible Use (README); `modules/network_module.py`, `modules/cybersec_module.py` |
 | **Metis** (web search) | The highest-stakes surface: first EGRESS + first UNTRUSTED-INPUT ingestion + fabrication risk + SSRF | **Deliberate, visible, minimal.** Egress master switch, **default OFF** (`/egress`); every search **announced** with the query shown. Fetched web content is UNTRUSTED DATA: the summarize pass runs with **NO tools** (a page saying "take a photo" can't fire one — verified), wrapped in delimiters, safety-floored on query AND summary. **Fabrication is structurally impossible for search-intent:** those queries are force-routed server-side (fail-closed — no retrieval → honest "couldn't complete", never a made-up answer), and citations are built server-side from the ACTUAL result URLs (the model's URLs are stripped). SSRF guard refuses non-http(s) and any private/loopback/tailnet/Nyx address. Rate cap; loud-on-broken; **no separate search log** (the chat transcript is the only record). SearXNG is localhost-only, never Funnel-exposed. | `modules/metis.py` + `agent/server.py` (`_tool_web_search`, `_summarize_untrusted`, forced-routing intercept, input-gate); SearXNG container (localhost) |
 | **Rhea** (backup) | Resilience + secrecy | Nightly **encrypted** snapshots; passphrase kept **offline** (never on the drive); a missing drive **fails loud**, no silent SSD fallback; re-downloadable models excluded on purpose (registry preserved) | `deploy/rhea/rhea-backup.sh`, `rhea-restore.sh` |
+
+## Open findings
+
+Recorded here rather than left in a commit message, because a guardrail with a
+known soft spot is a different claim from one without.
+
+- **Ariadne — "grounded" is a model judgement, and it can be loose.**
+  *(found during the v1.1 audit, 2026-07-25; pre-existing, not introduced by v1.1)*
+  The never-fabricate floor holds because a keyword is only inserted when the
+  résumé already evidences it. But *whether it evidences it* is decided by the
+  model in `_classify_gaps`, and it can stretch. Observed: for a bench-repair
+  technician, **"C" and "embedded" were both marked GROUNDED**, justified by the
+  line *"Diagnosed and repaired consumer laptops and phones."* Repairing laptops
+  is not C programming, and a résumé that claims it is has drifted from true.
+  What contains this today is that the report prints the justifying line next to
+  every inserted keyword — so the guardrail is **human-reviewable, not
+  model-correct**, and the before/after diff is the approval surface, exactly as
+  the module docstring says. That is a real defence and it is also weaker than
+  "never fabricates" sounds. Worth a tightening pass of its own: require the
+  justifying line to share concrete terms with the keyword, or lower the
+  threshold toward UNSUPPORTED when in doubt (the prompt already says to, and it
+  did not).
 
 ## How to use this trail
 
