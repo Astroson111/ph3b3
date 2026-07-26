@@ -297,16 +297,67 @@ def _sidecar_for(job_id: str) -> dict:
         return {}
 
 
-def export_bytes(job_id: str, fmt: str) -> tuple[bytes, str, str] | None:
-    """Convert the master FLAC to fmt (flac/wav/mp3) with an export-only -1 dBTP
-    normalize. Returns (bytes, media_type, filename) or None. Master untouched."""
+
+# ── Export shaping: fade tail (item 2) and LUFS target (item 5) ──────────────
+# Both are OPTIONAL and both default OFF/peak. A generated track stops dead at
+# the end of its window, mid-phrase — a fade is the difference between a demo
+# and something you can drop in a set. LUFS is the streaming-delivery target;
+# -1 dBTP peak stays the default because it is the non-destructive choice and
+# loudnorm applies real gain reduction.
+LOUDNESS_MODES = frozenset({"peak", "lufs"})
+LUFS_TARGET = -14.0          # streaming convention (Spotify/YouTube/Apple ~-14)
+MAX_FADE_S = 15.0
+
+
+def _duration_s(src: Path) -> float:
+    """Measured duration of the master. Probed, not taken from the sidecar: the
+    sidecar records the REQUESTED length and the engine need not have honoured it,
+    and a fade computed from a wrong length either clips early or never fires."""
+    import subprocess
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                            "-of", "default=nw=1:nk=1", str(src)],
+                           capture_output=True, text=True, timeout=30)
+        return float((r.stdout or "0").strip())
+    except Exception:
+        return 0.0
+
+
+def _audio_filters(src: Path, loudness: str, fade_s: float) -> str:
+    """ffmpeg -af chain. Normalise FIRST, then fade: fading first would leave the
+    quiet tail in the loudness measurement, and normalising after a fade would
+    partly undo it."""
+    chain = []
+    if loudness == "lufs":
+        chain.append(f"loudnorm=I={LUFS_TARGET}:TP=-1.0:LRA=11")
+    else:
+        gain = _true_peak_gain_db(src)
+        if gain:
+            chain.append(f"volume={gain}dB")
+    if fade_s > 0:
+        dur = _duration_s(src)
+        f = max(0.1, min(float(fade_s), MAX_FADE_S, dur * 0.9 if dur else float(fade_s)))
+        start = max(0.0, dur - f)
+        # A curve, not a hard cut — 'tri' is linear and click-free at these lengths.
+        chain.append(f"afade=t=out:st={start:.3f}:d={f:.3f}:curve=tri")
+    return ",".join(chain) if chain else "anull"
+
+
+def export_bytes(job_id: str, fmt: str, loudness: str = "peak",
+                 fade_s: float = 0.0) -> tuple[bytes, str, str] | None:
+    """Convert the master FLAC to fmt (flac/wav/mp3), export-only. The master on
+    disk is NEVER touched, so every choice here stays reversible.
+
+    loudness: "peak" (-1 dBTP, default) or "lufs" (-14 LUFS streaming target)
+    fade_s:   optional fade-out tail in seconds, 0 = off (default)
+    """
     import subprocess, tempfile
     fmt = (fmt or "flac").lower()
+    loudness = (loudness or "peak").lower()
     src = song_path(job_id)
-    if not src or fmt not in EXPORT_FORMATS:
+    if not src or fmt not in EXPORT_FORMATS or loudness not in LOUDNESS_MODES:
         return None
-    gain = _true_peak_gain_db(src)
-    af = f"volume={gain}dB" if gain else "anull"
+    af = _audio_filters(src, loudness, fade_s)
     with tempfile.NamedTemporaryFile(suffix=f".{fmt}", delete=False) as tf:
         dst = tf.name
     meta = _tags_for(job_id, _sidecar_for(job_id), fmt)

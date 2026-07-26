@@ -4039,14 +4039,17 @@ async def amphion_file(job_id: str):
 
 
 @app.get("/amphion/export/{job_id}/{fmt}")
-async def amphion_export(job_id: str, fmt: str):
-    """Download the master converted to flac/wav/mp3 with an export-only -1 dBTP
-    normalize (master on disk is never touched). WAV = 44.1k/16-bit, Dio-ready."""
+async def amphion_export(job_id: str, fmt: str, loudness: str = "peak", fade: float = 0.0):
+    """Download the master converted to flac/wav/mp3, export-only (master on disk
+    is never touched). WAV = 44.1k/16-bit, Dio-ready.
+    loudness=peak (-1 dBTP, default) | lufs (-14 LUFS).  fade=seconds, 0 = off."""
     if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
         raise HTTPException(400, "bad id")
     if fmt not in amphion.EXPORT_FORMATS:
         raise HTTPException(400, "format must be flac, wav or mp3")
-    res = await asyncio.to_thread(amphion.export_bytes, job_id, fmt)
+    if loudness not in amphion.LOUDNESS_MODES:
+        raise HTTPException(400, "loudness must be peak or lufs")
+    res = await asyncio.to_thread(amphion.export_bytes, job_id, fmt, loudness, fade)
     if not res:
         raise HTTPException(404, "not found or conversion failed")
     data, media_type, filename = res
