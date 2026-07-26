@@ -1802,6 +1802,7 @@
       <textarea id="ampLyrics" class="ari-ta" rows="5" placeholder="[Verse] … [Chorus] …   (leave blank for an instrumental)" data-i18n-ph="amphion.lyrics.ph" autocomplete="off"></textarea>
       <div class="amp-row" style="margin-top:6px">
         <button type="button" class="amp-preset" id="ampSingBtn">🎤 Sing or speak your lyrics</button>
+        <button type="button" class="amp-preset" id="ampRangeBtn" title="Sing a few notes; I'll measure your range and set the voice controls">🎚 Match my range</button>
         <span class="ari-hint" id="ampSingState" style="margin-left:10px"></span>
       </div>
       <div class="ari-hint" data-i18n-html="amphion.lyrics.hint">Your voice is transcribed by Whisper into the box above and then <b>discarded</b> — the recording is never saved and never reaches the music model. Transcription is rough on singing, so edit before generating.</div>
@@ -2052,6 +2053,130 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   // controls; saving one captures what is currently set.
   window.ampVoices = [];
 
+  // ── "Match my range": measure the singer, don't pretend to clone them ─────
+  // ACE-Step has no audio conditioning, so a clip CANNOT steer the timbre. What a
+  // clip can honestly do is tell us your pitch range, and range maps to register
+  // — that is a real measurement, not a resemblance.
+  //
+  // Deriving a SEED from the audio was the other option and it would have been a
+  // lie: a seed picks an arbitrary random voice, so hashing your clip into one
+  // produces a stranger while implying it came from you.
+  //
+  // Runs ENTIRELY IN THE BROWSER. The recording never leaves this machine, is
+  // never posted anywhere, and no Amphion route gains a file body — the
+  // no-external-audio property and the route enumeration both stay intact.
+  window.ampF0 = function(buf, sr){
+    // YIN (cumulative mean normalised difference), not plain autocorrelation.
+    // Plain AC peaks at EVERY multiple of the period and my first attempt locked
+    // onto subharmonics — 123 Hz read as 61.5, 262 as 65.5, 523 as 65.4, all
+    // exact octaves down. YIN takes the FIRST dip below threshold, which is the
+    // true fundamental, and that is the whole reason to use it here.
+    let rms = 0; for (let i=0;i<buf.length;i++) rms += buf[i]*buf[i];
+    rms = Math.sqrt(rms/buf.length);
+    if (rms < 0.012) return 0;                       // too quiet to be a note
+
+    const tauMin = Math.floor(sr/800), tauMax = Math.min(Math.floor(sr/55), (buf.length>>1)-1);
+    const d = new Float32Array(tauMax+1);
+    for (let tau = tauMin; tau <= tauMax; tau++){
+      let sum = 0;
+      for (let i = 0; i + tau < buf.length; i++){ const diff = buf[i] - buf[i+tau]; sum += diff*diff; }
+      d[tau] = sum;
+    }
+    // cumulative mean normalisation
+    const dn = new Float32Array(tauMax+1); dn[tauMin] = 1;
+    let running = 0;
+    for (let tau = tauMin; tau <= tauMax; tau++){
+      running += d[tau];
+      dn[tau] = running === 0 ? 1 : d[tau] * (tau - tauMin + 1) / running;
+    }
+    const THRESH = 0.15;
+    let tau = -1;
+    for (let t = tauMin+1; t <= tauMax; t++){
+      if (dn[t] < THRESH){                            // first dip = the fundamental
+        while (t+1 <= tauMax && dn[t+1] < dn[t]) t++; // walk to the local minimum
+        tau = t; break;
+      }
+    }
+    if (tau < 0){                                     // nothing convincing: global min
+      let best = tauMin+1;
+      for (let t = tauMin+1; t <= tauMax; t++) if (dn[t] < dn[best]) best = t;
+      if (dn[best] > 0.5) return 0;                   // unvoiced / noise
+      tau = best;
+    }
+    // parabolic interpolation for sub-sample accuracy
+    if (tau > tauMin && tau < tauMax){
+      const a = dn[tau-1], b = dn[tau], c = dn[tau+1];
+      const denom = 2*(2*b - a - c);
+      if (denom !== 0) tau += (c - a) / denom;
+    }
+    return sr / tau;
+  };
+
+  window.ampRegisterFor = function(hz){
+    if (hz < 110) return ['deep bass',  'bass'];
+    if (hz < 165) return ['baritone',   'baritone'];
+    if (hz < 230) return ['tenor',      'tenor'];
+    if (hz < 330) return ['alto',       'alto'];
+    return           ['soprano',   'soprano'];
+  };
+
+  window.ampAnalyseRange = function(chunks, sr){
+    const flat = []; chunks.forEach(c => { for (let i=0;i<c.length;i+=1) flat.push(c[i]); });
+    const N = 2048, hop = 1024, f0s = [];
+    for (let p = 0; p + N < flat.length; p += hop){
+      const f = ampF0(Float32Array.from(flat.slice(p, p+N)), sr);
+      if (f > 55 && f < 800) f0s.push(f);
+    }
+    if (f0s.length < 6) return null;
+    f0s.sort((a,b)=>a-b);
+    const med = f0s[Math.floor(f0s.length/2)];
+    const lo  = f0s[Math.floor(f0s.length*0.1)];
+    const hi  = f0s[Math.floor(f0s.length*0.9)];
+    return {median: med, low: lo, high: hi, frames: f0s.length};
+  };
+
+  window.ampRangeStop = async function(){
+    const S = window.ampSing;
+    if (!S.rec) return;
+    S.rec = false;
+    try { if (S.src) S.src.disconnect(); if (S.proc) S.proc.disconnect();
+          if (S.stream) S.stream.getTracks().forEach(t=>t.stop());
+          if (S.ctx) await S.ctx.close(); } catch(e){}
+    S.src=S.proc=S.stream=S.ctx=null;
+    const btn = $('ampRangeBtn');
+    btn.classList.remove('recording'); btn.textContent = '🎚 Match my range';
+    const r = ampAnalyseRange(S.chunks, S.sr);
+    S.chunks = [];                                   // measured, then dropped
+    if (!r){ $('ampSingState').textContent = 'couldn\u2019t hear a steady pitch — try humming a few held notes.'; return; }
+    const [label, optVal] = ampRegisterFor(r.median);
+    $('ampVoiceReg').value = optVal;
+    $('ampVoicePreset').value = '';
+    ampVoiceRefresh();
+    $('ampSingState').textContent =
+      'measured ' + Math.round(r.median) + ' Hz median (' + Math.round(r.low) + '–' + Math.round(r.high)
+      + ' Hz over ' + r.frames + ' frames) → set register to ' + label
+      + '. That is your RANGE, not your voice — change it if it is wrong.';
+  };
+
+  window.ampRangeStart = async function(){
+    const S = window.ampSing;
+    if (S.rec) return ampRangeStop();
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){
+      $('ampSingState').textContent = 'no microphone available.'; return; }
+    try {
+      S.stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1, echoCancellation:false, noiseSuppression:false}});
+      S.ctx = new AudioContext(); S.sr = S.ctx.sampleRate;
+      S.src = S.ctx.createMediaStreamSource(S.stream);
+      S.proc = S.ctx.createScriptProcessor(4096,1,1);
+      S.chunks = []; S.rec = true;
+      S.proc.onaudioprocess = e => { if (S.rec) S.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+      S.src.connect(S.proc); S.proc.connect(S.ctx.destination);
+      const btn = $('ampRangeBtn');
+      btn.classList.add('recording'); btn.textContent = '⏹ Stop and measure';
+      $('ampSingState').textContent = 'hum or sing a few held notes, then press stop. Nothing is uploaded.';
+    } catch(e){ S.rec=false; $('ampSingState').textContent = 'microphone permission denied.'; }
+  };
+
   window.ampVoicesLoad = async function(sel){
     try {
       const d = await fetch('/amphion/voices').then(r => r.json());
@@ -2267,6 +2392,7 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
     ampVoiceRefresh();
     const c = $('ampCount'); if (c) c.addEventListener('input', ampUpdateCountNote);
     const sb = $('ampSingBtn'); if (sb) sb.addEventListener('click', ampSingStart);
+    const rb = $('ampRangeBtn'); if (rb) rb.addEventListener('click', ampRangeStart);
     ampBarsEstimate();
   });
 
