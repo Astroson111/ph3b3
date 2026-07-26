@@ -13,6 +13,8 @@ If you ever see this darlin', I got her.
 
 Ph3b3 (*Phoebe*) runs entirely on hardware you own. No cloud, no API calls leaving your network, no telemetry. You talk to her — by text or by voice — and every word stays inside your walls. The intelligence is *present*, not rented.
 
+Before you trust anything she says, read **[⚠️ What you are talking to](#what-you-are-talking-to)**. Local does not mean correct.
+
 ---
 
 ## Why she exists
@@ -67,6 +69,77 @@ Her range is wide for a single-author build:
 ### Honest limits
 
 This matters more than the feature list. Ph3b3 runs on an **8 GB VRAM ceiling** — large frontier models do not fit, and a single desktop cannot do what a hyperscale facility does at the frontier. That's the trade. What you get in exchange is an assistant that is *yours*: no subscription, no rate limit, no terms that change under you, no model deprecated out from under you, and no data on someone else's server. For the household assistant use case, that trade is the entire point.
+
+---
+
+<a id="what-you-are-talking-to"></a>
+
+## ⚠️ What you are talking to
+
+**Read this before you trust anything a model tells you — including Phoebe.**
+
+A language model is not a source of truth. It is a system trained on an enormous
+amount of human writing, and what comes out of it is shaped by two things: what
+went in, and what you bring to it.
+
+### It reflects you
+
+Models pick up your framing and hand it back. Ask a leading question and you
+will usually get the answer you led toward. State a belief confidently and the
+model will more often build on it than challenge it. Arrive certain, and it will
+tend to agree; arrive anxious, and it can amplify that instead of settling it.
+
+This is not the model understanding you. It is pattern completion. The
+conversation you get is partly a portrait of the conversation you started.
+
+**Practical consequence:** if you want a real check on an idea, ask the model to
+argue the opposite case, not to evaluate yours. Ask "what's wrong with this"
+before "is this good."
+
+### It reflects its training
+
+The other half is not yours at all. A model carries the assumptions, blind
+spots, omissions, and biases of the text it was trained on — including whose
+writing was collected in the first place, and whose wasn't. It will sound
+equally fluent when it is wrong. It will state things it has no basis for in
+the same confident register it uses for things it does.
+
+Fluency is not knowledge. Confidence is not accuracy. The tone is a property
+of the model, not of the claim.
+
+### Neither half is neutral
+
+Anyone telling you their AI is objective is selling something. Anyone telling
+you it is "just a mirror" is letting the training off the hook. Both halves are
+present in every response, and you cannot fully separate them from the outside.
+
+### This applies to Phoebe
+
+Everything above is true of the model running in this project. Local does not
+mean correct. Private does not mean accurate. Running on your own hardware
+changes **who can see your data** — it does not change **whether the answer is
+right**.
+
+What running locally does give you is the ability to check: the weights are on
+your disk, the prompts are yours, nothing is silently swapped out from under
+you, and no one is tuning the model's behavior toward someone else's interests
+without telling you.
+
+That's the whole argument. Not that Phoebe knows better. That you can see what
+she is.
+
+### How to use this well
+
+- **Verify anything that matters.** Medical, legal, financial, safety — check
+  a real source, or a person.
+- **Ask for the counter-argument**, not for approval.
+- **Watch for agreement that comes too easily.** That's the mirror, not the
+  reasoning.
+- **Notice when you are being told what you wanted to hear.** That's the
+  failure mode that costs people the most, and it never feels like a failure
+  while it's happening.
+- **Do not let it be your only interlocutor.** A model is not a substitute for
+  people who know you.
 
 ---
 
