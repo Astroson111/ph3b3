@@ -472,6 +472,7 @@ TOOLS = [
     {"type":"function","function":{"name":"match_candidate_to_job","description":"Match the stored candidate profile against a job analysis produced by extract_job_posting. Returns: match score (hard reqs met/total), gap analysis per requirement, application angle suggestion, tailored resume bullets, and a WORTH APPLYING/STRETCH/SKIP verdict. Always verify profile_get has data before calling.","parameters":{"type":"object","properties":{"job_analysis":{"type":"string","description":"The full structured text output from extract_job_posting"}},"required":["job_analysis"]}}},
     {"type":"function","function":{"name":"draft_resume_section","description":"Draft a single polished resume bullet in action-verb, achievement-framed format for a specific job requirement, drawing from a candidate profile entry. No fluff, no filler, no invented metrics.","parameters":{"type":"object","properties":{"requirement":{"type":"string","description":"The specific job requirement to address"},"profile_entry":{"type":"string","description":"The relevant candidate experience, project, or skill to draw from"}},"required":["requirement","profile_entry"]}}},
     {"type":"function","function":{"name":"analyze_resume","description":"Analyze a pasted plain-text resume for ATS-readiness: parse-cleanliness score, formatting red flags, section completeness, and (if a job description is provided) the keyword gap split into GROUNDED (skill the resume shows under other words) vs UNSUPPORTED (no evidence — must be earned, never auto-added). Use when the user pastes their resume text and asks for a review/ATS check.","parameters":{"type":"object","properties":{"resume_text":{"type":"string","description":"The full plain-text resume the user pasted"},"job_description":{"type":"string","description":"Optional job description text to compute the keyword gap against"}},"required":["resume_text"]}}},
+    {"type": "function", "function": {"name": "restore_scan", "description": "Restore a faded, dusty, scratched or softly-blurred SCAN of an old photograph. Runs dust and scratch removal, age colour-cast correction, fade recovery and deconvolution sharpening. This is NON-GENERATIVE - it recovers detail present in the picture and invents nothing, so it cannot rebuild a face that is genuinely gone. Use for \"restore this old photo\" requests.", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "photo_capabilities", "description": "Report what photo editing Apelles can actually do on this machine RIGHT NOW, including which operations are unavailable and exactly why (a missing model file is different from a broken feature). Use when the user asks what you can do to photos, or when they ask for a photo operation you're unsure is installed.", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "edit_photo", "description": "Adjust the photo currently open in the Apelles tab and produce a PREVIEW. Use for crop/resize to a named aspect preset and for exposure, contrast, saturation, temperature, rotation, sharpen and denoise. Does NOT save a file — follow with export_photo. The user's original is never modified. Presets: tiktok, square, portrait_4_5, widescreen, linkedin_headshot, youtube_thumb.", "parameters": {"type": "object", "properties": {"remove_background": {"type": "boolean", "description": "Cut the subject out of the background (u2net matting, runs locally)"}, "background": {"type": "string", "description": "What to put behind the cut-out subject: white, black, grey, transparent, or a #rrggbb hex colour"}, "preset": {"type": "string", "description": "Aspect preset: tiktok, square, portrait_4_5, widescreen, linkedin_headshot, youtube_thumb"}, "exposure": {"type": "number", "description": "Exposure in stops; +1 doubles the light, -1 halves it"}, "contrast": {"type": "number", "description": "Contrast multiplier; 1.0 is unchanged"}, "saturation": {"type": "number", "description": "Colour intensity; 1.0 unchanged, 0 is greyscale"}, "temperature": {"type": "number", "description": "Warm/cool, -100 (cool) to +100 (warm)"}, "rotate": {"type": "number", "description": "Rotation in degrees; small values straighten"}, "sharpen": {"type": "number", "description": "Sharpen strength 0-4"}, "denoise": {"type": "number", "description": "Noise reduction 0-3"}}, "required": []}}},
     {"type": "function", "function": {"name": "convert_photo", "description": "Convert the open photo to a different FILE FORMAT with no other changes — e.g. PNG to JPEG, JPEG to WebP. Use when the user just wants a different format or a smaller file. Metadata is stripped on the way out. Writes a new file; the original is untouched.", "parameters": {"type": "object", "properties": {"format": {"type": "string", "enum": ["PNG", "JPEG", "WEBP"], "description": "Target format"}, "quality": {"type": "number", "description": "1-100 for JPEG/WebP; default 92"}}, "required": ["format"]}}},
@@ -716,6 +717,8 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "profile_add_note": result = resume.profile_add_note(args["note"])
         elif name == "match_candidate_to_job": result = resume.match_candidate_to_job(args["job_analysis"])
         elif name == "draft_resume_section": result = resume.draft_resume_section(args["requirement"], args["profile_entry"])
+        elif name == "restore_scan":
+            result = await asyncio.to_thread(_tool_restore_scan, args, session_id)
         elif name == "photo_capabilities":
             result = await asyncio.to_thread(_tool_photo_capabilities)
         elif name == "edit_photo":
@@ -1319,6 +1322,8 @@ async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
     if claim.module == "document":
         return await _answer_pdf(user_msg, session_id)   # None → no doc staged → fall through
     if claim.module == "apelles":
+        if claim.handler == "restore_scan":
+            return await asyncio.to_thread(_tool_restore_scan, {}, session_id)
         # Deterministic, like the music claims: what this box can do to a photo is a
         # FACT read from installed models, not something to improvise. The model
         # previously answered this by describing the camera.
@@ -4756,6 +4761,10 @@ async def apelles_pipelines():
 # and after, what was adjusted, what metadata was removed — because "done!" is
 # not an answer when the whole point of the module is that you can trust it.
 _AP_ADJUST = {
+    "descratch": ("strength", "dust and scratch removal"),
+    "decast": ("amount", "age colour-cast removal"),
+    "clahe": ("clip", "fade recovery"),
+    "deblur": ("radius", "deblur"),
     "exposure": ("stops", "exposure"), "contrast": ("amount", "contrast"),
     "saturation": ("amount", "saturation"), "temperature": ("kelvin_shift", "temperature"),
     "rotate": ("degrees", "rotation"), "sharpen": ("amount", "sharpen"),
@@ -4909,6 +4918,33 @@ def _tool_export_photo(args: dict, session_id: str = "default") -> str:
     return (f"{did} as {res['format']} at {res['width']}x{res['height']}, "
             f"{res['bytes'] / 1024:.0f} KB.{meta} The original is untouched. "
             f"Download from /apelles/file/{fid}.")
+
+
+def _tool_restore_scan(args: dict, session_id: str = "default") -> str:
+    """The shipped non-generative recipe, in one call."""
+    ent, err = _ap_photo(session_id)
+    if err:
+        return err
+    src = ent["path"]
+    steps = apelles.BUILTIN_PIPELINES["restore_scan"]
+    sha_before = hashlib.sha256(src.read_bytes()).hexdigest()
+    try:
+        im = apelles._open_source(src)
+        out = apelles.apply_pipeline(im, steps)
+        prev = apelles.APELLES_DATA / "previews"
+        prev.mkdir(parents=True, exist_ok=True)
+        pth = prev / f"{uuid.uuid4().hex[:12]}.png"
+        out.save(pth, format="PNG")
+    except apelles.ApellesError as e:
+        return f"That restoration didn't work: {e}"
+    if hashlib.sha256(src.read_bytes()).hexdigest() != sha_before:
+        return "Something changed the original — I stopped rather than continue."
+    _apelles_register(pth, "preview")
+    return ("Ran the scan restoration — dust and scratch removal, age colour-cast "
+            "correction, fade recovery and a deconvolution sharpen. That's all "
+            "non-generative: every pixel came from your picture, nothing was "
+            "invented, so what you're seeing is recovery rather than reconstruction. "
+            "It's a preview and your original is untouched. Say export to save it.")
 
 
 def _tool_run_photo_batch(args: dict) -> str:

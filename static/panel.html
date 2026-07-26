@@ -1982,6 +1982,16 @@
       <label>Sharpen <span id="apShV">0</span><br><input type="range" id="apSh" min="0" max="3" step="0.1" value="0"></label><br>
       <label>Denoise <span id="apDnV">0</span><br><input type="range" id="apDn" min="0" max="3" step="0.1" value="0"></label>
     </div>
+    <div style="margin-top:12px;padding:8px;border:1px solid #6b5b8a;border-radius:8px">
+      <div><b>Scan restoration</b> &mdash; for faded, dusty or scratched prints</div>
+      <div class="ari-hint" style="margin:4px 0 8px">Non-generative: every output pixel comes from input pixels.
+      It recovers what is in the picture and <b>invents nothing</b>, so it will not rebuild a face that is genuinely gone.</div>
+      <label>Dust &amp; scratches <span id="apDsV">0</span><br><input type="range" id="apDs" min="0" max="3" step="0.1" value="0"></label><br>
+      <label>Fade recovery (CLAHE) <span id="apClV">0</span><br><input type="range" id="apCl" min="0" max="6" step="0.1" value="0"></label><br>
+      <label>Age colour cast <span id="apDcV">0</span><br><input type="range" id="apDc" min="0" max="1" step="0.05" value="0"></label><br>
+      <label>Deblur radius <span id="apDbV">0</span><br><input type="range" id="apDb" min="0" max="6" step="0.1" value="0"></label>
+      <div style="margin-top:6px"><button type="button" id="apRestore">Apply restore-scan preset</button></div>
+    </div>
     <div style="margin-top:10px">
       <button type="button" id="apApply">Apply &rarr; preview</button>
       <button type="button" id="apReset">Reset</button>
@@ -2160,7 +2170,8 @@ let apInit;
   const esc = s => (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
   const SLIDERS = [['apExp','apExpV',1],['apCon','apConV',2],['apSat','apSatV',2],
-                   ['apTmp','apTmpV',0],['apRot','apRotV',0],['apSh','apShV',1],['apDn','apDnV',1]];
+                   ['apTmp','apTmpV',0],['apRot','apRotV',0],['apSh','apShV',1],['apDn','apDnV',1],
+                   ['apDs','apDsV',1],['apCl','apClV',1],['apDc','apDcV',2],['apDb','apDbV',1]];
   SLIDERS.forEach(function(t){
     const el = $(t[0]); if (!el) return;
     el.addEventListener('input', function(){ $(t[1]).textContent = (+el.value).toFixed(t[2]); });
@@ -2180,6 +2191,10 @@ let apInit;
     if (+$('apTmp').value !== 0) out.push({op:'temperature', kelvin_shift:+$('apTmp').value});
     if (+$('apSh').value > 0) out.push({op:'sharpen', amount:+$('apSh').value});
     if (+$('apDn').value > 0) out.push({op:'denoise', amount:+$('apDn').value});
+    if (+$('apDs').value > 0) out.push({op:'descratch', strength:+$('apDs').value});
+    if (+$('apDc').value > 0) out.push({op:'decast', amount:+$('apDc').value});
+    if (+$('apCl').value > 0) out.push({op:'clahe', clip:+$('apCl').value});
+    if (+$('apDb').value > 0) out.push({op:'deblur', radius:+$('apDb').value});
     return out;
   }
 
@@ -2246,6 +2261,15 @@ let apInit;
       body: JSON.stringify({session_id:'panel', image_id:$('apGate').dataset.pending, confirm:false})});
     imageId = null; $('apGate').style.display='none'; $('apFile').value='';
     $('apBefore').removeAttribute('src');
+  });
+
+  $('apRestore').addEventListener('click', function(){
+    // The shipped recipe, conservative on purpose: legible, not "processed".
+    $('apDs').value = 1.0; $('apDsV').textContent = '1.0';
+    $('apDc').value = 0.7; $('apDcV').textContent = '0.70';
+    $('apCl').value = 2.0; $('apClV').textContent = '2.0';
+    $('apDb').value = 1.4; $('apDbV').textContent = '1.4';
+    $('apApply').click();
   });
 
   $('apReset').addEventListener('click', function(){

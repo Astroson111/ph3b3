@@ -798,6 +798,10 @@ def capabilities(refresh: bool = False) -> dict:
         ("exposure", "Exposure"), ("contrast", "Contrast"), ("saturation", "Saturation"),
         ("temperature", "Temperature"), ("levels", "Levels"), ("sharpen", "Sharpen"),
         ("denoise", "Denoise"), ("resize", "Resize / aspect presets"),
+        ("descratch", "Dust & scratch removal (scans)"),
+        ("clahe", "Local contrast / fade recovery (CLAHE)"),
+        ("decast", "Remove age colour cast"),
+        ("deblur", "Deblur (Wiener deconvolution)"),
         ("export", "Export (PNG / JPEG / WebP)"), ("strip_metadata", "Strip metadata"),
     ]]
 
@@ -1044,12 +1048,14 @@ _OPS["composite"] = op_composite
 # Available → return None and let normal tool routing do its job; this gate exists
 # to prevent invention, not to intercept work that can actually be done.
 _OP_PHRASES: tuple = (
+    # FACE-specific generative restoration only. General scan restoration is now
+    # available (non-generative), so "restore this old photo" must NOT be refused
+    # — refusing something we can actually do is its own kind of dishonesty.
     ("face_restore", re.compile(
-        r"\b(?:restore|restoration|deblur|unblur|repair|enhance|fix|clean\s*up|sharpen)\b"
+        r"\b(?:restore|restoration|deblur|unblur|repair|reconstruct)\b"
         r"[^.?]{0,40}\bfaces?\b"
-        r"|\bfaces?\b[^.?]{0,40}\b(?:restore|restoration|deblur|unblur|repair|clean\s*up)\b"
-        r"|\brestore\b[^.?]{0,30}\b(?:old|damaged|scratched|faded|vintage)\s+"
-        r"(?:photo|photos|picture|pictures|portrait)\b", re.I)),
+        r"|\bfaces?\b[^.?]{0,40}\b(?:restore|restoration|deblur|unblur|reconstruct)\b",
+        re.I)),
     ("upscale", re.compile(
         r"\b(?:upscale|up-?res|enlarge|super[\s-]?resolution|make\s+it\s+(?:bigger|larger|higher\s+res)"
         r"|increase\s+the\s+resolution|4k\s+it)\b", re.I)),
@@ -1081,5 +1087,192 @@ def blocked_request(text: str) -> str | None:
                f"{c['reason']}.")
         if c.get("fix"):
             msg += f" To enable it: {c['fix']}."
+        if cid == "face_restore":
+            # Don't leave them with only a no. The non-generative restoration is
+            # real and often enough for a faded scan.
+            msg += (" What I CAN do is scan restoration — dust and scratch removal, "
+                    "fade and colour-cast recovery, and deconvolution sharpening. "
+                    "That's all non-generative: it recovers what's in the picture "
+                    "rather than inventing detail, so it won't reconstruct a face "
+                    "that's genuinely gone, but on a faded or dusty print it does a "
+                    "lot. Say restore this scan and I'll run it.")
         return msg + (" I'd rather tell you that than describe a result I didn't produce.")
     return None
+
+
+# ── Scan restoration — NON-GENERATIVE ─────────────────────────────────────────
+# For faded, dusty, scratched and softly-blurred scans of real photographs.
+#
+# THE PROPERTY THAT MATTERS: nothing here invents. Every output pixel is derived
+# from input pixels — a median of its neighbours, a redistribution of its own
+# histogram, a deconvolution of the frequencies actually present. There is no
+# learned prior and no model, so this cannot produce a face that isn't the
+# person's. That is the whole reason it ships before the generative kind: it is
+# the honest baseline the generative version has to be measured against.
+#
+# The one operation that fills pixels it did not have is `descratch`, and it
+# fills them by diffusing SURROUNDING pixels into a speck-sized hole (Telea),
+# not by imagining content. It is deliberately conservative — see the size cap.
+
+
+def _cv(im: Image.Image) -> "np.ndarray":
+    import cv2
+    return cv2.cvtColor(np.asarray(im.convert("RGB")), cv2.COLOR_RGB2BGR)
+
+
+def _pil(arr) -> Image.Image:
+    import cv2
+    return Image.fromarray(cv2.cvtColor(arr, cv2.COLOR_BGR2RGB), "RGB")
+
+
+def op_descratch(im: Image.Image, strength: float = 1.0, max_speck: int = 5) -> Image.Image:
+    """Remove dust specks and hairline scratches from a scan.
+
+    Finds pixels that disagree sharply with their neighbourhood, keeps only the
+    SMALL ones (a speck, not a feature), and diffuses the surrounding pixels in.
+    The size cap is what stops it eating eyes, jewellery and starfields — the
+    classic failure of every dust-removal filter that was too pleased with itself.
+    """
+    import cv2
+    s = _clamp(strength, 0.0, 3.0)
+    if s == 0:
+        return im
+    src = _cv(im)
+    grey = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
+    med = cv2.medianBlur(grey, 5)
+    diff = cv2.absdiff(grey, med)
+    # Threshold scales with the image's own noise, so a clean scan isn't attacked
+    # and a filthy one isn't under-treated.
+    sigma = float(np.std(diff)) or 1.0
+    thresh = max(6.0, (14.0 / max(s, 0.05)) * (sigma / 8.0))
+    mask = (diff > thresh).astype(np.uint8) * 255
+    # Keep only small blobs: anything bigger than max_speck px across is picture.
+    k = int(max(1, min(int(max_speck), 15)))
+    opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
+                              cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    mask = cv2.subtract(mask, opened)          # drop the big stuff — that's content
+    mask = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
+    if int(mask.sum()) == 0:
+        return im
+    out = cv2.inpaint(src, mask, 3, cv2.INPAINT_TELEA)
+    return _pil(out)
+
+
+def op_clahe(im: Image.Image, clip: float = 2.0, grid: int = 8) -> Image.Image:
+    """Local contrast (CLAHE) on lightness only.
+
+    Applied to L in LAB so colours are not pushed around — a global curve either
+    blows the highlights or leaves the shadows dead, which is exactly the failure
+    of a faded scan."""
+    import cv2
+    c = _clamp(clip, 0.1, 8.0)
+    g = int(_clamp(grid, 2, 16))
+    lab = cv2.cvtColor(_cv(im), cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l = cv2.createCLAHE(clipLimit=c, tileGridSize=(g, g)).apply(l)
+    return _pil(cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR))
+
+
+def op_decast(im: Image.Image, amount: float = 1.0) -> Image.Image:
+    """Pull out an age cast (the yellow/orange of a faded print).
+
+    Percentile-anchored per channel rather than grey-world: grey-world is fooled
+    by a legitimately warm photograph, and 'correcting' a sunset is a bug."""
+    a = _clamp(amount, 0.0, 1.0)
+    if a == 0:
+        return im
+    arr = np.asarray(im.convert("RGB"), dtype=np.float32)
+    out = arr.copy()
+    for ch in range(3):
+        lo, hi = np.percentile(arr[..., ch], (1.0, 99.0))
+        if hi - lo < 1e-3:
+            continue
+        stretched = (arr[..., ch] - lo) * (255.0 / (hi - lo))
+        out[..., ch] = arr[..., ch] * (1 - a) + stretched * a
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+
+
+def _psf(radius: float, angle: float | None) -> "np.ndarray":
+    """Point-spread function: a disc/gaussian for defocus, a line for motion."""
+    r = max(0.6, float(radius))
+    if angle is None:
+        n = int(max(3, round(r * 6)) | 1)
+        ax = np.arange(n) - n // 2
+        xx, yy = np.meshgrid(ax, ax)
+        k = np.exp(-(xx ** 2 + yy ** 2) / (2 * (r ** 2)))
+    else:
+        n = int(max(3, round(r * 2)) | 1)
+        k = np.zeros((n, n), np.float32)
+        th = np.deg2rad(float(angle))
+        for t in np.linspace(-r, r, n * 4):
+            x = int(round(n // 2 + t * np.cos(th)))
+            y = int(round(n // 2 + t * np.sin(th)))
+            if 0 <= x < n and 0 <= y < n:
+                k[y, x] = 1.0
+    tot = k.sum()
+    return (k / tot).astype(np.float32) if tot else k
+
+
+def op_deblur(im: Image.Image, radius: float = 2.0, angle: float | None = None,
+              noise: float = 0.012) -> Image.Image:
+    """Wiener deconvolution — recover detail the blur SMEARED, not detail it erased.
+
+    This is the honest ceiling of non-generative sharpening: it can undo a known
+    point-spread function, and where the blur destroyed a frequency entirely there
+    is nothing to bring back. It will not rescue a hopeless face, and it does not
+    pretend to. Over-pushing shows as ringing, which is the image telling the truth
+    about how much information was actually there."""
+    k = _psf(radius, angle)
+    nsr = float(_clamp(noise, 1e-4, 1.0))
+    arr = np.asarray(im.convert("RGB"), dtype=np.float32) / 255.0
+    h, w = arr.shape[:2]
+    pad = max(k.shape) * 2
+    out = np.empty_like(arr)
+    K = None
+    for ch in range(3):
+        # Reflect-pad so the FFT's wraparound doesn't smear the opposite edge in.
+        c = np.pad(arr[..., ch], pad, mode="reflect")
+        if K is None:
+            kp = np.zeros_like(c)
+            kh, kw = k.shape
+            kp[:kh, :kw] = k
+            kp = np.roll(kp, (-(kh // 2), -(kw // 2)), axis=(0, 1))
+            K = np.fft.rfft2(kp)
+        G = np.fft.rfft2(c)
+        F = G * np.conj(K) / (np.abs(K) ** 2 + nsr)
+        r = np.fft.irfft2(F, s=c.shape)
+        out[..., ch] = r[pad:pad + h, pad:pad + w]
+    return Image.fromarray((np.clip(out, 0, 1) * 255 + 0.5).astype(np.uint8), "RGB")
+
+
+_OPS["descratch"] = op_descratch
+_OPS["clahe"] = op_clahe
+_OPS["decast"] = op_decast
+_OPS["deblur"] = op_deblur
+
+# A default recipe for "this is an old scan". Conservative on purpose: it should
+# make a faded print legible, not make it look processed.
+BUILTIN_PIPELINES["restore_scan"] = [
+    {"op": "descratch", "strength": 1.0},
+    {"op": "decast", "amount": 0.7},
+    {"op": "clahe", "clip": 2.0},
+    {"op": "deblur", "radius": 1.4},
+]
+
+
+# Restoration is claimed deterministically too. Left to the tool picker, the model
+# improvised a workflow — "Stack-chan will use her camera to take a new photo…
+# this process typically takes a few minutes" — for an operation that uses the
+# already-loaded photo and finishes in under a second. Not a fabricated result
+# this time, but a fabricated procedure, and the user would have waited for it.
+_RESTORE_RE_CLAIM = re.compile(
+    r"\b(?:restore|restoration|clean\s*up|fix|repair|rescue)\b[^.?]{0,40}"
+    r"\b(?:scan|scans|old|faded|fading|damaged|scratched|dusty|vintage|antique|"
+    r"yellowed|photo|photos|photograph|picture|print)\b"
+    r"|\b(?:old|faded|damaged|scratched|dusty|vintage)\s+"
+    r"(?:photo|photograph|picture|print|scan)\b[^.?]{0,30}\b(?:restore|fix|clean)\b",
+    re.I,
+)
+# The face half is refused earlier by blocked_request(), which runs BEFORE intent
+# resolution, so a face request can never land here.
+_ir.register("apelles", "restore_scan", _RESTORE_RE_CLAIM)
