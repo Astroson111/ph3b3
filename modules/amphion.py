@@ -799,3 +799,64 @@ def delete_song(job_id: str) -> bool:
     p.unlink(missing_ok=True)
     p.with_suffix(".json").unlink(missing_ok=True)
     return True
+
+
+# ── Intent claim: a music request is Amphion's turn ──────────────────────────
+# "make me a song" was reaching the model's tool picker and coming back as
+# generate_video — a 10-minute Wan render for someone who asked for a tune, which
+# then held the GPU and wedged chat behind the video grace. Tool descriptions are
+# a suggestion to a model; an intent claim is not.
+#
+# Same mechanism weather uses to beat Metis (see intent_registry). Excludes video
+# and image phrasing so "make a video with music in it" still belongs to Morpheus.
+import intent_registry as _ir
+
+_MUSIC_INTENT_RE = _re_music = __import__("re").compile(
+    r"\b(?:make|write|generate|create|compose|produce|give me|can you (?:make|write))\b"
+    r"[\w\s,'-]{0,30}?\b(?:song|music|track|tune|melody|instrumental|jingle|ballad|anthem)\b"
+    r"|\b(?:sing|play)\s+me\s+(?:a|an|some)\b[\w\s]{0,20}?\b(?:song|tune|music)\b",
+    __import__("re").I)
+
+_NOT_MUSIC_RE = __import__("re").compile(
+    r"\b(video|clip|animate|animation|image|picture|photo|render a video|"
+    r"karaoke|spotify|play the song|play that song|resume|cv)\b", __import__("re").I)
+
+# Three music sub-intents, all deterministic. "what singers can you use" was
+# reaching the model, which answered with REAL ARTIST NAMES (Elle King, Melissa
+# Etheridge...) — actively steering the user toward the exact request the
+# voice-clone floor refuses. A question about our own singer list must be
+# answered from our own singer list.
+_MUSIC_STATUS_RE = __import__("re").compile(
+    r"\b(?:is|are)\b[\w\s]{0,16}\b(?:song|track|tune|music)\b[\w\s]{0,12}\b(?:ready|done|finished)\b"
+    r"|\b(?:song|track|tune)\s+(?:ready|done|finished)\b"
+    r"|\bhow(?:'s| is)\s+(?:my|the)\s+(?:song|track|tune)\b", __import__("re").I)
+
+_MUSIC_SINGERS_RE = __import__("re").compile(
+    r"\b(?:what|which|list|show)\b[\w\s]{0,20}\b(?:singers?|voices?|vocalists?)\b"
+    r"|\bsingers?\s+(?:are\s+)?available\b", __import__("re").I)
+
+_MUSIC_LIST_RE = __import__("re").compile(
+    r"\b(?:what|which|list|show)\b[\w\s]{0,16}\b(?:songs|tracks|music)\b[\w\s]{0,16}\b(?:made|generated|have|are there|exist)\b"
+    r"|\blist\s+(?:my\s+)?songs\b", __import__("re").I)
+
+_ir.register("music", "generate_song", _MUSIC_INTENT_RE, exclude=_NOT_MUSIC_RE)
+_ir.register("music", "song_status",   _MUSIC_STATUS_RE)
+_ir.register("music", "list_singers",  _MUSIC_SINGERS_RE)
+_ir.register("music", "list_songs",    _MUSIC_LIST_RE)
+
+
+def parse_seconds(msg: str) -> float | None:
+    """Pull a spoken duration out of a request. "about 10 seconds", "two minutes",
+    "a minute and a half". None when unstated — the caller keeps its default
+    rather than inventing a length."""
+    import re as _re
+    t = (msg or "").lower()
+    words = {"a":1,"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,
+             "eight":8,"nine":9,"ten":10,"fifteen":15,"twenty":20,"thirty":30,"sixty":60,"half":0.5}
+    m = _re.search(r"(\d+(?:\.\d+)?|" + "|".join(words) + r")\s*(?:and a half\s*)?(second|sec|minute|min)s?\b", t)
+    if not m:
+        return None
+    n = float(m.group(1)) if m.group(1).replace(".","").isdigit() else float(words.get(m.group(1), 0))
+    if "and a half" in t[m.start():m.end()+12]:
+        n += 0.5
+    return n * (60.0 if m.group(2).startswith("min") else 1.0)

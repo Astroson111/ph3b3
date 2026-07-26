@@ -47,15 +47,51 @@ _SYSTEM = (
     '"question": string or null}. When answerable is false, "question" MUST be a '
     "short, natural question asking the user for the missing information "
     '(e.g. "Which file do you mean?") — never a restatement of their request. '
+    "NEVER name, suggest or ask the user to pick a real musician, band, singer or "
+    "recording artist. For anything musical, ask about STYLE, mood, era, "
+    "instruments or tempo instead — \"what kind of sound?\", not \"which artist?\". "
+    "Suggesting an artist pushes the user toward a request that will be refused. "
     "Nothing else."
 )
+
+# A prompt is guidance; this is the guard. The clarifier runs on a local model
+# that can ignore an instruction, and a question naming a real performer is
+# exactly the steer the voice-clone floor exists to prevent — so a question that
+# names somebody is replaced rather than shown.
+_PERFORMER = r"(?:artists?|musicians?|bands?|singers?|vocalists?|performers?|groups?)"
+_ARTIST_ASK_RE = re.compile(
+    # "which artist", and "which outlaw country artist" — adjectives in between
+    rf"\b(?:which|what|whose|name a|pick an?)\s+(?:[\w'-]+\s+){{0,4}}{_PERFORMER}\b"
+    rf"|\b{_PERFORMER}\s+(?:do|would|are|did|should)\s+you\b"
+    rf"|\bbased\s+on\s+(?:which|what)\b"
+    rf"|\bsound(?:s|ing)?\s+like\s+(?:which|what|who)\b"
+    rf"|\bin\s+the\s+style\s+of\s+(?:which|what|who)\b"
+    rf"|\bwho\s+(?:should|would)\s+(?:it|the\s+\w+)\s+sound\s+like\b"
+    rf"|\bwhose\s+(?:voice|vocals?|sound|style)\b", re.I)
+
+# ...but a question about OUR OWN singer profiles is exactly the right question
+# to ask. "Which of your saved singers?" points at the local list, names nobody,
+# and blocking it would replace a good clarifier with a vaguer one.
+_OWN_LIST_RE = re.compile(
+    r"\b(?:your|my|the)\s+(?:saved\s+)?(?:singers?|voices?|profiles?|library|list)\b"
+    r"|\bsaved\s+singers?\b|\bin\s+your\s+library\b", re.I)
+
+_MUSIC_SAFE_ASK = ("What sort of sound are you after — style, mood, tempo, and what "
+                   "the singer should be like? Describe it rather than naming anyone.")
+
+
+def _scrub_artist_ask(q: str | None) -> str | None:
+    """Replace a clarifying question that steers toward a named performer."""
+    if q and _ARTIST_ASK_RE.search(q) and not _OWN_LIST_RE.search(q):
+        return _MUSIC_SAFE_ASK
+    return q
 
 
 def _clarifying(missing: list, user_text: str, model_q: str | None) -> str:
     """Guarantee a sensible spoken question on a hold: prefer the model's, but
     reject an empty one or a verbatim echo of the request; fall back to the
     missing fields, then to a generic ask."""
-    mq = (model_q or "").strip()
+    mq = _scrub_artist_ask((model_q or "").strip())
     if mq and len(mq) > 4 and mq.lower() != (user_text or "").strip().lower():
         return mq
     if missing:
