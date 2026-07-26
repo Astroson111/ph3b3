@@ -1800,7 +1800,11 @@
     <div class="card">
       <div class="card-title"><span data-i18n="amphion.lyrics">Lyrics</span> <span class="ari-opt" data-i18n="amphion.lyrics.opt">— optional</span></div>
       <textarea id="ampLyrics" class="ari-ta" rows="5" placeholder="[Verse] … [Chorus] …   (leave blank for an instrumental)" data-i18n-ph="amphion.lyrics.ph" autocomplete="off"></textarea>
-      <div class="ari-hint" data-i18n-html="amphion.lyrics.hint">Record/upload of sung lyrics (transcribed by Whisper) is coming — transcription is rough on singing, so you'll edit before generating.</div>
+      <div class="amp-row" style="margin-top:6px">
+        <button type="button" class="amp-preset" id="ampSingBtn">🎤 Sing or speak your lyrics</button>
+        <span class="ari-hint" id="ampSingState" style="margin-left:10px"></span>
+      </div>
+      <div class="ari-hint" data-i18n-html="amphion.lyrics.hint">Your voice is transcribed by Whisper into the box above and then <b>discarded</b> — the recording is never saved and never reaches the music model. Transcription is rough on singing, so edit before generating.</div>
     </div>
 
     <div class="card">
@@ -2050,6 +2054,71 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
     el.textContent = ph ? ('added to your description: “' + ph + '”') : '';
   };
 
+  // ── Sing/speak your lyrics → Whisper → the lyrics box ─────────────────────
+  // Approved in the recovery brief ("YES: speak or sing your lyrics"). Built on
+  // the SAME capture path the chat mic already uses, and posted to the EXISTING
+  // /transcribe endpoint — deliberately NOT to any Amphion route.
+  //
+  // That distinction is the whole design. Audio here becomes TEXT and is then
+  // dropped: it never reaches the music model, is never written to disk, and no
+  // Amphion endpoint gains a file body — so the "no external audio into
+  // generation" property, and the route enumeration behind it, both stay true.
+  // A microphone is also not a file picker: there is still nothing to hand a
+  // finished recording to.
+  window.ampSing = {rec:false, chunks:[], sr:48000, ctx:null, src:null, proc:null, stream:null};
+
+  window.ampSingStop = async function(){
+    const S = window.ampSing;
+    if (!S.rec) return;
+    S.rec = false;
+    try { if (S.src) S.src.disconnect(); if (S.proc) S.proc.disconnect();
+          if (S.stream) S.stream.getTracks().forEach(t => t.stop());
+          if (S.ctx) await S.ctx.close(); } catch(e){}
+    S.src = S.proc = S.stream = S.ctx = null;
+    $('ampSingBtn').classList.remove('recording');
+    $('ampSingBtn').textContent = '🎤 Sing or speak your lyrics';
+    if (!S.chunks.length){ $('ampSingState').textContent = ''; return; }
+    $('ampSingState').textContent = 'transcribing…';
+    try {
+      const b64 = chunksToB64(S.chunks, S.sr);       // same encoder as the chat mic
+      const r = await fetch('/transcribe', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({audio:b64})});
+      const d = await r.json();
+      const text = (d.text || '').trim();
+      S.chunks = [];                                  // drop the audio, always
+      if (!text){ $('ampSingState').textContent = 'nothing heard — try again, closer to the mic.'; return; }
+      const box = $('ampLyrics');
+      box.value = box.value.trim() ? (box.value.trim() + '\n' + text) : text;
+      $('ampSingState').textContent = 'transcribed — edit it, singing is hard to hear.';
+      box.focus();
+    } catch(e){
+      S.chunks = [];
+      $('ampSingState').textContent = 'transcription failed.';
+    }
+  };
+
+  window.ampSingStart = async function(){
+    const S = window.ampSing;
+    if (S.rec) return ampSingStop();
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){
+      $('ampSingState').textContent = 'no microphone available in this browser.'; return; }
+    try {
+      S.stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1, echoCancellation:false, noiseSuppression:false}});
+      S.ctx = new AudioContext(); S.sr = S.ctx.sampleRate;
+      S.src = S.ctx.createMediaStreamSource(S.stream);
+      S.proc = S.ctx.createScriptProcessor(4096,1,1);
+      S.chunks = []; S.rec = true;
+      S.proc.onaudioprocess = e => { if (S.rec) S.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+      S.src.connect(S.proc); S.proc.connect(S.ctx.destination);
+      $('ampSingBtn').classList.add('recording');
+      $('ampSingBtn').textContent = '⏹ Stop and transcribe';
+      $('ampSingState').textContent = 'listening… sing or speak, then press stop.';
+    } catch(e){
+      S.rec = false;
+      $('ampSingState').textContent = 'microphone permission denied.';
+    }
+  };
+
   window.ampBarsEstimate = function(){
     const bars = parseFloat(($('ampBars')||{}).value);
     const bpmRaw = (($('ampBpm')||{}).value || '').trim();
@@ -2130,6 +2199,7 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
       const e=$(id); if (e) e.addEventListener('change', ampVoiceRefresh); });
     ampVoiceRefresh();
     const c = $('ampCount'); if (c) c.addEventListener('input', ampUpdateCountNote);
+    const sb = $('ampSingBtn'); if (sb) sb.addEventListener('click', ampSingStart);
     ampBarsEstimate();
   });
 

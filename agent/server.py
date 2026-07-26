@@ -2196,10 +2196,16 @@ async def transcribe_audio(request: Request, body: dict):
     _heap = request.headers.get("X-Ph3b3-Heap")
     if _heap:
         log.warning("[DBG-HEAP] dev=%s %s  (free/largest-contiguous, bytes)", _device, _heap)
-    try:                                                          # [DBG-MIC] keep last capture for audition
-        open("/tmp/dio_mic_last.wav", "wb").write(audio_bytes)
-    except Exception:
-        pass
+    # [DBG-MIC] Keep the last capture for audition — ONLY when debug audio is
+    # explicitly enabled. This used to be unconditional, which quietly retained
+    # every capture at a fixed path. Amphion's sung-lyrics path promises the
+    # recording is transcribed and DISCARDED, and that promise has to be true of
+    # the endpoint, not just of the caller: audio in, text out, nothing kept.
+    if os.getenv("PH3B3_DEBUG_AUDIO"):
+        try:
+            open("/tmp/dio_mic_last.wav", "wb").write(audio_bytes)
+        except Exception:
+            pass
     # [DBG-MIC] characterise captured audio: mic-dead (near-zero level) vs STT-mishear (real level, wrong text)
     _rms = None
     _peak = 0
