@@ -1269,10 +1269,15 @@ def _music_description(msg: str) -> str:
     "make me a short outlaw country song with acoustic guitar" -> "a short outlaw
     country song with acoustic guitar"."""
     import re as _re
+    # \b after the article, or "some" eats the front of "something" and
+    # "make me something bluesy" becomes "thing bluesy" — which is then what the
+    # model is asked to compose.
     m = _re.sub(r"^\s*(?:hey\s+\w+[,\s]*)?(?:can you\s+|could you\s+|please\s+)?"
-                r"(?:make|write|generate|create|compose|produce|give)\s+(?:me\s+)?(?:a|an|some)?\s*",
+                r"(?:make|write|generate|create|compose|produce|give)\s+(?:me\s+)?"
+                r"(?:a|an|some|something)\b\s*",
                 "", msg.strip(), flags=_re.I)
-    return (m or msg).strip(" .?!")
+    m = (m or msg).strip(" .?!")
+    return m or msg.strip(" .?!")
 
 
 
