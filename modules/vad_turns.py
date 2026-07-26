@@ -39,9 +39,22 @@ KEEP_LINES = 2_000
 # The complete set of fields accepted from a device. Anything else in the payload
 # is DROPPED rather than stored — an allowlist, so a firmware change can never
 # start writing new (or sensitive) fields here without a deliberate edit.
-_INT_FIELDS = ("ep_ms", "dur_ms", "heap_free", "heap_max", "samples")
-_STR_FIELDS = ("why", "fw")
+#
+# "end" is how the CAPTURE ended (vadend | tap | cap), which is a different
+# question from "why" (what the VAD stream did). Without it the two are
+# conflated: a turn the user ended with a tap looks exactly like one that rode
+# the backstop, so tapping made the endpoint's hit rate look worse than it is.
+# "dropped" is the device's own count of diagnostic rows it failed to deliver —
+# an instrument that loses data should say how much, not quietly under-report.
+_INT_FIELDS = ("ep_ms", "dur_ms", "heap_free", "heap_max", "samples", "dropped")
+_STR_FIELDS = ("why", "fw", "end")
 _BOOL_FIELDS = ("ok",)
+
+# Capture-end reasons the device may report. Anything else is kept as-is but
+# counted under "other" rather than silently folded into a real category.
+END_VADEND = "vadend"   # the endpoint fired — the VAD did its job
+END_TAP = "tap"         # user ended it by hand — the VAD never got the chance
+END_CAP = "cap"         # rode the 8 s backstop — a genuine miss
 
 
 def _coerce_int(v):
@@ -117,21 +130,54 @@ def recent(limit: int = 50) -> list[dict]:
 
 def summary(limit: int = 200) -> dict:
     """Aggregate the recent window — the actual question is 'how often does it
-    work', which is tedious to eyeball from raw rows."""
+    work', which is tedious to eyeball from raw rows.
+
+    The rate is computed over turns where the endpoint actually had a chance to
+    fire. A tap-ended turn is not a miss: the user cut the capture short, so the
+    VAD was never allowed to reach a verdict. Counting those in the denominator
+    is what made earlier sessions read worse than they were. They are reported
+    separately rather than dropped, because a session that is mostly taps says
+    something about the sample, not the VAD."""
     rows = recent(limit)
     total = len(rows)
     ok = sum(1 for r in rows if r.get("ok"))
     fired = sum(1 for r in rows if (r.get("ep_ms") or 0) > 0)
+
+    ends: dict[str, int] = {}
+    for r in rows:
+        e = r.get("end") or "unreported"
+        ends[e] = ends.get(e, 0) + 1
+
+    # Eligible = the VAD was given the chance to end the turn.
+    eligible = ends.get(END_VADEND, 0) + ends.get(END_CAP, 0)
+    hits = ends.get(END_VADEND, 0)
+    misses = ends.get(END_CAP, 0)
+
     whys: dict[str, int] = {}
     for r in rows:
         w = r.get("why")
         if w:
             whys[w] = whys.get(w, 0) + 1
+
+    # The device counts diagnostic rows it could not deliver. It is cumulative
+    # since boot, so the largest value in the window is the floor on how many
+    # turns are missing from this file — the instrument declaring its own loss
+    # instead of letting it read as a clean session.
+    drops = [r["dropped"] for r in rows if isinstance(r.get("dropped"), int)]
     heaps = [r["heap_max"] for r in rows if isinstance(r.get("heap_max"), int)]
     return {
         "turns": total,
         "stream_ok": ok,
         "endpoint_fired": fired,
+        "ended_by": dict(sorted(ends.items(), key=lambda kv: -kv[1])),
+        # Rate over eligible turns only; None (not 0) when nothing was eligible,
+        # so "no data" can never be misread as "it never fired".
+        "eligible_turns": eligible,
+        "endpoint_hits": hits,
+        "endpoint_misses": misses,
+        "endpoint_rate": (round(hits / eligible, 3) if eligible else None),
+        "tap_ended": ends.get(END_TAP, 0),
+        "rows_lost_reported": max(drops) if drops else 0,
         "fail_reasons": dict(sorted(whys.items(), key=lambda kv: -kv[1])),
         "heap_max_min": min(heaps) if heaps else None,
         "heap_max_max": max(heaps) if heaps else None,

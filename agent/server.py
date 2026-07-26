@@ -2323,9 +2323,10 @@ async def vad_turn(request: Request):
         raise HTTPException(400, "vad turn body must be a JSON object")
     device = request.headers.get("X-Ph3b3-Device", "unidentified")
     row = vad_turns.record(device, data)
-    log.info("[vad-turn] %s ok=%s ep=%sms heap=%s/%s why=%s",
+    log.info("[vad-turn] %s ok=%s ep=%sms heap=%s/%s why=%s end=%s dropped=%s",
              device, row.get("ok"), row.get("ep_ms"),
-             row.get("heap_free"), row.get("heap_max"), row.get("why"))
+             row.get("heap_free"), row.get("heap_max"), row.get("why"),
+             row.get("end"), row.get("dropped"))
     return {"ok": True}
 
 
