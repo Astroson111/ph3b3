@@ -4045,6 +4045,65 @@ async def amphion_generate(request: Request, body: dict):
             "duration_note": duration_note}
 
 
+@app.post("/amphion/variations")
+async def amphion_variations(request: Request, body: dict):
+    """N variations of one prompt, on sequential seeds.
+
+    These are ORDINARY jobs — each takes morpheus.gpu_lock in turn, so they
+    serialise behind Wan/SDXL and behind each other. No second queue exists and
+    none is wanted. The consequence is the wait, which is why the estimate is
+    returned BEFORE anything is queued rather than discovered forty minutes in.
+    """
+    tags = (body.get("tags") or "").strip()
+    if not tags:
+        raise HTTPException(400, "a song description is required")
+    lyrics = (body.get("lyrics") or "").strip()
+    # Same floor as a single generation, on prompt AND lyrics, before anything queues.
+    _amphion_floor_gate(tags, lyrics, request)
+
+    try:
+        n = int(body.get("count", 4))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "count must be a whole number")
+    if n < 1:
+        raise HTTPException(400, "count must be at least 1")
+    if n > amphion.MAX_VARIATIONS:
+        raise HTTPException(400, f"at most {amphion.MAX_VARIATIONS} variations at a time "
+                                 f"— each one is a full generation and they run one after another")
+    try:
+        base_seed = int(body.get("seed"))
+    except (TypeError, ValueError):
+        base_seed = int.from_bytes(os.urandom(4), "big")
+
+    seeds, est_total, basis = amphion.plan_variations(base_seed, n)
+    try:
+        seconds = max(5.0, min(amphion.MAX_DURATION, float(body.get("seconds", amphion.DEFAULT_DURATION))))
+    except (TypeError, ValueError):
+        seconds = amphion.DEFAULT_DURATION
+
+    job_ids = []
+    for sd in seeds:
+        params = {
+            "tags": tags, "lyrics": lyrics,
+            "bpm": int(body.get("bpm", 120) or 120), "keyscale": body.get("keyscale", "C major"),
+            "timesig": str(body.get("timesig", "4")), "language": body.get("language", "en"),
+            "seconds": seconds, "seed": sd,
+            "variant": body.get("variant") if body.get("variant") in amphion.DIT_BY_VARIANT else "base",
+            "variation_of": base_seed,
+        }
+        jid = amphion.new_job()
+        amphion.register_task(jid, asyncio.create_task(amphion.run_generation(jid, params)))
+        job_ids.append(jid)
+
+    log.info("[amphion] queued %d variations (seeds %d..%d), est %.0fs — %s",
+             len(seeds), seeds[0], seeds[-1], est_total, basis)
+    return {"job_ids": job_ids, "seeds": seeds, "count": len(seeds),
+            "estimate_seconds_total": est_total, "estimate_basis": basis,
+            "estimate_note": (f"{len(seeds)} generations run one after another — "
+                              f"roughly {est_total/60:.1f} min in total. This is an estimate "
+                              f"({basis}); a Wan or SDXL job already running will add to it.")}
+
+
 @app.get("/amphion/job/{job_id}")
 async def amphion_job(job_id: str):
     j = amphion.jobs.get(job_id)

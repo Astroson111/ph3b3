@@ -148,6 +148,48 @@ def bars_to_seconds(bars: float, bpm: int | None, timesig: str = "4") -> tuple[f
     return round(secs, 3), f"{b:g} bars at {bpm}bpm in {beats_per_bar}/4 ≈ {secs:.1f}s (estimated)"
 
 
+
+# ── Variations from a seed (addendum item 4) ─────────────────────────────────
+# N tracks from seed+1..seed+N off one prompt. They are ordinary jobs: each one
+# takes morpheus.gpu_lock in turn, so they serialise behind Wan/SDXL and behind
+# each other. No new queue, no parallelism — which is exactly why the WAIT is the
+# thing the user has to be told about up front.
+MAX_VARIATIONS = 8
+# Used only until real history exists. ~21s/track was the Phase-1 observation on
+# this 4060 Ti; it is a starting point, not a measurement of THIS request.
+FALLBACK_SECONDS_PER_TRACK = 21.0
+
+
+def estimate_seconds_per_track() -> tuple[float, str]:
+    """(seconds, basis). Median of recorded generations when we have them, so the
+    estimate improves as the machine is used, and says which it is."""
+    times: list[float] = []
+    try:
+        for j in sorted(_songs_dir().glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True)[:20]:
+            try:
+                v = json.loads(j.read_text("utf-8")).get("elapsed_s")
+                if isinstance(v, (int, float)) and v > 0:
+                    times.append(float(v))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    if times:
+        times.sort()
+        med = times[len(times) // 2]
+        return med, f"median of the last {len(times)} generation(s)"
+    return FALLBACK_SECONDS_PER_TRACK, "no measured history yet — using the observed Phase-1 rate"
+
+
+def plan_variations(base_seed: int, n: int) -> tuple[list[int], float, str]:
+    """(seeds, estimated_total_seconds, basis). Seeds are sequential and distinct
+    so a variation set is reproducible one-by-one."""
+    n = max(1, min(int(n), MAX_VARIATIONS))
+    seeds = [(int(base_seed) + i + 1) % (2**32) for i in range(n)]
+    per, basis = estimate_seconds_per_track()
+    return seeds, round(per * n, 1), basis
+
+
 def _write_sidecar(job_id: str, p: dict, path: Path) -> None:
     """Reproducibility sidecar beside the track (prompt/lyrics/variant/seed). Per brief:
     written even on failure so a bad result can be reproduced."""
@@ -160,6 +202,12 @@ def _write_sidecar(job_id: str, p: dict, path: Path) -> None:
             # How the length was ARRIVED AT. A bars request records the bar count
             # and marks the length estimated, so nothing downstream can later
             # present it as a measured property of the audio.
+            # Wall-clock this generation actually took. Recorded so the
+            # variations estimate is measured rather than guessed.
+            "elapsed_s": p.get("elapsed_s"),
+            # Which variation set this came from, so a set is traceable back to
+            # the seed it was spun off. None for an ordinary single generation.
+            "variation_of": p.get("variation_of"),
             "duration_mode": p.get("duration_mode", "seconds"),
             "bars_requested": p.get("bars"),
             "duration_estimated": p.get("duration_mode") == "bars",
@@ -179,6 +227,8 @@ async def run_generation(job_id: str, p: dict) -> None:
     async with morpheus.gpu_lock:
         async with httpx.AsyncClient() as http:
             path = _songs_dir() / f"{job_id}.flac"
+            import time as _time
+            _t0 = _time.monotonic()
             try:
                 jobs[job_id]["state"] = "loading"
                 await morpheus.evict_hermes(http)          # free VRAM: swap Ollama out (shared pattern)
@@ -191,6 +241,7 @@ async def run_generation(job_id: str, p: dict) -> None:
                     "filename": audio["filename"], "subfolder": audio.get("subfolder", ""),
                     "type": audio.get("type", "output")}, timeout=120.0)).content
                 path.write_bytes(raw)
+                p = {**p, "elapsed_s": round(_time.monotonic() - _t0, 1)}
                 _write_sidecar(job_id, p, path)
                 jobs[job_id].update(state="done", file=str(path))
                 log.info("[amphion] job %s done -> %s (%d bytes)", job_id, path.name, len(raw))
