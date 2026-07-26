@@ -2049,8 +2049,9 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
     window.ampRemixOf = id;
     const b = $('ampRemixBanner');
     b.style.display = 'block';
-    b.innerHTML = 'Remixing <b>' + esc(id) + '</b> — edit anything above, then Generate. '
-                + '<a href="#" id="ampRemixCancel">cancel</a>';
+    b.innerHTML = 'Remixing <b>' + esc(id) + '</b> — edit anything above, then press Remix. '
+                + '<button type="button" id="ampRemixCancel" class="amp-preset" '
+                + 'style="margin-left:8px">✕ Cancel remix — back to Generate</button>';
     if (tags != null)   $('ampTags').value = tags;
     if (lyrics != null) $('ampLyrics').value = lyrics;
     $('ampGenerate').textContent = 'Remix';
@@ -2115,6 +2116,9 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
       box.querySelectorAll('.amp-del').forEach(b => b.addEventListener('click', async () => {
         if (!confirm('Delete this song?')) return;
         await fetch('/amphion/song/'+encodeURIComponent(b.dataset.id), {method:'DELETE'});
+        // If the deleted track was the remix target, drop the remix state with it
+        // — otherwise Generate stays stuck as Remix aimed at a track that is gone.
+        if (window.ampRemixOf === b.dataset.id) ampClearRemix();
         ampRefreshLibrary();
       }));
     } catch(e){ /* leave prior */ }
@@ -2179,7 +2183,20 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
       const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
       if (r.status === 403){ $('ampJobState').textContent = 'That prompt or lyrics can’t be generated (content policy).'; $('ampGenerate').disabled=false; setTimeout(()=>{$('ampJobCard').style.display='none';},4000); return; }
       const d = await r.json();
-      if (!r.ok){ $('ampJobState').textContent = 'Error: ' + (d.detail||'could not start'); $('ampGenerate').disabled=false; return; }
+      if (!r.ok){
+        // A FAILED remix must not strand the user in remix mode. Previously the
+        // state was only cleared on success, so a remix of a deleted track left
+        // the button saying "Remix" forever, pointing at an id that no longer
+        // exists — indistinguishable from "the Generate button disappeared".
+        $('ampJobState').textContent = 'Error: ' + (d.detail||'could not start');
+        if (remixOf){
+          ampClearRemix();
+          $('ampJobState').textContent += ' — remix cancelled, back to Generate.';
+          ampRefreshLibrary();
+        }
+        $('ampGenerate').disabled=false;
+        return;
+      }
       if (remixOf) ampClearRemix();
       // A variation set returns job_ids; follow the first and let the library
       // show the rest as they land.
