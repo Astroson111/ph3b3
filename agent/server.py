@@ -4045,6 +4045,23 @@ async def amphion_generate(request: Request, body: dict):
             "duration_note": duration_note}
 
 
+@app.get("/amphion/estimate")
+async def amphion_estimate(count: int = 1):
+    """How long N variations would take, BEFORE committing to them.
+
+    The variations route returns an estimate too, but by then the jobs are
+    queued — and "shown up front" is the actual requirement. This is the
+    read-only version the UI can call as the user moves the dial.
+    """
+    n = max(1, min(int(count or 1), amphion.MAX_VARIATIONS))
+    per, basis = amphion.estimate_seconds_per_track()
+    total = round(per * n, 1)
+    return {"count": n, "seconds_per_track": per, "seconds_total": total,
+            "basis": basis,
+            "note": (f"about {total/60:.1f} min for {n} track{'s' if n != 1 else ''} "
+                     f"— they run one after another ({basis}); anything already on the GPU adds to it")}
+
+
 @app.post("/amphion/variations")
 async def amphion_variations(request: Request, body: dict):
     """N variations of one prompt, on sequential seeds.

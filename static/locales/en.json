@@ -162,5 +162,8 @@
   "amphion.cancel": "Cancel",
   "amphion.library": "Library",
   "amphion.empty": "No songs yet.",
-  "amphion.custom": "Custom"
+  "amphion.custom": "Custom",
+  "amphion.unit.secs": "Seconds",
+  "amphion.unit.bars": "Bars",
+  "amphion.variations": "Variations"
 }
