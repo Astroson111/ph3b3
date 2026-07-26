@@ -3987,10 +3987,41 @@ async def amphion_generate(request: Request, body: dict):
         raise HTTPException(400, "a song description is required")
     lyrics = (body.get("lyrics") or "").strip()
     _amphion_floor_gate(tags, lyrics, request)   # floor on prompt AND lyrics, before anything queues
+    # Duration: seconds is the default unit; bars converts to an ESTIMATE.
+    # An unusable bars request is REFUSED with its reason rather than quietly
+    # falling back to 60s — silently generating a different length than asked for
+    # is the failure this switch exists to avoid.
+    # bpm serves two different jobs and they must not be conflated. As
+    # CONDITIONING it has a harmless default of 120. As the BASIS OF A BAR
+    # CONVERSION it must have been genuinely supplied — `int(x or 120)` turns an
+    # explicit 0 into 120 (zero is falsy), which silently produces a length the
+    # user never asked for. That is precisely the silent rewrite this switch
+    # exists to prevent, so the two are tracked separately.
+    _raw_bpm = body.get("bpm")
     try:
-        seconds = max(5.0, min(amphion.MAX_DURATION, float(body.get("seconds", amphion.DEFAULT_DURATION))))
+        bpm_supplied = int(_raw_bpm) if _raw_bpm not in (None, "") else None
     except (TypeError, ValueError):
-        seconds = amphion.DEFAULT_DURATION
+        bpm_supplied = None
+    if bpm_supplied is not None and bpm_supplied <= 0:
+        bpm_supplied = None                      # 0 / negative == not usable
+    bpm = bpm_supplied if bpm_supplied is not None else 120
+    timesig = str(body.get("timesig", "4"))
+    duration_mode = (body.get("duration_mode") or "seconds").lower()
+    duration_note = ""
+    if duration_mode == "bars":
+        est, why = amphion.bars_to_seconds(body.get("bars"), bpm_supplied, timesig)
+        if est is None:
+            raise HTTPException(400, why)
+        seconds, duration_note = est, why
+    else:
+        try:
+            seconds = float(body.get("seconds", amphion.DEFAULT_DURATION))
+        except (TypeError, ValueError):
+            seconds = amphion.DEFAULT_DURATION
+    clamped = max(5.0, min(amphion.MAX_DURATION, seconds))
+    if duration_mode == "bars" and clamped != seconds:
+        duration_note += f" — clamped to {clamped:g}s (limit {amphion.MAX_DURATION:g}s)"
+    seconds = clamped
     try:
         seed = int(body.get("seed"))
         if seed < 0:
@@ -4000,14 +4031,18 @@ async def amphion_generate(request: Request, body: dict):
     variant = body.get("variant") if body.get("variant") in amphion.DIT_BY_VARIANT else "base"
     params = {
         "tags": tags, "lyrics": lyrics,
-        "bpm": int(body.get("bpm", 120)), "keyscale": body.get("keyscale", "C major"),
-        "timesig": str(body.get("timesig", "4")), "language": body.get("language", "en"),
+        "bpm": bpm, "keyscale": body.get("keyscale", "C major"),
+        "timesig": timesig, "language": body.get("language", "en"),
         "seconds": seconds, "seed": seed, "variant": variant,
+        "duration_mode": duration_mode, "bars": body.get("bars") if duration_mode == "bars" else None,
     }
     job_id = amphion.new_job()
     task = asyncio.create_task(amphion.run_generation(job_id, params))
     amphion.register_task(job_id, task)
-    return {"job_id": job_id}
+    # duration_estimated says plainly that the length was DERIVED, not measured.
+    return {"job_id": job_id, "seconds": seconds,
+            "duration_estimated": duration_mode == "bars",
+            "duration_note": duration_note}
 
 
 @app.get("/amphion/job/{job_id}")

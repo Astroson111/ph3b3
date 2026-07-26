@@ -112,6 +112,42 @@ def build_workflow(job_id: str, p: dict) -> dict:
     }
 
 
+# ── Duration in bars (addendum item 3) ───────────────────────────────────────
+# Seconds stays the primary unit — it is what a layman wants and what the engine
+# actually takes. Bars is a convenience layer on top, for people who think in
+# musical time.
+#
+# THE HONESTY REQUIREMENT, and it is not cosmetic: bpm is a value we REQUEST in
+# the conditioning, not one we measure. ACE-Step is free to land near it, or not.
+# So a bar count converts to an ESTIMATED number of seconds, and the estimate is
+# what gets sent. We must never show "16 bars" afterwards as though the output
+# were verified to contain 16 bars — we did not count them, and the only honest
+# claim is "this is how long 16 bars WOULD be at the bpm we asked for".
+#
+# The same applies to length itself: measured output has already differed from
+# the request (a 20s track sits beside 60s ones), which is exactly why the fade
+# probes the file instead of trusting the sidecar.
+def bars_to_seconds(bars: float, bpm: int | None, timesig: str = "4") -> tuple[float | None, str]:
+    """(estimated_seconds, reason). None when the conversion cannot be made, with
+    the reason stated rather than a silent fallback to some default length."""
+    if not bpm or bpm <= 0:
+        return None, "bars needs a bpm — set one, or use seconds"
+    try:
+        b = float(bars)
+    except (TypeError, ValueError):
+        return None, "bars must be a number"
+    if b <= 0:
+        return None, "bars must be greater than zero"
+    try:
+        beats_per_bar = int(str(timesig).split("/")[0])
+    except (TypeError, ValueError):
+        beats_per_bar = 4
+    if beats_per_bar <= 0:
+        beats_per_bar = 4
+    secs = b * beats_per_bar * 60.0 / float(bpm)
+    return round(secs, 3), f"{b:g} bars at {bpm}bpm in {beats_per_bar}/4 ≈ {secs:.1f}s (estimated)"
+
+
 def _write_sidecar(job_id: str, p: dict, path: Path) -> None:
     """Reproducibility sidecar beside the track (prompt/lyrics/variant/seed). Per brief:
     written even on failure so a bad result can be reproduced."""
@@ -121,6 +157,12 @@ def _write_sidecar(job_id: str, p: dict, path: Path) -> None:
             "tags": p.get("tags", ""), "lyrics": p.get("lyrics", ""), "bpm": p.get("bpm"),
             "keyscale": p.get("keyscale"), "timesignature": p.get("timesig", "4"),
             "seconds": p.get("seconds"), "seed": p.get("seed"),
+            # How the length was ARRIVED AT. A bars request records the bar count
+            # and marks the length estimated, so nothing downstream can later
+            # present it as a measured property of the audio.
+            "duration_mode": p.get("duration_mode", "seconds"),
+            "bars_requested": p.get("bars"),
+            "duration_estimated": p.get("duration_mode") == "bars",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "generated_by": "Ph3b3 Amphion — AI-generated (ACE-Step 1.5)"}
     (path.with_suffix(".json")).write_text(json.dumps(meta, indent=2))
