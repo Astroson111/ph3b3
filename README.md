@@ -50,7 +50,7 @@ Ph3b3 is a FastAPI application that runs entirely on **your own machine** — th
 - **Hearing (STT):** Whisper, running on CUDA
 - **Server:** FastAPI over HTTPS, basic-auth protected
 - **Modules:** 32 capability modules (plus 16 infrastructure modules — paths, auth, routing, STT/TTS plumbing. *Capability* means a thing she can DO for you; the split is what makes the number checkable rather than a vibe, and it had drifted before)
-- **Tools:** 98 callable functions she can invoke
+- **Tools:** 100 callable functions she can invoke
 
 Her range is wide for a single-author build:
 
