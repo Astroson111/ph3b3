@@ -706,6 +706,66 @@ class ResumeModule:
             log.error(f"JD keyword extraction failed: {e}")
             return [], []
 
+    # One-word verdicts from the grounding skeptic. Anything else is treated as
+    # STRETCH — an unparseable answer is not permission to insert a claim.
+    _GROUNDING_SOUND = "SOUND"
+
+    def _verify_grounding(self, term: str, source: str) -> tuple[bool, str]:
+        """Second opinion on ONE grounding claim. Returns (keep, reason).
+
+        The first pass decides "does the resume evidence this skill under other
+        words?" while holding the whole resume and a list of keywords, and it is
+        lenient: for a bench-repair technician it accepted BOTH "C" and "embedded"
+        on the strength of "Diagnosed and repaired consumer laptops and phones."
+        Nothing was invented — but repairing laptops is not C programming, and a
+        resume asserting it has drifted from true.
+
+        So each surviving claim is put to a SEPARATE, deliberately skeptical call
+        that sees only that one line and that one term. Isolation matters: a
+        reviewer holding the full list gets agreeable, and one weak claim rides
+        out on the back of four strong ones.
+
+        Note what this does NOT do: it does not require the line to share words
+        with the term. Grounding means the resume shows the skill under DIFFERENT
+        words — a lexical-overlap test would reject every legitimate case and
+        defeat the feature. The question is whether the line demonstrates the
+        skill, which is a judgement, so it gets a judge with a hostile prior.
+        """
+        prompt = (
+            "You are auditing one claim on a resume for honesty. Be strict.\n\n"
+            f"CLAIM: the line below proves the candidate has hands-on experience with "
+            f"\"{term}\".\n\n"
+            f"THE LINE:\n\"{source}\"\n\n"
+            "Does that line, ON ITS OWN, demonstrate real hands-on experience with that "
+            "specific thing?\n\n"
+            "SOUND — the line describes THE SAME WORK under a different name. Different "
+            "wording is expected and is not a problem; that is the whole point. If the "
+            "activity described IS the thing, or is that thing's standard technology or "
+            "vocabulary, say SOUND.\n"
+            "  e.g. \"built the Jenkins pipeline running nightly builds and deploys\" IS "
+            "CI/CD. \"bring-up of sensors over two-wire serial buses\" IS I2C.\n\n"
+            "STRETCH — the line is merely NEAR the thing. Working on a product that "
+            "contains a technology, or in the same field, is not using it. Accepting the "
+            "claim would need an assumption the line does not state.\n"
+            "  e.g. \"repaired consumer laptops\" is NOT C programming — laptops contain "
+            "software, but repairing one is not writing it.\n\n"
+            "Ask: could a hiring manager point to the specific words that show the skill? "
+            "If they would have to take it on faith, answer STRETCH.\n\n"
+            f"Answer with ONE word and nothing else: {self._GROUNDING_SOUND} or STRETCH."
+        )
+        try:
+            raw = self._llm(prompt, temperature=0.0, num_ctx=2048, timeout=60)
+            verdict = re.sub(r"[^A-Za-z]", "", (raw or "").strip().split()[0] if raw.strip() else "")
+            keep = verdict.upper() == self._GROUNDING_SOUND
+            return keep, ("" if keep else f"second-opinion audit called this a stretch "
+                                          f"(said: {verdict.upper() or 'nothing parseable'})")
+        except Exception as e:
+            # Fail CLOSED. A transient failure must not become permission to write
+            # a claim into someone's resume; the term is still reported to the
+            # user as a gap, it is simply not inserted.
+            log.warning("[ariadne] grounding audit failed for %r — treating as unsupported: %s", term, e)
+            return False, "the honesty audit could not run, so it was not inserted"
+
     def _classify_gaps(self, resume_text: str, missing: list[str]):
         """For terms missing verbatim from the resume, decide GROUNDED (evidenced
         under other words — with the justifying line) vs UNSUPPORTED (no evidence)."""
@@ -731,6 +791,7 @@ class ResumeModule:
         try:
             data = self._extract_json(self._llm(prompt, temperature=0.1), {})
             grounded, unsupported = [], []
+            demoted: list[dict] = []          # claims the audit rejected, kept for the report
             seen = set()
             for g in data.get("grounded", []):
                 term = str(g.get("term", "")).strip()
@@ -738,8 +799,16 @@ class ResumeModule:
                 # trust-but-verify: only accept GROUNDED if the quoted source really
                 # appears in the resume. Otherwise treat as unsupported.
                 if term and src and self._loose_contains(resume_text, src):
-                    grounded.append({"term": term, "source": src})
-                    seen.add(term.lower())
+                    # Quote is real. Now: does it actually support the term? A
+                    # separate skeptic decides, because the first pass is lenient.
+                    keep, why = self._verify_grounding(term, src)
+                    if keep:
+                        grounded.append({"term": term, "source": src})
+                        seen.add(term.lower())
+                    else:
+                        log.info("[ariadne] grounding demoted: %r <- %r (%s)", term, src[:60], why)
+                        unsupported.append(term)
+                        demoted.append({"term": term, "source": src, "why": why})
                 elif term:
                     unsupported.append(term)
             for t in data.get("unsupported", []):
@@ -751,6 +820,7 @@ class ResumeModule:
             for m in missing:
                 if m.lower() not in classified:
                     unsupported.append(m)
+            self._last_demoted = demoted      # surfaced by the builder's report
             return grounded, unsupported
         except Exception as e:
             log.error(f"Gap classification failed: {e}")

@@ -31,7 +31,24 @@ they paste, a Piper voice downloaded once at setup). Every row below inherits th
 Recorded here rather than left in a commit message, because a guardrail with a
 known soft spot is a different claim from one without.
 
-- **Ariadne — "grounded" is a model judgement, and it can be loose.**
+- **Ariadne — "grounded" is a model judgement, and it can be loose.** ✅ **ADDRESSED
+  2026-07-25** — every surviving grounding claim now faces a second, deliberately
+  skeptical pass (`_verify_grounding`) that sees only that one line and that one
+  term, and demotes anything it calls a stretch to UNSUPPORTED. Isolation is the
+  point: a reviewer holding the whole list gets agreeable, and a weak claim rides
+  out on the back of strong ones. It fails **closed** — if the audit call errors,
+  the term is not inserted. Measured 11/11 both directions: the five thin claims
+  rejected (including the two observed below), the six legitimate ones kept.
+  The first strict draft scored only 2/6 on legitimate claims — it rejected
+  *CI/CD* grounded on "the Jenkins pipeline that ran nightly builds and deploys"
+  and *I2C* on "two-wire serial buses", which are the same thing under a different
+  name and exactly what grounding exists to catch. That would have traded a
+  truthfulness bug for a uselessness one. The prompt now separates *same work,
+  different name* (SOUND) from *merely adjacent* (STRETCH) with an example of
+  each. **Residual risk:** this is still a model judging a model, so it is a
+  narrower gap rather than a closed one, and the justifying line is still printed
+  beside every insertion because human review remains the real backstop.
+  *Original finding, kept for the record:*
   *(found during the v1.1 audit, 2026-07-25; pre-existing, not introduced by v1.1)*
   The never-fabricate floor holds because a keyword is only inserted when the
   résumé already evidences it. But *whether it evidences it* is decided by the
