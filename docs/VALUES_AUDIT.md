@@ -215,6 +215,26 @@ known soft spot is a different claim from one without.
   wrong or corrupt file reports *available* until it is actually run — the
   runtime message is what closes that, not the capability map
 
+- **Apelles blur — "portrait mode" is two capabilities, and merging them would
+  have been a quiet overclaim.** *(2026-07-26)* **Subject blur** is binary — the
+  subject is sharp and *everything* else is blurred equally, off the u2net matte
+  already on this box, so it works today. **Depth blur** is graduated by distance
+  and needs a depth model. They produce visibly different pictures, so they are
+  listed, controlled and refused **separately**: a user who asks for depth is told
+  it is unavailable rather than silently handed the binary version, which is the
+  failure mode a single "portrait mode" toggle would have shipped. Both drive the
+  same blend, so the only difference is where the weight map comes from —
+  verified with a synthetic gradient (falloff monotonic across 5 bands,
+  66→6→2→1→1) because the ONNX inference cannot be exercised until a model exists,
+  and that limit is stated rather than implied away. Subject blur measured live:
+  subject sharpness 677.8 → 611.4 while background 4.3 → 1.2. Drop-in proven both
+  ways — a file in `~/.apelles/depth/` flipped depth blur to available (24/27 →
+  25/27) and removing it reverted cleanly. A corrupt file raised a raw
+  `InvalidProtobuf`, which is loud but useless, so it is now wrapped: *"'X' isn't a
+  depth model I can load — it's corrupt, incomplete, or not an ONNX file."* Same
+  known gap as upscale: presence-based detection means a bad file reads available
+  until it runs
+
 - **Apelles — deblur ringing looks like detail.** *(open, by design)* Wiener
   deconvolution overshoots at a hard edge: measured +11 grey levels above true
   white at radius 2, +35 at radius 4, and clean at the shipped preset radius 1.4.

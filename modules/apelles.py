@@ -828,10 +828,18 @@ def capabilities(refresh: bool = False) -> dict:
             bool(sdxl) and have("ImagePadForOutpaint"),
             comfy_down or "no SDXL checkpoint found",
             "add an SDXL checkpoint to models/checkpoints/"),
-        cap("depth_blur", "Depth-based background blur", 3,
-            _any_node(r"depthanything|midas|zoedepth|depthmap"),
-            comfy_down or "no depth-estimation node in ComfyUI",
-            "install a depth node (Depth Anything / MiDaS) in ComfyUI"),
+        # Two capabilities, not one. Subject blur works today off the matte;
+        # graduated depth blur needs a model. Merging them under "portrait mode"
+        # would quietly hand someone the binary version when they asked for depth.
+        cap("background_blur", "Background blur (subject matte, binary)", 2,
+            u2net_available(),
+            "needs the matting model (~/.u2net/u2net.onnx)",
+            "put a u2net.onnx in ~/.u2net/"),
+        cap("depth_blur", "Depth blur (graduated by distance)", 3,
+            depth_available() or _any_node(r"depthanything|midas|zoedepth|depthmap"),
+            "no depth model installed",
+            f"drop a MiDaS or Depth Anything .onnx into {DEPTH_DIR} and restart "
+            f"(no ComfyUI node needed)"),
         # RESTORATION is the in-scope half of ruling B and genuinely wanted (old
         # photos, graphic-design work). But the popular ComfyUI "face" nodes —
         # ReActor above all — are face SWAPPERS that happen to bundle restoration.
@@ -1403,3 +1411,144 @@ def upscale_precheck(model_name: str | None = None) -> tuple[str, str | None]:
             return "", (f"I don't have '{model_name}'. Installed: {', '.join(have)}.")
         return model_name, None
     return have[0], None
+
+
+# ── Background blur: two different things, named differently ─────────────────
+# "Portrait mode" is usually two separate capabilities wearing one label, and
+# collapsing them would be the kind of quiet overclaim this module keeps catching:
+#
+#   subject blur  — binary. Subject sharp, EVERYTHING else blurred equally. Uses
+#                   the u2net matte already on this box, so it works today.
+#   depth blur    — graduated. Blur increases with distance, so a wall behind a
+#                   sofa behind a person defocus in that order. Needs a depth
+#                   model, and until one is installed it is honestly unavailable.
+#
+# They are listed as separate capabilities because they produce visibly different
+# pictures, and a user who asked for depth should not silently get the binary one.
+DEPTH_DIR = Path(os.getenv("APELLES_DEPTH_DIR", str(Path.home() / ".apelles" / "depth")))
+_depth_session = None
+
+
+def depth_models() -> list[str]:
+    try:
+        return sorted(p.name for p in DEPTH_DIR.iterdir()
+                      if p.is_file() and p.suffix.lower() == ".onnx")
+    except Exception:
+        return []
+
+
+def depth_available() -> bool:
+    try:
+        import onnxruntime  # noqa: F401
+    except Exception:
+        return False
+    return bool(depth_models())
+
+
+def _blur_by_map(im: Image.Image, weight: "np.ndarray", strength: float = 1.0,
+                 levels: int = 5) -> Image.Image:
+    """Blend progressively blurrier copies according to `weight` (0 = sharp, 1 = max).
+
+    Shared by both blurs, which is the point: the ONLY difference between subject
+    blur and depth blur is where the weight map comes from. Blending pre-blurred
+    levels rather than blurring per-pixel keeps it a few hundred ms on CPU and
+    gives a smooth falloff instead of a visible cut-out edge.
+    """
+    s = _clamp(strength, 0.0, 3.0)
+    if s == 0:
+        return im
+    rgb = im.convert("RGB")
+    w = np.clip(weight.astype(np.float32), 0.0, 1.0)
+    if w.shape != (rgb.height, rgb.width):
+        w = np.asarray(Image.fromarray((w * 255).astype(np.uint8), "L")
+                       .resize(rgb.size, Image.LANCZOS), np.float32) / 255.0
+    base = np.asarray(rgb, np.float32)
+    n = int(max(2, min(int(levels), 8)))
+    max_radius = 2.0 + 10.0 * s
+    stack = [base]
+    for i in range(1, n):
+        r = max_radius * (i / (n - 1))
+        stack.append(np.asarray(rgb.filter(ImageFilter.GaussianBlur(radius=r)), np.float32))
+    # Piecewise-linear blend across the stack, so weight maps smoothly to blur.
+    pos = w * (n - 1)
+    lo = np.floor(pos).astype(np.int32)
+    hi = np.clip(lo + 1, 0, n - 1)
+    frac = (pos - lo)[..., None]
+    out = np.zeros_like(base)
+    for i in range(n):
+        m_lo = (lo == i)[..., None]
+        m_hi = (hi == i)[..., None]
+        out += stack[i] * (m_lo * (1 - frac) + m_hi * frac)
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+
+
+def op_background_blur(im: Image.Image, strength: float = 1.0,
+                       feather: float = 3.0) -> Image.Image:
+    """Blur everything that isn't the subject. Binary, not graduated.
+
+    Uses the same u2net matte as the cutout, softened a little more than a cutout
+    needs — a hard matte edge reads as a sticker, and a blur boundary is far more
+    forgiving of a soft one."""
+    if not u2net_available():
+        raise ApellesError("subject blur needs the matting model (~/.u2net/u2net.onnx)")
+    matte = alpha_matte(im)
+    matte = op_edge_refine(matte, erode=0, feather=float(_clamp(feather, 0, 12)))
+    w = 1.0 - (np.asarray(matte, np.float32) / 255.0)     # background = 1 = blurred
+    return _blur_by_map(im, w, strength=strength)
+
+
+def depth_map(im: Image.Image) -> "np.ndarray":
+    """Normalised depth, 0 = nearest, 1 = furthest.
+
+    Written to accept whatever single-input depth ONNX is dropped in (MiDaS,
+    Depth Anything): the input geometry is read from the model rather than
+    assumed. UNTESTED until a model exists on this box — said plainly rather than
+    implied to work."""
+    global _depth_session
+    import onnxruntime as ort
+    models = depth_models()
+    if not models:
+        raise ApellesError("no depth model installed")
+    if _depth_session is None:
+        try:
+            _depth_session = ort.InferenceSession(str(DEPTH_DIR / models[0]),
+                                                  providers=["CPUExecutionProvider"])
+        except Exception as e:
+            # A raw InvalidProtobuf tells the user nothing actionable. Same lesson
+            # as the upscale loader: detection is by file presence, so the runtime
+            # message is what has to carry the truth about a bad file.
+            raise ApellesError(
+                f"'{models[0]}' isn't a depth model I can load — it's corrupt, "
+                f"incomplete, or not an ONNX file. Re-download it into {DEPTH_DIR}. "
+                f"({type(e).__name__})")
+    sess = _depth_session
+    inp = sess.get_inputs()[0]
+    shape = [d if isinstance(d, int) and d > 0 else None for d in inp.shape]
+    h = shape[2] or 384
+    w = shape[3] or 384
+    rgb = im.convert("RGB").resize((w, h), Image.LANCZOS)
+    a = np.asarray(rgb, np.float32) / 255.0
+    a = (a - np.array([0.485, 0.456, 0.406], np.float32)) / np.array([0.229, 0.224, 0.225], np.float32)
+    a = np.transpose(a, (2, 0, 1))[None].astype(np.float32)
+    out = np.asarray(sess.run(None, {inp.name: a})[0]).squeeze()
+    lo, hi = float(out.min()), float(out.max())
+    d = (out - lo) / (hi - lo) if hi > lo else np.zeros_like(out)
+    # MiDaS-family models emit INVERSE depth (big = near). Flip so 1 = far, which
+    # is what the blend expects.
+    return 1.0 - d
+
+
+def op_depth_blur(im: Image.Image, strength: float = 1.0, focus: float = 0.0) -> Image.Image:
+    """Graduated defocus: blur grows with distance from the focal plane."""
+    if not depth_available():
+        raise ApellesError(
+            "depth blur needs a depth model — drop a MiDaS or Depth Anything .onnx "
+            f"into {DEPTH_DIR} and restart")
+    d = depth_map(im)
+    f = _clamp(focus, 0.0, 1.0)
+    w = np.abs(d - f) / max(1e-6, max(f, 1.0 - f))       # distance from focal plane
+    return _blur_by_map(im, w, strength=strength)
+
+
+_OPS["background_blur"] = op_background_blur
+_OPS["depth_blur"] = op_depth_blur

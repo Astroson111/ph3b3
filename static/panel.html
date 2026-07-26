@@ -1995,6 +1995,15 @@
       <label>Deblur radius <span id="apDbV">0</span><br><input type="range" id="apDb" min="0" max="6" step="0.1" value="0"></label>
       <div style="margin-top:6px"><button type="button" id="apRestore">Apply restore-scan preset</button></div>
     </div>
+    <div style="margin-top:12px;padding:8px;border:1px solid #4a6b8a;border-radius:8px">
+      <div><b>Background blur</b></div>
+      <div class="ari-hint" style="margin:4px 0 6px">Two different things, deliberately not merged:
+      <b>subject blur</b> is binary &mdash; you sharp, everything else equally blurred &mdash; and works now.
+      <b>Depth blur</b> is graduated by distance and needs a depth model.</div>
+      <label>Subject blur <span id="apBbV">0</span><br><input type="range" id="apBb" min="0" max="3" step="0.1" value="0"></label><br>
+      <label>Depth blur <span id="apDpV">0</span><br><input type="range" id="apDp" min="0" max="3" step="0.1" value="0" disabled></label>
+      <div class="ari-hint" id="apDpNote"></div>
+    </div>
     <div id="apUpWrap" style="margin-top:12px;padding:8px;border:1px solid #4a6b8a;border-radius:8px">
       <div><b>Upscale</b> &mdash; learned enlargement (Real-ESRGAN, via ComfyUI)</div>
       <div class="ari-hint" id="apUpNote" style="margin:4px 0 8px">checking&hellip;</div>
@@ -2184,7 +2193,8 @@ let apInit;
 
   const SLIDERS = [['apExp','apExpV',1],['apCon','apConV',2],['apSat','apSatV',2],
                    ['apTmp','apTmpV',0],['apRot','apRotV',0],['apSh','apShV',1],['apDn','apDnV',1],
-                   ['apDs','apDsV',1],['apCl','apClV',1],['apDc','apDcV',2],['apDb','apDbV',1]];
+                   ['apDs','apDsV',1],['apCl','apClV',1],['apDc','apDcV',2],['apDb','apDbV',1],
+                   ['apBb','apBbV',1],['apDp','apDpV',1]];
   SLIDERS.forEach(function(t){
     const el = $(t[0]); if (!el) return;
     el.addEventListener('input', function(){ $(t[1]).textContent = (+el.value).toFixed(t[2]); });
@@ -2208,6 +2218,8 @@ let apInit;
     if (+$('apDc').value > 0) out.push({op:'decast', amount:+$('apDc').value});
     if (+$('apCl').value > 0) out.push({op:'clahe', clip:+$('apCl').value});
     if (+$('apDb').value > 0) out.push({op:'deblur', radius:+$('apDb').value});
+    if (+$('apBb').value > 0) out.push({op:'background_blur', strength:+$('apBb').value});
+    if (+$('apDp').value > 0) out.push({op:'depth_blur', strength:+$('apDp').value});
     return out;
   }
 
@@ -2235,6 +2247,15 @@ let apInit;
     h += '<div class="ari-hint" style="margin-top:8px">' + caps.available + ' of ' + caps.total +
          ' available' + (caps.comfy_reachable ? '' : ' &middot; ComfyUI is not reachable') + '</div>';
     $('apCaps').innerHTML = h;
+    const dep = caps.items.find(function(i){ return i.id === 'depth_blur'; });
+    if (dep) {
+      $('apDp').disabled = !dep.available;
+      $('apDpNote').innerHTML = dep.available ? ''
+        : '<span style="color:#e0a33a">Depth blur unavailable: ' + esc(dep.reason) +
+          '. ' + esc(dep.fix || '') + '</span>';
+    }
+    const sub = caps.items.find(function(i){ return i.id === 'background_blur'; });
+    if (sub) $('apBb').disabled = !sub.available;
     const ps = $('apPreset');
     if (ps.options.length <= 1) (caps.presets||[]).forEach(function(n){ ps.add(new Option(n, n)); });
     const pp = $('apPipe');
