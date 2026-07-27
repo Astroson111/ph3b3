@@ -1820,17 +1820,32 @@
             <button type="button" class="amp-preset" data-secs="180">3 min</button>
             <button type="button" class="amp-preset" data-secs="custom" data-i18n="amphion.custom">Custom</button>
           </div>
-          <input type="number" id="ampSecs" class="ari-url" value="60" min="5" max="480" step="5" style="display:none;margin-top:6px">
+          <!-- step="any": free entry. step="5" made 187 an "invalid" value to the
+               browser and nudged the arrows to round numbers; the model takes a
+               float and the user is allowed to want 187.5s. -->
+          <input type="number" id="ampSecs" class="ari-url" value="60" min="5" max="240" step="any" style="display:none;margin-top:6px">
           <!-- Seconds stays the default unit. Bars is an optional layer for people
                who think in musical time; it converts to an ESTIMATE because bpm is
                requested, never measured. -->
           <div class="amp-unit" style="margin-top:6px;display:flex;gap:6px;align-items:center">
             <button type="button" class="amp-preset active" id="ampUnitSecs" data-i18n="amphion.unit.secs">Seconds</button>
             <button type="button" class="amp-preset" id="ampUnitBars" data-i18n="amphion.unit.bars">Bars</button>
-            <input type="number" id="ampBars" class="ari-url" value="16" min="1" max="512" step="1"
+            <input type="number" id="ampBars" class="ari-url" value="16" min="1" max="512" step="any"
                    style="display:none;width:5.5rem" aria-label="bars">
+            <!-- The meter the bar math READS. The node takes these four and no
+                 others, so the control offers exactly those. -->
+            <label for="ampTimesig" class="ari-hint" style="margin-left:4px">time sig</label>
+            <select id="ampTimesig" class="ari-url" style="width:5.5rem" aria-label="time signature">
+              <option value="4" selected>4/4</option>
+              <option value="3">3/4</option>
+              <option value="6">6/8</option>
+              <option value="2">2/4</option>
+            </select>
           </div>
+          <!-- Always-visible equivalence readout: seconds ⇄ bars in both modes. -->
           <div class="ari-hint" id="ampBarsNote" style="display:none"></div>
+          <div class="ari-hint" id="ampBarWarn" style="display:none;color:var(--warn,#e0a53a)"></div>
+          <div id="ampBarSnap" style="display:none;margin-top:4px;gap:6px;flex-wrap:wrap"></div>
           <div class="ari-hint" id="ampEta"></div>
           <div class="ari-hint" id="ampLyrWarn" style="display:none;color:var(--warn,#e0a53a)"></div>
         </div>
@@ -2735,33 +2750,149 @@ let apInit;
     }
   };
 
-  window.ampBarsEstimate = function(){
-    const bars = parseFloat(($('ampBars')||{}).value);
-    const bpmRaw = (($('ampBpm')||{}).value || '').trim();
-    const bpm = parseInt(bpmRaw, 10);
-    const note = $('ampBarsNote');
+  // ==== AMP-DURATION-MATH — pure, no DOM. Mirrored by modules/amphion.py
+  //      (beats_per_bar / seconds_per_bar / seconds_to_bars / bar_analysis); the
+  //      two are held together by a test that runs both over the same grid.
+  //      The SERVER still owns dispatch: this block only draws the readout. ====
+  window.ampDur = (function(){
+    var TIMESIGS = ['2','3','4','6'];   // the node's COMBO options, verbatim
+    var MIN_S = 5, MAX_S = 240;         // mirrors amphion.MIN_DURATION / MAX_DURATION
+    var EPS = 1e-6;
+    function beatsPerBar(ts){
+      if (ts === null || ts === undefined) return null;
+      var head = String(ts).trim().split('/')[0].trim();
+      return TIMESIGS.indexOf(head) >= 0 ? parseInt(head, 10) : null;
+    }
+    function secondsPerBar(bpm, ts){
+      var beats = beatsPerBar(ts);
+      var b = parseFloat(bpm);
+      if (beats === null || !isFinite(b) || b <= 0) return null;   // never divide
+      return (60 / b) * beats;
+    }
+    function secondsToBars(seconds, bpm, ts){
+      var spb = secondsPerBar(bpm, ts), s = parseFloat(seconds);
+      if (spb === null || !isFinite(s) || s <= 0) return null;
+      return s / spb;
+    }
+    function isWhole(x){ return Math.abs(x - Math.round(x)) < EPS; }
+    function round3(x){ return Math.round(x * 1000) / 1000; }
+    function analyse(seconds, bpm, ts){
+      var spb = secondsPerBar(bpm, ts), bars = secondsToBars(seconds, bpm, ts);
+      if (spb === null || bars === null) return null;     // caller HIDES the readout
+      var whole = isWhole(bars), phrase = whole && isWhole(bars / 4);
+      var sugg = [];
+      if (!whole){
+        var cands = [['whole bar', Math.floor(bars)], ['whole bar', Math.ceil(bars)],
+                     ['4-bar phrase', Math.floor(bars/4)*4], ['4-bar phrase', Math.ceil(bars/4)*4]];
+        var seen = {};
+        cands.forEach(function(c){
+          var nb = c[1]; if (nb <= 0) return;             // nothing to snap down to
+          var secs = round3(nb * spb);
+          if (secs < MIN_S || secs > MAX_S) return;       // never offer a refused length
+          if (seen[secs]) return; seen[secs] = 1;
+          sugg.push({label: c[0], bars: nb, seconds: secs});
+        });
+      }
+      return {bars: bars, secondsPerBar: spb, beatsPerBar: beatsPerBar(ts),
+              wholeBar: whole, phraseClean: phrase, subBar: bars < 1, suggestions: sugg};
+    }
+    return {TIMESIGS: TIMESIGS, MIN_S: MIN_S, MAX_S: MAX_S, beatsPerBar: beatsPerBar,
+            secondsPerBar: secondsPerBar, secondsToBars: secondsToBars, analyse: analyse};
+  })();
+  // ==== /AMP-DURATION-MATH ====
+
+  // Effective length in seconds for whatever mode is active. In bars mode this is
+  // the ESTIMATE the server will recompute; it is never written back into the
+  // seconds field, so switching modes cannot quietly rewrite the other one.
+  window.ampEffectiveSeconds = function(){
+    if (window.ampUnit === 'bars'){
+      var spb = ampDur.secondsPerBar(($('ampBpm')||{}).value, ($('ampTimesig')||{}).value);
+      var bars = parseFloat(($('ampBars')||{}).value);
+      if (spb === null || !isFinite(bars) || bars <= 0) return null;
+      return bars * spb;
+    }
+    var s = parseFloat(($('ampSecs')||{}).value);
+    return isFinite(s) && s > 0 ? s : null;
+  };
+
+  // The readout, the warning and the snap offers. Called on every input that can
+  // change any of them — including BPM, which by design moves only the READOUT
+  // and never the value the user typed in the active unit.
+  window.ampDurationRefresh = function(){
+    var note = $('ampBarsNote'), warn = $('ampBarWarn'), snap = $('ampBarSnap');
     if (!note) return null;
-    if (!bpmRaw || !isFinite(bpm) || bpm <= 0){
+    var hide = function(){ [note, warn, snap].forEach(function(e){ if (e) e.style.display = 'none'; }); };
+    var bpmRaw = (($('ampBpm')||{}).value || '').trim();
+    var ts = (($('ampTimesig')||{}).value || '');
+    var spb = ampDur.secondsPerBar(bpmRaw, ts);
+    if (spb === null){
       // Disabled WITH A REASON, never a silent fallback to some default length.
+      hide();
       $('ampUnitBars').disabled = true;
       note.style.display = 'block';
-      note.textContent = 'Bars needs a BPM — set one above, or use Seconds.';
+      note.textContent = ampDur.beatsPerBar(ts) === null
+        ? 'Bars needs a time signature — pick 4/4, 3/4, 6/8 or 2/4.'
+        : 'Bars needs a BPM — set one below, or use Seconds.';
       return null;
     }
     $('ampUnitBars').disabled = false;
-    if (window.ampUnit !== 'bars'){ note.style.display = 'none'; return null; }
-    if (!isFinite(bars) || bars <= 0){
+    var secs = ampEffectiveSeconds();
+    if (secs === null){
+      hide();
       note.style.display = 'block';
-      note.textContent = 'Bars must be greater than zero.';
+      note.textContent = (window.ampUnit === 'bars') ? 'Bars must be greater than zero.'
+                                                     : 'Length must be greater than zero.';
       return null;
     }
-    const beats = 4;                       // 4/4 unless a time-signature field exists
-    const secs = bars * beats * 60 / bpm;
+    var a = ampDur.analyse(secs, bpmRaw, ts);
+    var meter = ampDur.beatsPerBar(ts) + ' beats to the bar';
+    var basis = ' · ' + spb.toFixed(2) + 's per bar at ' + parseInt(bpmRaw, 10) + ' bpm, ' + meter;
     note.style.display = 'block';
-    note.textContent = bars + ' bars at ' + bpm + ' bpm ≈ ' + secs.toFixed(1)
-                     + 's (estimated — the engine may not hold the tempo exactly)';
+    note.textContent = (window.ampUnit === 'bars')
+      ? (parseFloat($('ampBars').value) + ' bars = ' + secs.toFixed(1) + 's (estimated — the engine '
+         + 'may not hold the tempo exactly)' + basis)
+      : (secs + 's = ' + (+a.bars.toFixed(3)) + ' bars' + basis);
+
+    // WARN, never block. And say what actually happens: the model fills the whole
+    // window it is given, so a partial bar is not a short track — it is a track
+    // that stops in the middle of a phrase and reads as cut off.
+    if (a.wholeBar){
+      warn.style.display = 'none'; snap.style.display = 'none'; snap.innerHTML = '';
+      return secs;
+    }
+    warn.style.display = 'block';
+    warn.textContent = a.subBar
+      ? ('⚠ ' + (+a.bars.toFixed(3)) + ' bars — shorter than a single bar at this tempo. '
+         + 'It will generate, but there is not room for a phrase.')
+      : ('⚠ ' + (+a.bars.toFixed(3)) + ' bars — not a whole number. The model fills the whole '
+         + secs + 's window either way, so the extra part-bar does not end the track early: '
+         + 'it ends mid-phrase and sounds cut off. Nearest clean lengths below.');
+    if (!a.suggestions.length){ snap.style.display = 'none'; snap.innerHTML = ''; return secs; }
+    // OFFERED, never applied — one tap accepts, nothing changes on its own.
+    snap.style.display = 'flex';
+    snap.innerHTML = a.suggestions.map(function(s){
+      return '<button type="button" class="amp-preset amp-snap" data-secs="' + s.seconds
+           + '" data-bars="' + s.bars + '">' + s.seconds + 's · ' + s.bars + ' bars ('
+           + s.label + ')</button>';
+    }).join('');
+    snap.querySelectorAll('.amp-snap').forEach(function(b){
+      b.addEventListener('click', function(){
+        if (window.ampUnit === 'bars'){ $('ampBars').value = b.dataset.bars; }
+        else {
+          $('ampSecs').value = b.dataset.secs;
+          $('ampSecs').style.display = 'block';          // it is a custom length now
+          $('ampPresets').querySelectorAll('.amp-preset').forEach(function(x){ x.classList.remove('active'); });
+          var custom = $('ampPresets').querySelector('[data-secs="custom"]');
+          if (custom) custom.classList.add('active');
+        }
+        ampDurationRefresh();
+        if (typeof updateEta === 'function') updateEta();
+      });
+    });
     return secs;
   };
+  // Kept as the old name: other call sites (and any muscle memory) still work.
+  window.ampBarsEstimate = window.ampDurationRefresh;
 
   window.ampSetUnit = function(u){
     window.ampUnit = u;
@@ -2770,7 +2901,7 @@ let apInit;
     barsBtn.classList.toggle('active', u === 'bars');
     $('ampBars').style.display = (u === 'bars') ? '' : 'none';
     document.getElementById('ampPresets').style.opacity = (u === 'bars') ? .45 : 1;
-    ampBarsEstimate();
+    ampDurationRefresh();
   };
 
   // The wait is shown BEFORE anything queues — that is the whole point of the
@@ -2810,7 +2941,11 @@ let apInit;
     const bs = $('ampUnitSecs'), bb = $('ampUnitBars');
     if (bs) bs.addEventListener('click', () => ampSetUnit('seconds'));
     if (bb) bb.addEventListener('click', () => ampSetUnit('bars'));
-    ['ampBars','ampBpm'].forEach(id => { const e=$(id); if (e) e.addEventListener('input', ampBarsEstimate); });
+    // BPM and time signature move the READOUT only. Whichever unit is active
+    // keeps the number the user typed: seconds mode holds seconds and re-derives
+    // bars, bars mode holds bars and re-derives seconds.
+    ['ampBars','ampBpm'].forEach(id => { const e=$(id); if (e) e.addEventListener('input', ampDurationRefresh); });
+    const tsSel = $('ampTimesig'); if (tsSel) tsSel.addEventListener('change', ampDurationRefresh);
     ['ampVoiceType','ampVoiceReg','ampVoiceTex','ampVoiceDel'].forEach(id => {
       const e=$(id); if (e) e.addEventListener('change', () => {
         $('ampVoicePreset').value = '';        // hand-edited: no longer that preset
@@ -2828,7 +2963,7 @@ let apInit;
     const c = $('ampCount'); if (c) c.addEventListener('input', ampUpdateCountNote);
     const sb = $('ampSingBtn'); if (sb) sb.addEventListener('click', ampSingStart);
     const rb = $('ampRangeBtn'); if (rb) rb.addEventListener('click', ampRangeStart);
-    ampBarsEstimate();
+    ampDurationRefresh();
   });
 
   window.ampRefreshLibrary = async function(){
@@ -2915,6 +3050,10 @@ let apInit;
       lyrics: $('ampLyrics').value.trim(),
       seconds: parseFloat($('ampSecs').value)||60,
       bpm: parseInt($('ampBpm').value)||120,
+      // The meter the server's bar math reads. Sent in BOTH modes: it is
+      // conditioning as well as arithmetic, and leaving it out is what made the
+      // workflow silently 4/4 for every song ever generated here.
+      timesig: ($('ampTimesig')||{}).value || '4',
       keyscale: ($('ampKey').value.trim()||'C major'),
     };
     const sd = $('ampSeed').value.trim(); if (sd !== '') body.seed = parseInt(sd);
@@ -2923,7 +3062,7 @@ let apInit;
     // arithmetic and the refusal, so the browser cannot quietly disagree with it.
     if (window.ampUnit === 'bars'){
       const bars = parseFloat($('ampBars').value);
-      if (!isFinite(bars) || bars <= 0){ ampBarsEstimate(); $('ampBars').focus(); return; }
+      if (!isFinite(bars) || bars <= 0){ ampDurationRefresh(); $('ampBars').focus(); return; }
       body.duration_mode = 'bars';
       body.bars = bars;
       delete body.seconds;
@@ -2983,8 +3122,12 @@ let apInit;
     $('ampJobState').textContent = 'Cancelled.';
   });
 
-  // ── Duration control (measured curve: ~0.36 s gen per audio-second; cap 480s) ──
-  const GEN_PER_S = 0.36, MAX_SECS = 480;
+  // ── Duration control (measured curve: ~0.36 s gen per audio-second) ──────────
+  // MAX_SECS mirrors amphion.MAX_DURATION, the server's cap. It used to be 480
+  // here while the server clamped at 240, so a 300s request came back as a 240s
+  // track with nothing said. The node itself would take 1000s — this ceiling is
+  // ours, which is exactly why it has to be stated rather than blamed on the model.
+  const GEN_PER_S = 0.36, MAX_SECS = ampDur.MAX_S, MIN_SECS = ampDur.MIN_S;
   const etaFor = s => Math.max(6, Math.round(s * GEN_PER_S));
   function checkLyrics(secs){
     const lines = $('ampLyrics').value.split('\n').filter(l => l.trim() && !/^\s*\[/.test(l)).length;
@@ -2994,9 +3137,13 @@ let apInit;
       w.textContent = '⚠ ' + lines + ' lyric lines may be long for ' + secs + 's — they can get compressed or dropped. Lengthen, or trim the lyrics.';
     } else w.style.display = 'none';
   }
+  let ampClampNote = '';
   function updateEta(){
-    const secs = parseFloat($('ampSecs').value) || 60;
-    $('ampEta').textContent = '≈ ' + etaFor(secs) + 's to generate';
+    // The ETA and the lyric-fit check follow the ACTIVE unit — in bars mode the
+    // relevant length is the derived one, not whatever is sitting in the seconds box.
+    const secs = ampEffectiveSeconds() || 60;
+    $('ampEta').textContent = '≈ ' + etaFor(secs) + 's to generate'
+                            + (ampClampNote ? ' · ' + ampClampNote : '');
     checkLyrics(secs);
   }
   $('ampPresets').querySelectorAll('.amp-preset').forEach(b => b.addEventListener('click', () => {
@@ -3004,14 +3151,20 @@ let apInit;
     b.classList.add('active');
     if (b.dataset.secs === 'custom'){ $('ampSecs').style.display = 'block'; $('ampSecs').focus(); }
     else { $('ampSecs').style.display = 'none'; $('ampSecs').value = b.dataset.secs; }
-    updateEta();
+    updateEta(); ampDurationRefresh();
   }));
   $('ampSecs').addEventListener('input', () => {
-    let v = parseInt($('ampSecs').value);
-    if (v > MAX_SECS){ v = MAX_SECS; $('ampSecs').value = MAX_SECS; }
-    updateEta();
+    // Free entry — parseFloat, not parseInt, and no rounding to the step. The
+    // ONLY value that gets changed is one past the ceiling, and that is said
+    // out loud rather than quietly applied.
+    const v = parseFloat($('ampSecs').value);
+    if (isFinite(v) && v > MAX_SECS){
+      $('ampSecs').value = MAX_SECS;
+      ampClampNote = 'clamped ' + v + 's → ' + MAX_SECS + 's, the longest track Amphion generates';
+    } else ampClampNote = '';
+    updateEta(); ampDurationRefresh();
   });
-  $('ampLyrics').addEventListener('input', () => checkLyrics(parseFloat($('ampSecs').value) || 60));
+  $('ampLyrics').addEventListener('input', () => checkLyrics(ampEffectiveSeconds() || 60));
   updateEta();
 })();
 

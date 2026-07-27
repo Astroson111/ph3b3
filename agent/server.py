@@ -519,7 +519,7 @@ TOOLS = [
     {"type":"function","function":{"name":"start_evening_capture","description":"Capture photos of the evening at a timed interval through Stack-Chan's (Dio's) own camera. Each frame is saved to Ph3b3's captures folder (~/ph3b3_data/captures) AND described aloud as it's taken. Say 'start capturing the evening' or 'start evening capture' to trigger this.","parameters":{"type":"object","properties":{"label":{"type":"string","default":"evening","description":"A short label for this capture session, for your own reference"},"interval":{"type":"number","default":120,"description":"Seconds between shots"}}}}},
     {"type":"function","function":{"name":"stop_evening_capture","description":"Stop the evening photo capture session and report how many photos were saved to Ph3b3's captures folder.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"fleet_status","description":"Get a READ-ONLY summary of the device fleet (Nyx, Iris, Dio/Stack-Chan, Argus): each device's health state — HEALTHY, SICK, or SILENT — plus last-seen, battery, and signal. CALL THIS when asked 'how's the fleet', 'are the devices online/breathing', 'is Iris/Dio awake', battery/device status, or anything about fleet health. Observability only — you cannot restart, reflash, or change any device.","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"last_capture","description":"Get the most recent capture transcript from a device (read-only). CALL THIS when asked 'what did Iris last hear', 'what was the last thing recorded/captured', 'read me the last recording', or about a device's most recent recording.","parameters":{"type":"object","properties":{"device":{"type":"string","description":"Which device: 'iris' or 'stackchan' (optional — omit for the most recent across all devices)"}}}}},
+    {"type":"function","function":{"name":"last_capture","description":"Get the most recent capture transcript from a device (read-only). CALL THIS when asked 'what did Iris last hear', 'what was the last thing recorded/captured', 'read me the last recording', or about a device's most recent recording.","parameters":{"type":"object","properties":{"device":{"type":"string","description":"Which device: 'iris', 'stackchan' (Dio) or 'pan' (optional — omit for the most recent across all devices)"}}}}},
     {"type":"function","function":{"name":"find_recipe","description":"Search 2+ million local recipes from the RecipeNLG corpus — fully offline, zero network, zero GPU. Three modes: 'text' for free-text search (e.g. 'carbonara', 'Thai noodles'), 'strict' to find recipes that use ALL listed ingredients, 'pantry' (default) to find the best matches from what you have on hand — results are ranked by fewest missing ingredients. You will receive structured recipe rows: narrate them to the user (title, key ingredients, directions summary, what they're missing in pantry mode). Do NOT fabricate or invent recipe details — report exactly what the tool returns.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Free-text search term — used in 'text' mode (e.g. 'carbonara', 'banana bread')"},"ingredients":{"type":"array","items":{"type":"string"},"description":"List of ingredient names — used in 'strict' and 'pantry' modes (e.g. ['chicken', 'rice', 'lime'])"},"mode":{"type":"string","enum":["text","strict","pantry"],"default":"pantry","description":"'text': free-text FTS search. 'strict': recipes using ALL listed ingredients. 'pantry': best matches from what you have, ranked by fewest missing."},"limit":{"type":"integer","default":5,"description":"Number of results to return (1–20)"}},"required":[]}}},
     {"type":"function","function":{"name":"generate_video","description":"Generate a short AI VIDEO clip (moving pictures) from a text description, or animate an EXISTING generated image. NOT for music, songs or audio of any kind — use generate_song for those. Use when the user asks to make/create/render a video, or to animate/bring an image to life. Presets: ltx-fast (~1.5 min, quick default), wan-fast (~10 min, higher quality), wan-quality (~35 min, best). The render runs in the background and holds the GPU — tell the user the ETA from the tool's reply. Report the status line the tool returns; never fabricate progress.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What the video should show and how it should move"},"preset":{"type":"string","enum":["ltx-fast","wan-fast","wan-quality"],"description":"Speed/quality preset; default ltx-fast"},"source_job_id":{"type":"string","description":"Optional job id of an existing generated image to animate (image-to-video)"}},"required":["prompt"]}}},
     {"type":"function","function":{"name":"web_search","description":"Search the LIVE WEB via Metis (local SearXNG) for current, recent, or unknown facts you don't already have. Use when the user explicitly asks to look something up OR when you genuinely lack the current information to answer well. ALWAYS tell the user first that you're searching and show the query ('Let me look that up…') — NEVER search silently. The tool returns a COMPLETE answer that ends with a 'Sources:' list; relay that answer faithfully and KEEP the Sources list. One search per turn.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"The search query"}},"required":["query"]}}}
@@ -4216,24 +4216,27 @@ def _amphion_floor_gate(tags: str, lyrics: str, request: Request) -> None:
             raise HTTPException(403, detail="Content policy: not permitted")
 
 
-@app.post("/amphion/generate")
-async def amphion_generate(request: Request, body: dict):
-    tags = (body.get("tags") or "").strip()
-    if not tags:
-        raise HTTPException(400, "a song description is required")
-    lyrics = (body.get("lyrics") or "").strip()
-    _amphion_floor_gate(tags, lyrics, request)
-    await _amphion_music_floor(tags, lyrics)   # music-specific floor: voice-clone + copyright
-    # Duration: seconds is the default unit; bars converts to an ESTIMATE.
-    # An unusable bars request is REFUSED with its reason rather than quietly
-    # falling back to 60s — silently generating a different length than asked for
-    # is the failure this switch exists to avoid.
-    # bpm serves two different jobs and they must not be conflated. As
-    # CONDITIONING it has a harmless default of 120. As the BASIS OF A BAR
-    # CONVERSION it must have been genuinely supplied — `int(x or 120)` turns an
-    # explicit 0 into 120 (zero is falsy), which silently produces a length the
-    # user never asked for. That is precisely the silent rewrite this switch
-    # exists to prevent, so the two are tracked separately.
+def _amphion_duration(body: dict) -> dict:
+    """Resolve ONE length from a generation request, whatever unit it arrived in.
+
+    This is the single source of truth for duration on every Amphion dispatch
+    path — generate, variations and remix all go through here, so a bars request
+    cannot mean 180s on one route and the 60s default on another (it did:
+    /amphion/variations read only `seconds`, so bars + variations silently
+    produced 60s tracks).
+
+    seconds is None when the caller named no length at all, which is different
+    from naming a bad one: the caller then applies its OWN default (a fresh
+    generation uses 60s, a remix inherits the source track's length), and an
+    unusable bars request is REFUSED with its reason instead.
+
+    bpm serves two different jobs and they must not be conflated. As CONDITIONING
+    it has a harmless default of 120. As the BASIS OF A BAR CONVERSION it must
+    have been genuinely supplied — `int(x or 120)` turns an explicit 0 into 120
+    (zero is falsy), which silently produces a length the user never asked for.
+    The time signature is tracked the same way for the same reason: absent is not
+    4/4, and bar arithmetic on an assumed meter is a length nobody requested.
+    """
     _raw_bpm = body.get("bpm")
     try:
         bpm_supplied = int(_raw_bpm) if _raw_bpm not in (None, "") else None
@@ -4242,23 +4245,49 @@ async def amphion_generate(request: Request, body: dict):
     if bpm_supplied is not None and bpm_supplied <= 0:
         bpm_supplied = None                      # 0 / negative == not usable
     bpm = bpm_supplied if bpm_supplied is not None else 120
-    timesig = str(body.get("timesig", "4"))
+    timesig_supplied = amphion.normalise_timesig(body.get("timesig"))
+    timesig = amphion.timesig_for_node(timesig_supplied)
     duration_mode = (body.get("duration_mode") or "seconds").lower()
-    duration_note = ""
+    note = ""
+    seconds: float | None
     if duration_mode == "bars":
-        est, why = amphion.bars_to_seconds(body.get("bars"), bpm_supplied, timesig)
+        est, why = amphion.bars_to_seconds(body.get("bars"), bpm_supplied, timesig_supplied)
         if est is None:
             raise HTTPException(400, why)
-        seconds, duration_note = est, why
-    else:
+        seconds, note = est, why
+    elif body.get("seconds") not in (None, ""):
         try:
-            seconds = float(body.get("seconds", amphion.DEFAULT_DURATION))
+            seconds = float(body["seconds"])     # free entry: never rounded here
         except (TypeError, ValueError):
-            seconds = amphion.DEFAULT_DURATION
-    clamped = max(5.0, min(amphion.MAX_DURATION, seconds))
-    if duration_mode == "bars" and clamped != seconds:
-        duration_note += f" — clamped to {clamped:g}s (limit {amphion.MAX_DURATION:g}s)"
-    seconds = clamped
+            raise HTTPException(400, "seconds must be a number")
+    else:
+        seconds = None
+    if seconds is not None:
+        clamped, clamp_note = amphion.clamp_seconds(seconds)
+        if clamp_note:                           # said out loud in BOTH modes
+            note = f"{note} — {clamp_note}" if note else clamp_note
+        seconds = clamped
+    bars = body.get("bars") if duration_mode == "bars" else (
+        amphion.seconds_to_bars(seconds, bpm_supplied, timesig_supplied) if seconds is not None else None)
+    return {"seconds": seconds, "note": note, "duration_mode": duration_mode,
+            "bars": bars, "timesig": timesig, "bpm": bpm,
+            # the *supplied* values, kept separate from the conditioning defaults:
+            # only these may drive bar arithmetic.
+            "bpm_supplied": bpm_supplied, "timesig_supplied": timesig_supplied}
+
+
+@app.post("/amphion/generate")
+async def amphion_generate(request: Request, body: dict):
+    tags = (body.get("tags") or "").strip()
+    if not tags:
+        raise HTTPException(400, "a song description is required")
+    lyrics = (body.get("lyrics") or "").strip()
+    _amphion_floor_gate(tags, lyrics, request)
+    await _amphion_music_floor(tags, lyrics)   # music-specific floor: voice-clone + copyright
+    dur = _amphion_duration(body)
+    bpm, timesig, duration_mode = dur["bpm"], dur["timesig"], dur["duration_mode"]
+    duration_note = dur["note"]
+    seconds = dur["seconds"] if dur["seconds"] is not None else amphion.DEFAULT_DURATION
     try:
         seed = int(body.get("seed"))
         if seed < 0:
@@ -4277,9 +4306,15 @@ async def amphion_generate(request: Request, body: dict):
     task = asyncio.create_task(amphion.run_generation(job_id, params))
     amphion.register_task(job_id, task)
     # duration_estimated says plainly that the length was DERIVED, not measured.
+    # bars/whole_bar come back so the job card can echo the length the SERVER
+    # settled on, not the one the browser guessed at.
+    grid = (amphion.bar_analysis(seconds, dur["bpm_supplied"], dur["timesig_supplied"])
+            if duration_mode != "bars" else None)
     return {"job_id": job_id, "seconds": seconds,
             "duration_estimated": duration_mode == "bars",
-            "duration_note": duration_note}
+            "duration_note": duration_note,
+            "bars": dur["bars"], "timesig": timesig,
+            "whole_bar": grid["whole_bar"] if grid else None}
 
 
 @app.get("/amphion/voices")
@@ -4354,18 +4389,19 @@ async def amphion_variations(request: Request, body: dict):
         base_seed = int.from_bytes(os.urandom(4), "big")
 
     seeds, est_total, basis = amphion.plan_variations(base_seed, n)
-    try:
-        seconds = max(5.0, min(amphion.MAX_DURATION, float(body.get("seconds", amphion.DEFAULT_DURATION))))
-    except (TypeError, ValueError):
-        seconds = amphion.DEFAULT_DURATION
+    # Same duration resolver as a single generation — a bars request must mean
+    # the same length here as it does there.
+    dur = _amphion_duration(body)
+    seconds = dur["seconds"] if dur["seconds"] is not None else amphion.DEFAULT_DURATION
 
     job_ids = []
     for sd in seeds:
         params = {
             "tags": tags, "lyrics": lyrics,
-            "bpm": int(body.get("bpm", 120) or 120), "keyscale": body.get("keyscale", "C major"),
-            "timesig": str(body.get("timesig", "4")), "language": body.get("language", "en"),
+            "bpm": dur["bpm"], "keyscale": body.get("keyscale", "C major"),
+            "timesig": dur["timesig"], "language": body.get("language", "en"),
             "seconds": seconds, "seed": sd,
+            "duration_mode": dur["duration_mode"], "bars": dur["bars"],
             "variant": body.get("variant") if body.get("variant") in amphion.DIT_BY_VARIANT else "base",
             "variation_of": base_seed,
         }
@@ -4410,6 +4446,18 @@ async def amphion_remix(job_id: str, request: Request, body: dict):
     overrides = {k: body.get(k) for k in
                  ("tags", "lyrics", "bpm", "keyscale", "timesig", "language", "seconds", "seed")
                  if k in (body or {})}
+    # Same duration resolver as the other two dispatch paths, so a bars request
+    # remixes at the length it asks for. A remix that names NO length keeps
+    # inheriting the source track's — resolving to None leaves the override out.
+    dur = _amphion_duration(body)
+    if dur["seconds"] is not None:
+        overrides["seconds"] = dur["seconds"]
+    else:
+        overrides.pop("seconds", None)
+    if dur["timesig_supplied"]:
+        overrides["timesig"] = dur["timesig_supplied"]   # else the source track's meter stands
+    else:
+        overrides.pop("timesig", None)
     params, why = await asyncio.to_thread(amphion.remix_params, job_id, overrides)
     if params is None:
         raise HTTPException(400, why)

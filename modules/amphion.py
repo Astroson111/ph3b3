@@ -41,7 +41,24 @@ ENC2 = "qwen_1.7b_ace15.safetensors"
 VAE  = "ace_1.5_vae.safetensors"
 STEPS, CFG, SAMPLER, SCHED, SHIFT = 50, 6.0, "euler", "simple", 3.0   # base settings (NOT turbo's 8/1)
 DEFAULT_DURATION = 60.0
+
+# Limits, READ FROM THE NODE DEFINITIONS rather than assumed. From ComfyUI
+# /object_info on this install:
+#   TextEncodeAceStepAudio1.5.duration : FLOAT  min 0.0  max 2000.0
+#   EmptyAceStep1.5LatentAudio.seconds : FLOAT  min 1.0  max 1000.0
+# Both carry the same value, so the binding node ceiling is the TIGHTER of the
+# two: 1000.0s. MAX_DURATION below is Ph3b3's own product cap and is what the
+# user actually hits; it is far under the node ceiling, so a clamp here is a
+# policy decision we must say out loud, never a model limit we can blame.
+NODE_MAX_ENCODE_SECONDS = 2000.0     # TextEncodeAceStepAudio1.5.duration
+NODE_MIN_SECONDS = 1.0               # EmptyAceStep1.5LatentAudio.seconds (min)
+NODE_MAX_SECONDS = 1000.0            # EmptyAceStep1.5LatentAudio.seconds (max) = the binding one
+MIN_DURATION = 5.0
 MAX_DURATION = 240.0
+
+# The node's timesignature input is a COMBO — these four strings verbatim, and
+# nothing else validates. Bar math reads this; it does not assume 4/4.
+TIMESIG_OPTIONS = ("2", "3", "4", "6")
 
 # In-memory job state (job_id -> {state, ...}). Mirrors morpheus.jobs.
 # states: queued -> loading -> generating -> done | error | cancelled
@@ -340,7 +357,7 @@ def build_workflow(job_id: str, p: dict) -> dict:
       "5":  {"class_type": "TextEncodeAceStepAudio1.5", "inputs": {
                 "clip": ["2", 0], "tags": p["tags"], "lyrics": p.get("lyrics", ""),
                 "seed": p["seed"], "bpm": p.get("bpm", 120), "duration": float(p["seconds"]),
-                "timesignature": p.get("timesig", "4"), "language": p.get("language", "en"),
+                "timesignature": timesig_for_node(p.get("timesig")), "language": p.get("language", "en"),
                 "keyscale": p.get("keyscale", "C major"), "generate_audio_codes": True,
                 "cfg_scale": 2.0, "temperature": 0.85, "top_p": 0.9, "top_k": 0, "min_p": 0.0}},
       "6":  {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["5", 0]}},
@@ -368,25 +385,162 @@ def build_workflow(job_id: str, p: dict) -> dict:
 # The same applies to length itself: measured output has already differed from
 # the request (a 20s track sits beside 60s ones), which is exactly why the fade
 # probes the file instead of trusting the sidecar.
+_EPS = 1e-6
+
+
+def normalise_timesig(ts) -> str | None:
+    """The node's COMBO value ("2"/"3"/"4"/"6") for whatever the caller sent, or
+    None when nothing usable was supplied.
+
+    Accepts the musician's spelling as well as the node's: "3/4" -> "3",
+    "6/8" -> "6". Returns None rather than a default, because "absent" and
+    "4/4" are different facts and the bar readout must be able to tell them
+    apart — see beats_per_bar().
+    """
+    if ts is None:
+        return None
+    head = str(ts).strip().split("/")[0].strip()
+    return head if head in TIMESIG_OPTIONS else None
+
+
+def timesig_for_node(ts) -> str:
+    """The value that actually goes into the workflow. Always valid, because the
+    COMBO rejects anything else and a rejected workflow is a failed generation.
+    Falling back to "4" here is safe in a way it is NOT in bar arithmetic: this
+    only picks the conditioning the model already defaults to."""
+    return normalise_timesig(ts) or "4"
+
+
+def beats_per_bar(ts) -> int | None:
+    """Beats in a bar, or None when the time signature is missing/unusable.
+
+    None is the point: with no time signature there is no bar length, and the
+    caller must hide the readout rather than divide by an assumed 4."""
+    n = normalise_timesig(ts)
+    return int(n) if n else None
+
+
+def seconds_per_bar(bpm: int | float | None, ts) -> float | None:
+    """(60 / bpm) * beats_per_bar, or None if either input is unusable. Never
+    divides by a missing or zero bpm — that is where Infinity/NaN come from."""
+    beats = beats_per_bar(ts)
+    if beats is None:
+        return None
+    try:
+        b = float(bpm)
+    except (TypeError, ValueError):
+        return None
+    if not b > 0:
+        return None
+    return (60.0 / b) * beats
+
+
+def seconds_to_bars(seconds: float, bpm, ts) -> float | None:
+    spb = seconds_per_bar(bpm, ts)
+    if spb is None or spb <= 0:
+        return None
+    try:
+        s = float(seconds)
+    except (TypeError, ValueError):
+        return None
+    if not s > 0:
+        return None
+    return s / spb
+
+
 def bars_to_seconds(bars: float, bpm: int | None, timesig: str = "4") -> tuple[float | None, str]:
     """(estimated_seconds, reason). None when the conversion cannot be made, with
     the reason stated rather than a silent fallback to some default length."""
     if not bpm or bpm <= 0:
         return None, "bars needs a bpm — set one, or use seconds"
+    beats = beats_per_bar(timesig)
+    if beats is None:
+        return None, ("bars needs a time signature — 2, 3, 4 or 6 beats to the bar "
+                      "(the model takes no others)")
     try:
         b = float(bars)
     except (TypeError, ValueError):
         return None, "bars must be a number"
     if b <= 0:
         return None, "bars must be greater than zero"
-    try:
-        beats_per_bar = int(str(timesig).split("/")[0])
-    except (TypeError, ValueError):
-        beats_per_bar = 4
-    if beats_per_bar <= 0:
-        beats_per_bar = 4
-    secs = b * beats_per_bar * 60.0 / float(bpm)
-    return round(secs, 3), f"{b:g} bars at {bpm}bpm in {beats_per_bar}/4 ≈ {secs:.1f}s (estimated)"
+    secs = b * beats * 60.0 / float(bpm)
+    return round(secs, 3), (f"{b:g} bars at {bpm}bpm, {beats} beats to the bar "
+                            f"≈ {secs:.1f}s (estimated)")
+
+
+def _is_whole(x: float) -> bool:
+    return abs(x - round(x)) < _EPS
+
+
+def bar_analysis(seconds: float, bpm, ts) -> dict | None:
+    """How a length sits against the bar grid, and the nearest clean lengths.
+
+    Returns None when bpm or the time signature is missing — the caller HIDES the
+    readout in that case, it does not show a guess.
+
+    "Whole-bar" is an integer bar count; "phrase-clean" is a multiple of 4, which
+    is where most popular-music sections actually land. Suggestions are OFFERED,
+    never applied: this returns numbers, it does not change anybody's length.
+    """
+    spb = seconds_per_bar(bpm, ts)
+    bars = seconds_to_bars(seconds, bpm, ts)
+    if spb is None or bars is None:
+        return None
+    whole = _is_whole(bars)
+    phrase = whole and _is_whole(bars / 4.0)
+    sugg: list[dict] = []
+    if not whole:
+        import math
+        cands = [("whole bar", math.floor(bars)), ("whole bar", math.ceil(bars)),
+                 ("4-bar phrase", math.floor(bars / 4.0) * 4), ("4-bar phrase", math.ceil(bars / 4.0) * 4)]
+        seen: set[float] = set()
+        for label, nb in cands:
+            if nb <= 0:
+                continue                       # below one bar — nothing to snap down to
+            secs = round(nb * spb, 3)
+            if secs < MIN_DURATION or secs > MAX_DURATION:
+                continue                       # never offer a length we would refuse
+            if secs in seen:
+                continue
+            seen.add(secs)
+            sugg.append({"label": label, "bars": float(nb), "seconds": secs})
+    return {"bars": round(bars, 6), "seconds_per_bar": round(spb, 6),
+            "beats_per_bar": beats_per_bar(ts), "whole_bar": whole,
+            "phrase_clean": phrase, "sub_bar": bars < 1.0, "suggestions": sugg}
+
+
+def clamp_seconds(seconds: float) -> tuple[float, str]:
+    """(clamped, note). The note is non-empty ONLY when the value actually moved,
+    and it names the limit — a length that silently becomes a different length is
+    the exact failure this control exists to prevent."""
+    s = float(seconds)
+    if s > MAX_DURATION:
+        return MAX_DURATION, (f"{s:g}s is longer than Amphion generates — clamped to "
+                              f"{MAX_DURATION:g}s (the limit here; the model node itself "
+                              f"would take {NODE_MAX_SECONDS:g}s)")
+    if s < MIN_DURATION:
+        return MIN_DURATION, f"{s:g}s is shorter than Amphion generates — raised to {MIN_DURATION:g}s"
+    return s, ""
+
+
+def assert_workflow_duration(wf: dict) -> float:
+    """The two duration params must be equal at dispatch. Returns the agreed value.
+
+    They are set from one variable a dozen lines apart in build_workflow, so they
+    cannot diverge today — which is exactly when to nail it down. If a future edit
+    ever makes them differ, the model would be conditioned for one length and
+    handed a latent window of another, and the only symptom would be a track that
+    sounds subtly wrong. This fails loudly instead.
+    """
+    enc = wf.get("5", {}).get("inputs", {}).get("duration")
+    lat = wf.get("7", {}).get("inputs", {}).get("seconds")
+    if enc is None or lat is None:
+        raise RuntimeError(f"amphion: workflow is missing a duration param "
+                           f"(TextEncode={enc!r}, EmptyLatent={lat!r})")
+    if abs(float(enc) - float(lat)) > _EPS:
+        raise RuntimeError(f"amphion: duration params disagree — TextEncode duration={enc!r} "
+                           f"but EmptyLatent seconds={lat!r}; refusing to dispatch")
+    return float(enc)
 
 
 
@@ -545,7 +699,15 @@ async def run_generation(job_id: str, p: dict) -> None:
                 jobs[job_id]["state"] = "loading"
                 await morpheus.evict_hermes(http)          # free VRAM: swap Ollama out (shared pattern)
                 jobs[job_id]["state"] = "generating"
-                pid = await morpheus.comfy_queue(http, build_workflow(job_id, p))
+                wf = build_workflow(job_id, p)
+                # Single source of truth, checked at the last possible moment —
+                # after the workflow is built, before it is queued.
+                agreed = assert_workflow_duration(wf)
+                log.info("[amphion] job %s dispatch: duration=%.3fs on both params "
+                         "(mode=%s, bpm=%s, timesig=%s)", job_id, agreed,
+                         p.get("duration_mode", "seconds"), p.get("bpm"),
+                         timesig_for_node(p.get("timesig")))
+                pid = await morpheus.comfy_queue(http, wf)
                 jobs[job_id]["comfy_id"] = pid
                 outputs = await morpheus.comfy_wait(http, pid, timeout_s=300)
                 audio = next(a for node in outputs.values() if "audio" in node for a in node["audio"])
