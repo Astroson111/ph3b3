@@ -9,6 +9,10 @@
 # RUN WITH sudo (the repo is root-owned; the nightly job runs as root):
 #   sudo /home/astroson/Desktop/ph3b3_v2/deploy/rhea/rhea-rotate.sh --burn
 #
+# Add --yes for a non-interactive run (skips the typed confirmations AND never
+# echoes the new passphrase, so the run is safe to paste into a log or a session
+# transcript — read the passphrase from PASSFILE yourself afterward instead).
+#
 # THE OLD SNAPSHOTS ARE UNRECOVERABLE AFTERWARD. There is no second copy.
 set -euo pipefail
 
@@ -23,8 +27,16 @@ log()  { echo "[rhea-rotate] $*"; }
 fail() { echo "[rhea-rotate] FAIL: $*" >&2; exit 1; }
 
 # ── Guards ───────────────────────────────────────────────────────────────────────
-[ "${1:-}" = "--burn" ] || fail "refusing to run without --burn (this destroys every snapshot)"
-[ "$(id -u)" -eq 0 ]    || fail "run with sudo — the repo is root-owned"
+BURN=0; ASSUME_YES=0
+for a in "$@"; do
+  case "$a" in
+    --burn) BURN=1 ;;
+    --yes)  ASSUME_YES=1 ;;
+    *) fail "unknown argument: $a (expected --burn [--yes])" ;;
+  esac
+done
+[ "$BURN" -eq 1 ]    || fail "refusing to run without --burn (this destroys every snapshot)"
+[ "$(id -u)" -eq 0 ] || fail "run with sudo — the repo is root-owned"
 
 mountpoint -q "$RHEA_MNT" || fail "RHEA is not mounted at $RHEA_MNT.
   The drive is present but unmounted → mount it first:  sudo mount $RHEA_MNT
@@ -47,9 +59,13 @@ else
   log "no existing repo at $RESTIC_REPO — this is an init, not a rotation"
 fi
 
-printf '\n  Type BURN to destroy the above and start a new encrypted repo: '
-read -r CONFIRM
-[ "$CONFIRM" = "BURN" ] || fail "aborted — nothing was touched"
+if [ "$ASSUME_YES" -eq 1 ]; then
+  log "--yes given: proceeding without the typed confirmation"
+else
+  printf '\n  Type BURN to destroy the above and start a new encrypted repo: '
+  read -r CONFIRM
+  [ "$CONFIRM" = "BURN" ] || fail "aborted — nothing was touched"
+fi
 
 # ── Rotate ───────────────────────────────────────────────────────────────────────
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -71,7 +87,21 @@ rm -rf "$RESTIC_REPO"
 log "initialising new repo..."
 "$RESTIC_BIN" init -r "$RESTIC_REPO" -p "$PASSFILE" >/dev/null || fail "restic init failed"
 
-cat <<BANNER
+if [ "$ASSUME_YES" -eq 1 ]; then
+  # Never echo the secret in a non-interactive run — this output may be captured.
+  cat <<BANNER
+
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  NEW RHEA PASSPHRASE WRITTEN — RECORD IT OFFLINE NOW                     ║
+  ║  Not printed here on purpose. Read it in a terminal of your own:         ║
+  ║      cat $PASSFILE
+  ║  Paper or password vault. The copy on this SSD dies with this SSD, and   ║
+  ║  without an offline copy the new backups are dead weight.                ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+
+BANNER
+else
+  cat <<BANNER
 
   ╔══════════════════════════════════════════════════════════════════════════╗
   ║  NEW RHEA PASSPHRASE — RECORD IT OFFLINE NOW, BEFORE YOU CLOSE THIS      ║
@@ -82,9 +112,10 @@ cat <<BANNER
       $NEWPASS
 
 BANNER
-printf '  Type RECORDED once it is written down somewhere off this machine: '
-read -r ACK
-[ "$ACK" = "RECORDED" ] || log "WARN: not acknowledged — the passphrase is still at $PASSFILE, go copy it"
+  printf '  Type RECORDED once it is written down somewhere off this machine: '
+  read -r ACK
+  [ "$ACK" = "RECORDED" ] || log "WARN: not acknowledged — the passphrase is still at $PASSFILE, go copy it"
+fi
 
 # ── First backup, so the rotation does not leave a protection gap ────────────────
 log "taking the first backup into the new repo..."
