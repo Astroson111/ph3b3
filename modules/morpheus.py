@@ -84,6 +84,25 @@ _FLOOR_MINOR: frozenset[str] = frozenset([
     "underage", "preteen", "pre-teen", "juvenile", "prepubescent",
     "young girl", "young boy", "little girl", "little boy",
     "schoolgirl", "school girl", "schoolboy",
+    # Added after an audit found the list caught only the words it literally
+    # named: "teen", "adolescent", "preschooler" and every school-age phrasing
+    # below went straight through paired with an explicit term.
+    "teen", "teens", "teenager", "teenagers", "teenage", "teenaged",
+    "adolescent", "adolescents", "tween", "tweens",
+    "youngster", "youngsters", "youth", "youths",
+    "baby", "babies", "newborn", "infants",
+    "preschool", "preschooler", "kindergarten", "kindergartener", "kindergartner",
+    "elementary school", "middle school", "grade school", "high school",
+    "schoolchild", "schoolchildren", "schoolkid", "schoolkids", "school child",
+    "boyhood", "girlhood", "childlike", "childish",
+])
+
+# Terms that are BOTH a minor reference and a sexual one in a single word. These
+# block on their own — there is no second signal to wait for, because the word
+# itself is the entire request.
+_FLOOR_MINOR_SEXUAL: frozenset[str] = frozenset([
+    "loli", "lolita", "shota", "jailbait", "jail bait", "barely legal",
+    "child porn", "childporn", "csam", "underage sex", "underage porn",
 ])
 
 # ── Categories 2/3 — sexual/intimate context ─────────────────────────
@@ -119,28 +138,7 @@ _FLOOR_NONCONSENSUAL: frozenset[str] = frozenset([
 # as name-shaped references (e.g. "adult content", "drug dealer").
 _ALL_FLOOR_TERMS: frozenset[str] = (
     _FLOOR_MINOR | _FLOOR_SEXUAL | _FLOOR_CRIMINAL | _FLOOR_NONCONSENSUAL
-)
-
-# ── Whole-word floor matching ────────────────────────────────────────────────
-# Floor terms match on a LEADING word boundary (\bterm), not as a raw substring.
-# This still catches inflections/plurals ("rape"→raped/rapes, "nude"→nudes) so no
-# real content slips the floor, while killing substring false positives where a
-# term hides *inside* an innocent word ("rape" in "d-rape-d"/"grape", "sex" in
-# "Sus-sex"/"Es-sex"). Trailing boundary is intentionally omitted (safety bias:
-# a suffixed real term must still fire; over-matching a word that STARTS with a
-# term — e.g. "sextant" — is an accepted, rare cost of never weakening the floor).
-def _floor_re(terms: frozenset[str]):
-    alts = "|".join(re.escape(t) for t in sorted(terms, key=len, reverse=True))
-    return re.compile(r"\b(?:" + alts + r")")
-
-_RE_MINOR         = _floor_re(_FLOOR_MINOR)
-_RE_SEXUAL        = _floor_re(_FLOOR_SEXUAL)
-_RE_CRIMINAL      = _floor_re(_FLOOR_CRIMINAL)
-_RE_NONCONSENSUAL = _floor_re(_FLOOR_NONCONSENSUAL)
-
-# Case-sensitive name-shaped bigram: both words Title-Case or ALL-CAPS.
-_PERSON_RE = re.compile(
-    r"\b(?:[A-Z][a-z]{1,20}|[A-Z]{2,21})\s+(?:[A-Z][a-z]{1,20}|[A-Z]{2,21})\b"
+    | _FLOOR_MINOR_SEXUAL
 )
 
 
@@ -151,6 +149,68 @@ def _normalize(text: str) -> str:
     s = re.sub(r"(?<=[a-z])[_.\-](?=[a-z])", "", s)
     s = re.sub(r"\s+", " ", s)
     return s
+
+
+# ── Whole-word floor matching ────────────────────────────────────────────────
+# Floor terms match on a LEADING word boundary (\bterm), not as a raw substring.
+# This still catches inflections/plurals ("rape"→raped/rapes, "nude"→nudes) so no
+# real content slips the floor, while killing substring false positives where a
+# term hides *inside* an innocent word ("rape" in "d-rape-d"/"grape", "sex" in
+# "Sus-sex"/"Es-sex"). Trailing boundary is intentionally omitted (safety bias:
+# a suffixed real term must still fire; over-matching a word that STARTS with a
+# term — e.g. "sextant" — is an accepted, rare cost of never weakening the floor).
+def _floor_re(terms: frozenset[str]):
+    # Compile from the NORMALISED term. _normalize() runs on the prompt first and
+    # deletes hyphens between letters, so a raw "pre-teen" pattern could never
+    # match the "preteen" that actually arrives — the same dead-entry trap that
+    # silently disabled "nude-toned" in the profile allow-list.
+    alts = "|".join(re.escape(_normalize(t))
+                    for t in sorted(terms, key=len, reverse=True))
+    return re.compile(r"\b(?:" + alts + r")")
+
+_RE_MINOR         = _floor_re(_FLOOR_MINOR)
+_RE_SEXUAL        = _floor_re(_FLOOR_SEXUAL)
+_RE_CRIMINAL      = _floor_re(_FLOOR_CRIMINAL)
+_RE_NONCONSENSUAL = _floor_re(_FLOOR_NONCONSENSUAL)
+_RE_MINOR_SEXUAL  = _floor_re(_FLOOR_MINOR_SEXUAL)
+
+# ── Ages written as numbers ──────────────────────────────────────────────────
+# The term lists above only catch a minor NAMED IN WORDS. An age given as a digit
+# — "a 9 year old" — matched none of them, and that was the widest hole in the
+# floor: every numeric age from 3 to 17 passed straight through beside an
+# explicit term. Patterns are written against the NORMALISED string, where
+# "12-year-old" has become "12-yearold" (the hyphen between a digit and a letter
+# survives; the one between two letters does not).
+_AGE_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+}
+MINOR_AGE_MAX = 17          # inclusive — 17 and under is a minor
+
+_AGE_UNIT    = r"(?:y\s*/?\s*o\b|yrs?\b|years?\s*old\b|yearsold\b|yearold\b|yr\s*old\b)"
+_AGE_NUM_RE  = re.compile(rf"(?<!\d)(\d{{1,2}})\s*[-\s]*{_AGE_UNIT}")
+_AGE_OF_RE   = re.compile(r"\bage[ds]?\s*(?:of\s*)?(\d{1,2})(?!\d)")
+_AGE_WORD_RE = re.compile(rf"\b({'|'.join(_AGE_WORDS)})\s*[-\s]*{_AGE_UNIT}")
+
+
+def _minor_age_signal(norm: str) -> bool:
+    """True if the text states an age of MINOR_AGE_MAX or below, digits or words.
+    Bias is deliberate: an unparseable or ambiguous age is NOT treated as adult."""
+    for rx in (_AGE_NUM_RE, _AGE_OF_RE):
+        for hit in rx.finditer(norm):
+            if int(hit.group(1)) <= MINOR_AGE_MAX:
+                return True
+    for hit in _AGE_WORD_RE.finditer(norm):
+        if _AGE_WORDS[hit.group(1)] <= MINOR_AGE_MAX:
+            return True
+    return False
+
+
+# Case-sensitive name-shaped bigram: both words Title-Case or ALL-CAPS.
+_PERSON_RE = re.compile(
+    r"\b(?:[A-Z][a-z]{1,20}|[A-Z]{2,21})\s+(?:[A-Z][a-z]{1,20}|[A-Z]{2,21})\b"
+)
 
 
 def _person_signal(text: str) -> bool:
@@ -168,8 +228,14 @@ def floor_check(prompt: str) -> str | None:
     The returned string is for internal logging only — never expose to callers."""
     norm = _normalize(prompt)
 
+    # Category 1a: single words that ARE the request. No second signal to wait for.
+    if _RE_MINOR_SEXUAL.search(norm):
+        return "minor-sexual"
+
     has_sex    = bool(_RE_SEXUAL.search(norm))
-    has_minor  = bool(_RE_MINOR.search(norm))
+    # A minor can be named in words ("toddler") or stated as an age ("9 year old").
+    # The age path was added after an audit found every numeric age slipping the floor.
+    has_minor  = bool(_RE_MINOR.search(norm)) or _minor_age_signal(norm)
 
     # Category 1: minor + sexual/suggestive
     if has_minor and has_sex:
