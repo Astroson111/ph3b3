@@ -34,7 +34,7 @@ _ABBREV = {
     "vs", "etc", "al", "inc", "ltd", "co", "corp", "no", "vol", "fig",
     "approx", "dept", "est", "min", "max", "misc",
     "e.g", "i.e", "a.m", "p.m", "u.s", "u.k",
-    # single-letter initials ("A." in "A. Olson") — treat as non-terminal
+    # single-letter initials ("A." in "A. Turing") — treat as non-terminal
     "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
     "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
 }
