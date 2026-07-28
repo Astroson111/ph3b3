@@ -1417,6 +1417,10 @@
               <input class="ut-num" id="utDiceMax" type="number" value="100" aria-label="maximum">
               <button class="ut-btn ut-btn-ghost" id="utDiceRoll" data-i18n="util.dice.roll">Roll</button>
             </div>
+            <div class="ut-dice-custom">
+              <input class="ut-num" id="utDiceExpr" type="text" placeholder="4d6kh3" aria-label="dice notation" autocomplete="off">
+              <button class="ut-btn ut-btn-ghost" id="utDiceExprRoll" data-i18n="util.dice.roll">Roll</button>
+            </div>
           </div>
         </details>
 
@@ -5332,6 +5336,29 @@ if ('serviceWorker' in navigator) {
     if (!isFinite(lo)) lo = 1; if (!isFinite(hi)) hi = 100;
     showRoll(randInt(lo, hi), lo + '–' + hi);
   });
+
+  // Dice NOTATION — the only tray tool that asks the server. Parsing 4d6kh3 /
+  // 2d20kh1+5 lives in modules/dnd_dice.py with its own tests; reimplementing it
+  // here would mean two parsers drifting apart on something where being subtly
+  // wrong changes the odds silently. Coin / d6 / d20 / range above stay fully
+  // client-side, so the rest of the tray still works with the backend down.
+  async function rollNotation(){
+    const expr = ($('utDiceExpr').value || '').trim();
+    if (!expr) return;
+    try {
+      const res = await fetch('/util/roll?expr=' + encodeURIComponent(expr),
+                              { credentials: 'same-origin' });
+      const d = await res.json();
+      if (!d.ok) { showRoll('—', d.error || 'not a dice expression'); return; }
+      const crit = d.crit === 'nat20' ? '   NATURAL 20'
+                 : d.crit === 'nat1'  ? '   NATURAL 1' : '';
+      showRoll(d.total, d.breakdown + crit);
+    } catch (e) {
+      showRoll('—', 'dice service unreachable');   // fail loud, never a fake number
+    }
+  }
+  $('utDiceExprRoll').addEventListener('click', rollNotation);
+  $('utDiceExpr').addEventListener('keydown', e => { if (e.key === 'Enter') rollNotation(); });
 
   // ═══════════════════ WORLD CLOCK ═══════════════════
   // Local + UTC always; up to 3 user zones via the Intl API (browser tz data —

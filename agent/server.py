@@ -145,6 +145,7 @@ import amphion                    # song generation (ACE-Step 1.5) — Morpheus'
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
 import intent_registry           # dedicated-module intent claims (precedence over Metis)
 import device_auth               # per-device auth keys (Iris/Dio), decoupled from the human login
+import dnd_dice                  # dice-notation roller behind the utility tray
 import device_commands           # Iris track-playback voice-command gate (pre-LLM intercept)
 import vad_turns                 # per-turn VAD diagnostics (metadata only — never audio)
 import apelles                   # photo editor — edits only, never generates (ruling A)
@@ -2545,6 +2546,35 @@ async def iris_tunnel_toggle(body: dict):
 
 # ── Web-access egress (Metis) — master switch, same card pattern as WireGuard ──
 # INVARIANT: default OFF. web_search reads this; OFF = tool disabled, zero packets.
+@app.get("/util/roll")
+async def util_roll(expr: str = ""):
+    """Dice-notation roller for the utility tray.
+
+    The tray's coin / d6 / d20 / range stay client-side — its randInt already uses
+    crypto.getRandomValues with rejection sampling, so this is not here to improve
+    the randomness. It is here for the notation the browser cannot parse: 4d6kh3,
+    2d20kh1+5, 1d8+1d6-2.
+
+    A malformed expression is REFUSED with its reason rather than coerced into some
+    other roll, because guessing at what the player meant silently changes the odds.
+    """
+    try:
+        r = dnd_dice.roll(expr)
+    except dnd_dice.DiceError as e:
+        return {"ok": False, "error": str(e)}
+
+    def _plain(g):
+        kept = ",".join(str(x) for x in g.kept)
+        drop = ("  drop " + ",".join(str(x) for x in g.dropped)) if g.dropped else ""
+        return f"{'-' if g.sign < 0 else ''}{g.count}d{g.sides}{g.keep_mode}: [{kept}]{drop}"
+
+    parts = [_plain(g) for g in r.groups]
+    if r.modifier:
+        parts.append(f"{r.modifier:+d}")
+    return {"ok": True, "expression": r.expression, "total": r.total,
+            "crit": r.crit, "breakdown": "  ·  ".join(parts)}
+
+
 @app.get("/egress")
 async def egress_get():
     return {"web_access": metis.egress_enabled(), "backend_up": metis.searxng_up()}
