@@ -42,6 +42,17 @@
       },
       "sleep_windows": []
     },
+    "pan": {
+      "type": "battery",
+      "heartbeat_s": 300,
+      "silent_after_s": 900,
+      "expected_firmware_hash": null,
+      "sick_if": {
+        "battery_below": 10,
+        "free_heap_below": 20000
+      },
+      "sleep_windows": []
+    },
     "rhea": {
       "type": "service",
       "heartbeat_s": 86400,

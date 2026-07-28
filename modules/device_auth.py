@@ -31,7 +31,7 @@ KEYS_PATH = Path(PH3B3_DATA) / "device_keys.json"
 
 # Devices that authenticate over the network and get a grandfathered key.
 # name (X-Ph3b3-Device header) -> human label.
-KNOWN_DEVICES = {"iris": "Iris", "stackchan": "Dio"}
+KNOWN_DEVICES = {"iris": "Iris", "stackchan": "Dio", "pan": "Pan"}
 
 MIN_KEY_LEN = 8
 

@@ -23,7 +23,7 @@ from paths import PH3B3_DATA
 CHATS_DIR = Path(PH3B3_DATA) / "chats"
 # device (X-Ph3b3-Device / dispatch device) → human source label
 _SOURCE = {"nyx": "portal", "portal": "portal", "iris": "iris",
-           "stackchan": "dio", "dio": "dio"}
+           "stackchan": "dio", "dio": "dio", "pan": "pan"}
 
 
 def _safe(s: str) -> str:

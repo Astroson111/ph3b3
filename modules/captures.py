@@ -13,6 +13,7 @@ Filename conventions (prefix → device):
     webcam_*.jpg     PC webcam fallback
     iris_*.wav       Iris badge recording
     stackchan_*.wav  Dio recording
+    pan_*.jpg/.wav   Pan — the second Stack-Chan, its own device
 """
 from __future__ import annotations
 
