@@ -25,6 +25,7 @@ import logging
 import os
 import random
 import re
+from functools import lru_cache
 import shutil
 import sqlite3
 import subprocess
@@ -199,14 +200,47 @@ _PROFILE_DENYLIST: frozenset[str] = load_profile(ACTIVE_PROFILE_NAME)
 STRICT_DENYLIST: frozenset[str] = load_profile("strict")
 
 
+# Ordinary words and names that CONTAIN a denied term but mean nothing like it.
+# Stripped before matching. Kept short and specific on purpose — this is a list of
+# known collisions, not a loophole: each entry is a phrase, so "naked eye" is
+# exempt while "naked" on its own is not.
+_PROFILE_ALLOW = (
+    "naked eye", "gore-tex", "goretex", "gutsy",
+    "nude tone", "nude-toned", "nude toned", "explicitly",
+)
+_ALLOW_RE = re.compile("|".join(re.escape(a) for a in _PROFILE_ALLOW), re.I)
+
+
+@lru_cache(maxsize=8)
+def _compile_denylist(terms: frozenset) -> re.Pattern:
+    r"""Denied terms as a word-START match that still allows suffixes.
+
+    The old check was a plain substring test, which blocked a county in England
+    ("Sussex"), a jacket ("Gore-Tex"), a terrier ("gutsy"), a curtain colour
+    ("nude-toned") and an identity ("asexual") — all on the strength of three
+    letters sitting inside a longer word. That is not caution, it is noise, and a
+    filter people learn to route around is worse than one that fires accurately.
+
+    A plain \b...\b would have been the obvious fix and would have made it WEAKER:
+    "sexy", "nudes", "pornographic" and "sexting" would all start passing. So the
+    boundary goes on the FRONT only — the term must begin a word — while \w*
+    keeps every suffixed form denied.
+    """
+    parts = []
+    for t in sorted(terms, key=len, reverse=True):
+        esc = re.escape(t).replace(r"\ ", r"[\s\-_]+")   # phrases tolerate - and _
+        parts.append(rf"(?<!\w){esc}\w*")
+    return re.compile("|".join(parts), re.I)
+
+
 def profile_check(prompt: str, denylist: frozenset | None = None) -> bool:
     """Return True if prompt passes the denylist, False if denied.
     Must be called only after floor_check passes.
     Pass denylist=morpheus.STRICT_DENYLIST to force strict (used by the
     localhost interlock when permissive is active but request is non-local)."""
     active = denylist if denylist is not None else _PROFILE_DENYLIST
-    norm = _normalize(prompt)
-    return not any(term in norm for term in active)
+    norm = _ALLOW_RE.sub(" ", _normalize(prompt))
+    return not _compile_denylist(frozenset(active)).search(norm)
 
 
 # ── SDXL workflow template (ComfyUI API format) ───────────────────────
