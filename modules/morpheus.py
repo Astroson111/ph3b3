@@ -205,10 +205,17 @@ STRICT_DENYLIST: frozenset[str] = load_profile("strict")
 # known collisions, not a loophole: each entry is a phrase, so "naked eye" is
 # exempt while "naked" on its own is not.
 _PROFILE_ALLOW = (
-    "naked eye", "gore-tex", "goretex", "gutsy",
+    "naked eye", "gore-tex", "gutsy",
     "nude tone", "nude-toned", "nude toned", "explicitly",
 )
-_ALLOW_RE = re.compile("|".join(re.escape(a) for a in _PROFILE_ALLOW), re.I)
+# Compile from the NORMALISED phrase, because _normalize() runs first and deletes
+# hyphens between letters ("nude-toned" arrives as "nudetoned"). Matching on the
+# raw spelling meant those entries could never fire — "nude-toned" was dead from
+# the day it was added, and "gore-tex" only worked because someone hand-added the
+# collapsed spelling beside it. Normalising here fixes both at the root.
+# Longest first so "nude toned" wins over "nude tone" and no stray "d" is left.
+_ALLOW_RE = re.compile("|".join(
+    re.escape(_normalize(a)) for a in sorted(_PROFILE_ALLOW, key=len, reverse=True)), re.I)
 
 
 @lru_cache(maxsize=8)
