@@ -15,6 +15,7 @@ PASSFILE="/home/astroson/.config/rhea/passphrase" # ABSOLUTE (service runs as ro
 PH3B3_DIR="/home/astroson/Desktop/ph3b3_v2"
 DATA_DIR="/home/astroson/ph3b3_data"
 V2DATA_DIR="/home/astroson/Desktop/ph3b3_v2_data"
+HISTORY_ARCHIVE="/home/astroson/ph3b3-history-archive.git" # offline bare mirror of the git history; no remote, never pushed
 DISK_SICK_PCT=80                                  # >this% used → Argus flags rhea SICK (space warning)
 
 SQLITE_STAGE="$DATA_DIR/.rhea-db-snapshots"        # STABLE path (not mktemp) so restore can find them
@@ -65,6 +66,13 @@ for p in /etc/wireguard \
 done
 [ "${#SYS_PATHS[@]}" -gt 0 ] && log "system configs: ${SYS_PATHS[*]}"
 
+# Offline mirror of the git history — survives losing GitHub or the account, not just
+# the SSD. It is bare with no remote, so this backup is its only copy off this disk;
+# if it is missing we say so and keep going (optional, unlike Phoebe's data).
+ARCHIVE_PATHS=()
+if [ -d "$HISTORY_ARCHIVE" ]; then ARCHIVE_PATHS+=("$HISTORY_ARCHIVE"); log "history archive: $HISTORY_ARCHIVE"
+else log "WARN: history archive not found at $HISTORY_ARCHIVE — skipping"; fi
+
 log "restic backup..."
 # EXCLUDED ON PURPOSE (re-downloadable bulk, not identity data):
 #   voices/  — ~1.3 GB of Piper .onnx models, re-fetched hash-pinned by setup.sh.
@@ -86,6 +94,7 @@ log "restic backup..."
   "$PH3B3_DIR/soul" \
   "$PH3B3_DIR/config" \
   "$PH3B3_DIR/deploy" \
+  ${ARCHIVE_PATHS[@]+"${ARCHIVE_PATHS[@]}"} \
   ${SYS_PATHS[@]+"${SYS_PATHS[@]}"} \
   || fail "restic backup failed"
 

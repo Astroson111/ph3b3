@@ -25,7 +25,11 @@ on the external **RHEA** drive and restores onto any machine in under an hour.
   **backed up read-only, never modified**.
 - All configs, **`.env`** (secrets, not on GitHub), cadence contracts, device registry.
 - Chat logs / transcripts (`chats/`), captures (photos + audio + sidecars).
-- **Code lives on GitHub** (`ph3b3` @ `main`) — verified current; Rhea backs up data, not the repo.
+- **Code lives on GitHub** (`ph3b3` @ `main`) — verified current; Rhea backs up data, not the working repo.
+- **`~/ph3b3-history-archive.git`** — an offline mirror of the full git history (bare, **no
+  remote**), so the repo survives losing GitHub or the account, not just losing the SSD.
+  A point-in-time snapshot, not a live mirror — re-take it when you want a fresher copy.
+  Missing archive → logged WARN and the run continues (optional, unlike the data).
 
 **Skipped (re-downloadable bulk):** Ollama/Whisper/SDXL models, venvs, caches,
 `sd_backup_16gb_*`, `RecipeNLG_code`, `edit_scratch`.
