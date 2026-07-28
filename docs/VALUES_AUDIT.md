@@ -245,6 +245,53 @@ known soft spot is a different claim from one without.
   clean range and the artifact is left visible rather than smoothed into a
   confident-looking lie.
 
+- **Morpheus Category 1 — the minor check matched strings, and ages are not
+  strings.** *(found and fixed 2026-07-27; published vulnerable 2026-06-27 →
+  2026-07-27, ~30 days)* The hardest refusal category in the floor was enforced by
+  a fixed list of terms, so it caught the words it happened to name and nothing
+  else. The structural half was worse than the missing vocabulary: **an age was
+  matched as text**, which no list can ever finish — every unlisted spelling of
+  every number under eighteen was a way through to the sampler. A second, quieter
+  defect made it a class of bug rather than one bug: `_floor_re` compiled patterns
+  from the **raw** term while `_normalize()` deletes hyphens between letters, so a
+  hyphenated entry could never match anything that actually arrived — a rule that
+  reads as present in the source and is dead at run time. The same trap had already
+  silently disabled an entry in the profile allow-list.
+
+  Fixed the night it was found (`16b929a`): ages are **parsed** rather than
+  matched, `MINOR_AGE_MAX` and below is a minor signal in digits or words; the term
+  set gained the ordinary synonyms and school-age phrasings it lacked; terms that
+  are themselves the entire request block standalone instead of waiting for a second
+  signal; and the regex now compiles from the normalised term. An
+  explicitly-stated-adult-age override was **deliberately not added** — it reads
+  sensibly and is trivially defeated, and a test now guards against a future
+  contributor adding it. 277 cases in `tests/test_minor_floor.py` cover minors named
+  in words and synonyms, ages in both forms, separator and case evasion, **and**
+  adults and ordinary prompts asserted to pass; the existing suites are unchanged at
+  9/9, 14/14, 31/31. One accepted over-block remains, recorded in the commit: an
+  added term also matches an adjacent adjective, so a stated adult age can be
+  refused alongside it. That is wrong in the harmless direction and tunable by
+  dropping a word; the reverse mistake is not tunable.
+
+  **The publication half.** Fixing the code did not un-ship the broken version. It
+  was public for the full window, so a clone taken in that month still carries the
+  bypass and nothing done here reaches those copies. Deleting the repository and
+  re-uploading from a fresh root was planned and then **deliberately rejected**: it
+  would have removed the evidence without retrieving a single clone, and a safety
+  floor that failed is worth more on the record than a clean commit graph. **The
+  history stays.** The vulnerable commits stay readable, `16b929a` sits at the end of
+  them, and anyone can diff the two and judge the fix for themselves. Context at the
+  time of the decision (2026-07-28): 0 forks, 6 stars, 265 unique cloners over the
+  preceding 14 days. A full mirror is also kept privately at
+  `~/ph3b3-history-archive.git` and in Rhea's snapshot set — that one is durability,
+  not concealment.
+
+  **Standing lesson for this trail:** a floor written as a word list is a floor
+  whose coverage equals its author's imagination. Where the thing being detected has
+  *structure* — an age, a date, a quantity — parse the structure; a list is the
+  fallback, not the mechanism. And a fix to a safety floor is not finished when the
+  code is right, because the wrong version is still wherever it was published.
+
 ## How to use this trail
 
 - **Adding a capability?** Add its row *before* it ships. If you can't name the
