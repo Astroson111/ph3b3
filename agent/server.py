@@ -3649,6 +3649,196 @@ async def chats_session(name: str):
         raise HTTPException(404, "session not found")
     return {"turns": turns}
 
+# ── Ghost Hunting investigations (Dio → Nyx) ─────────────────────────────────
+# Dio records an investigation entirely to her SD card and uploads it later, as a
+# separate deliberate act — she gets carried into places with no WiFi, so nothing
+# in the recording path may depend on the network being up. Sync is therefore a
+# plain file copy plus a finalize, and it is idempotent: re-uploading a session
+# overwrites the same files and rebuilds the same manifest.
+INVESTIGATIONS_DIR = Path.home() / "Desktop" / "investigations"
+_INV_MAX_BYTES = 32 * 1024 * 1024          # a single capture file; WAVs are ~320 KB
+_INV_SUBDIRS   = ("photos", "audio")
+_INV_SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _inv_session_dir(session_id: str) -> Path:
+    """Resolve a session id to its bundle directory, refusing anything that is
+    not a plain name. The id reaches us from a device header, so it is untrusted
+    input that ends up in a filesystem path."""
+    if not _INV_SAFE_NAME.match(session_id or "") or session_id.startswith("."):
+        raise HTTPException(400, "invalid session id")
+    return INVESTIGATIONS_DIR / session_id
+
+
+def _inv_resolve_upload(session_id: str, rel: str) -> Path:
+    """Map an X-Inv-Path to a real path inside the bundle. Only manifest.ndjson
+    at the root and single-level files under photos/ or audio/ are accepted —
+    anything else (absolute, dotted, nested, oddly named) is refused rather than
+    normalised, so there is no traversal to reason about."""
+    rel = (rel or "").strip().replace("\\", "/").lstrip("/")
+    parts = [p for p in rel.split("/") if p]
+    if not parts or any(not _INV_SAFE_NAME.match(p) or p.startswith(".") for p in parts):
+        raise HTTPException(400, "invalid file path")
+
+    base = _inv_session_dir(session_id)
+    if len(parts) == 1:
+        if parts[0] != "manifest.ndjson":
+            raise HTTPException(400, "only manifest.ndjson may sit at the bundle root")
+        return base / parts[0]
+    if len(parts) == 2 and parts[0] in _INV_SUBDIRS:
+        return base / parts[0] / parts[1]
+    raise HTTPException(400, "path must be manifest.ndjson, photos/<file> or audio/<file>")
+
+
+@app.post("/investigations/{session_id}/file")
+async def investigation_upload(session_id: str, request: Request):
+    """Receive one file of a Ghost Hunting bundle. Body is the raw bytes; the
+    destination comes from the X-Inv-Path header. Auth is the global basic-auth
+    middleware. Written via a temp file + atomic replace so an interrupted upload
+    can never leave a half a WAV sitting in the bundle looking like evidence."""
+    dest = _inv_resolve_upload(session_id, request.headers.get("X-Inv-Path", ""))
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "empty upload")
+    if len(data) > _INV_MAX_BYTES:
+        raise HTTPException(413, f"file exceeds {_INV_MAX_BYTES} bytes")
+
+    def _write() -> int:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".part")
+        tmp.write_bytes(data)
+        tmp.replace(dest)
+        return len(data)
+
+    written = await asyncio.to_thread(_write)
+    log.info("[inv] %s ← %s (%d bytes)", session_id, dest.name, written)
+    return {"ok": True, "session_id": session_id, "file": dest.name, "bytes": written}
+
+
+def _inv_build_manifest(session_id: str, base: Path) -> dict:
+    """Assemble manifest.json from the append-only manifest.ndjson Dio wrote.
+
+    The device logs NDJSON precisely because a session can end with a flat
+    battery: every line stands alone, so a truncated file still yields every
+    event before the cut. That means the LAST line may legitimately be a
+    fragment — it is counted, not treated as corruption of the whole session."""
+    nd = base / "manifest.ndjson"
+    if not nd.exists():
+        raise HTTPException(400, "manifest.ndjson missing — upload it before finalize")
+
+    events, truncated = [], 0
+    for line in nd.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            truncated += 1
+
+    start = next((e for e in events if e.get("type") == "session_start"), {})
+    end   = next((e for e in events if e.get("type") == "session_end"), None)
+
+    env_keys = ("temp_c", "humidity_pct", "pressure_pa", "temp_source", "env_age_ms")
+    captures = []
+    for e in events:
+        if e.get("type") not in ("audio", "photo"):
+            continue
+        cap = {k: v for k, v in e.items() if k not in env_keys and k != "type"}
+        cap["kind"] = e["type"]
+        cap["env"]  = {k: e.get(k) for k in env_keys}
+        captures.append(cap)
+
+    counts = {t: sum(1 for e in events if e.get("type") == t)
+              for t in ("env", "audio", "photo", "audio_gap", "error")}
+
+    # Report what is actually on disk, not what the device believed it wrote —
+    # a file that failed to upload must not be implied by the manifest.
+    def _listing(sub: str) -> list:
+        d = base / sub
+        return sorted(p.name for p in d.iterdir() if p.is_file()) if d.is_dir() else []
+
+    return {
+        "session_id":  session_id,
+        "device":      start.get("device"),
+        "mode":        start.get("mode"),
+        "env_unit":    start.get("env_unit"),
+        "started_at":  start.get("rtc"),
+        "ended_at":    (end or {}).get("rtc"),
+        "duration_ms": (end or {}).get("duration_ms"),
+        "complete":    end is not None,          # false = session was cut short
+        "sample_rate": start.get("sample_rate"),
+        "chunk_sec":   start.get("chunk_sec"),
+        "counts":      counts,
+        "truncated_lines": truncated,
+        "env_readings": [{k: e.get(k) for k in ("ms", "rtc", *env_keys)}
+                         for e in events if e.get("type") == "env"],
+        "captures":    captures,
+        "files":       {"photos": _listing("photos"), "audio": _listing("audio")},
+        "events":      events,                   # the raw log, kept verbatim
+        "synced_at":   datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+@app.post("/investigations/{session_id}/finalize")
+async def investigation_finalize(session_id: str):
+    """Close out a synced session: build manifest.json from the uploaded NDJSON
+    and make sure photos/ and audio/ exist, so every bundle has the same shape
+    whether or not the mode that produced it captures those. Idempotent — safe
+    to call again after a re-upload."""
+    base = _inv_session_dir(session_id)
+    if not base.is_dir():
+        raise HTTPException(404, "session not found")
+
+    def _finalize() -> dict:
+        for sub in _INV_SUBDIRS:
+            (base / sub).mkdir(exist_ok=True)
+        manifest = _inv_build_manifest(session_id, base)
+        tmp = base / "manifest.json.part"
+        tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        tmp.replace(base / "manifest.json")
+        return manifest
+
+    manifest = await asyncio.to_thread(_finalize)
+    log.info("[inv] finalized %s — mode=%s captures=%d env=%d%s",
+             session_id, manifest["mode"], len(manifest["captures"]),
+             manifest["counts"]["env"],
+             "" if manifest["complete"] else " (INCOMPLETE — no session_end)")
+    return {"ok": True, "session_id": session_id, "path": str(base),
+            "mode": manifest["mode"], "counts": manifest["counts"],
+            "complete": manifest["complete"]}
+
+
+@app.get("/investigations")
+async def investigations_list():
+    """Read-only index of synced investigations, newest first. Reads each
+    bundle's manifest.json where one exists; a session that was uploaded but
+    never finalized still shows up, marked unfinalized, rather than vanishing."""
+    if not INVESTIGATIONS_DIR.is_dir():
+        return {"sessions": []}
+
+    def _scan() -> list:
+        out = []
+        for d in INVESTIGATIONS_DIR.iterdir():
+            if not d.is_dir():
+                continue
+            mf = d / "manifest.json"
+            if mf.exists():
+                try:
+                    m = json.loads(mf.read_text(encoding="utf-8"))
+                    out.append({"session_id": d.name, "mode": m.get("mode"),
+                                "started_at": m.get("started_at"),
+                                "counts": m.get("counts"), "complete": m.get("complete"),
+                                "finalized": True})
+                    continue
+                except (json.JSONDecodeError, OSError):
+                    pass
+            out.append({"session_id": d.name, "finalized": False})
+        return sorted(out, key=lambda s: s["session_id"], reverse=True)
+
+    return {"sessions": await asyncio.to_thread(_scan)}
+
+
 @app.get("/")
 async def index():
     return Response(
