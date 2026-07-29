@@ -25,10 +25,18 @@ sys.path.insert(0, str(REPO / "modules"))
 sys.path.insert(0, str(REPO / "agent"))
 
 import server
+import investigation_module
 from fastapi.testclient import TestClient
 
 _TMP = Path(tempfile.mkdtemp(prefix="inv_test_"))
 server.INVESTIGATIONS_DIR = _TMP
+
+# Redirect the investigation records too. The module reads INVEST_DIR at call
+# time, so rebinding the module global steers the already-constructed instance —
+# which means these tests never read or write the operator's real hunt records.
+_INV_TMP = Path(tempfile.mkdtemp(prefix="inv_records_"))
+investigation_module.INVEST_DIR = _INV_TMP
+server.investigation._active = None
 
 client = TestClient(server.app)
 _auth = base64.b64encode(f"{server.AUTH_USER}:{server.AUTH_PASS}".encode()).decode()
@@ -197,6 +205,117 @@ check("listing carries mode", all(s.get("finalized") for s in r.json()["sessions
 check("auth required", client.get("/investigations").status_code in (401, 403))
 
 
+# ── 6. Joining a bundle to the investigation it was recorded during ──────────
+# The two halves share no id: Phoebe records what the operator noticed, Dio
+# records what she heard. They join on wall-clock time, and the payoff is that
+# an EVP mark resolves to the audio chunk that actually contains it.
+print("\n[6] investigation join")
+from datetime import datetime, timedelta
+
+base_t = datetime(2026, 7, 29, 21, 0, 0)
+
+def iso(dt): return dt.isoformat()
+
+# A hunt that ran 20:58 -> 21:10, with an EVP mark 25 s into Dio's recording.
+hunt = {
+    "session_id": "20260729_205800", "location": "the old library",
+    "investigator": "Operator", "started": iso(base_t - timedelta(minutes=2)),
+    "ended": iso(base_t + timedelta(minutes=10)), "events": [],
+    "evp_timestamps": [{"time": iso(base_t + timedelta(seconds=25)), "note": "whisper, back stairs"}],
+    "emf_readings": [], "anomalies": [], "notes": [], "weather": None,
+    "device_sessions": [],
+}
+(_INV_TMP / "20260729_205800.json").write_text(json.dumps(hunt, indent=2))
+
+# Distinct from section 1's bundle — same wall-clock start (the join is on RTC,
+# not on the id), but its own directory, so neither test overwrites the other.
+SID6 = "dio_hunt_20260729_210000"
+lines = ndjson(
+    {"type": "session_start", "ms": 0, "rtc": iso(base_t),
+     "session_id": SID6, "device": "dio", "mode": "evp_recorder",
+     "env_unit": "env-iii", "audio": True, "photos": False,
+     "sample_rate": 16000, "chunk_sec": 10},
+    {"type": "env", "ms": 5, "rtc": iso(base_t), **env()},
+    # chunk 1 covers 0-10 s, chunk 2 covers 10-20 s, chunk 3 covers 20-30 s
+    {"type": "audio", "ms": 10000, "rtc": iso(base_t + timedelta(seconds=10)),
+     "file": "audio/chunk_0001.wav", "start_ms": 0, "duration_ms": 10000,
+     "sample_rate": 16000, "channels": 1, "bits": 16, **env()},
+    {"type": "audio", "ms": 20000, "rtc": iso(base_t + timedelta(seconds=20)),
+     "file": "audio/chunk_0002.wav", "start_ms": 10000, "duration_ms": 10000,
+     "sample_rate": 16000, "channels": 1, "bits": 16, **env()},
+    {"type": "audio", "ms": 30000, "rtc": iso(base_t + timedelta(seconds=30)),
+     "file": "audio/chunk_0003.wav", "start_ms": 20000, "duration_ms": 10000,
+     "sample_rate": 16000, "channels": 1, "bits": 16, **env()},
+    {"type": "session_end", "ms": 30000, "rtc": iso(base_t + timedelta(seconds=30)),
+     "reason": "stopped", "env_samples": 1, "audio_chunks": 3, "photos": 0,
+     "audio_gaps": 0, "duration_ms": 30000},
+)
+check("upload", put(SID6, "manifest.ndjson", lines).status_code == 200)
+r = client.post(f"/investigations/{SID6}/finalize", headers=HEADERS)
+check("finalize 200", r.status_code == 200, r.text)
+check("linked to the hunt", r.json()["investigation"] == "20260729_205800", r.json())
+check("one mark carried over", r.json()["marks"] == 1, r.json())
+
+m = json.loads((_TMP / SID6 / "manifest.json").read_text())
+blk = m["investigation"]
+check("location on the bundle", blk["location"] == "the old library")
+check("matched by time window", blk["match"] == "time_window")
+mark = blk["marks"][0]
+check("mark offset is 25 s", mark["offset_ms"] == 25000, mark)
+# 25 s falls in chunk 3 (20-30 s), 5 s into that file. This is the whole point.
+check("EVP resolves to chunk_0003", mark["audio_file"] == "audio/chunk_0003.wav", mark)
+check("and to 5 s into it", mark["offset_in_file_ms"] == 5000, mark)
+
+rec = json.loads((_INV_TMP / "20260729_205800.json").read_text())
+check("hunt record gained the bundle", len(rec["device_sessions"]) == 1, rec.get("device_sessions"))
+check("back-link carries counts", rec["device_sessions"][0]["counts"]["audio"] == 3)
+check("back-link carries the path", SID6 in rec["device_sessions"][0]["path"])
+
+# Re-sync must update in place, not duplicate.
+client.post(f"/investigations/{SID6}/finalize", headers=HEADERS)
+rec = json.loads((_INV_TMP / "20260729_205800.json").read_text())
+check("re-link is idempotent", len(rec["device_sessions"]) == 1, rec.get("device_sessions"))
+
+
+# ── 7. What must NOT be linked ───────────────────────────────────────────────
+print("\n[7] mislinking refused")
+# A record left open before a restart is stale, not ongoing. There is a real one
+# on disk from 2026-07-16, and it must not swallow every later recording.
+stale = dict(hunt, session_id="20260716_220317",
+             started="2026-07-16T22:03:17", ended=None,
+             evp_timestamps=[], device_sessions=[])
+(_INV_TMP / "20260716_220317.json").write_text(json.dumps(stale, indent=2))
+
+SID7 = "dio_20260801_120000"
+far = datetime(2026, 8, 1, 12, 0, 0)
+lines = ndjson(
+    {"type": "session_start", "ms": 0, "rtc": iso(far), "session_id": SID7,
+     "device": "dio", "mode": "record_room", "env_unit": "env-iii",
+     "audio": False, "photos": False, "sample_rate": 16000, "chunk_sec": 10},
+    {"type": "env", "ms": 5, "rtc": iso(far), **env()},
+    {"type": "session_end", "ms": 9000, "rtc": iso(far + timedelta(seconds=9)),
+     "reason": "stopped", "env_samples": 1, "audio_chunks": 0, "photos": 0,
+     "audio_gaps": 0, "duration_ms": 9000},
+)
+put(SID7, "manifest.ndjson", lines)
+r = client.post(f"/investigations/{SID7}/finalize", headers=HEADERS)
+check("stale open record does not claim it", r.json()["investigation"] is None, r.json())
+m7 = json.loads((_TMP / SID7 / "manifest.json").read_text())
+check("manifest says investigation: null", m7["investigation"] is None)
+rec_stale = json.loads((_INV_TMP / "20260716_220317.json").read_text())
+check("stale record untouched", not rec_stale.get("device_sessions"))
+
+# A mark logged outside the recording's own span belongs to neither bundle.
+hunt2 = json.loads((_INV_TMP / "20260729_205800.json").read_text())
+hunt2["notes"] = [{"time": iso(base_t + timedelta(minutes=5)), "note": "after Dio stopped"}]
+(_INV_TMP / "20260729_205800.json").write_text(json.dumps(hunt2, indent=2))
+client.post(f"/investigations/{SID6}/finalize", headers=HEADERS)
+m6 = json.loads((_TMP / SID6 / "manifest.json").read_text())
+kinds = [k["kind"] for k in m6["investigation"]["marks"]]
+check("out-of-span note excluded", "note" not in kinds, kinds)
+check("in-span EVP still there", "evp" in kinds, kinds)
+
+shutil.rmtree(_INV_TMP, ignore_errors=True)
 shutil.rmtree(_TMP, ignore_errors=True)
 print(f"\n{_passed} passed, {_failed} failed")
 sys.exit(1 if _failed else 0)

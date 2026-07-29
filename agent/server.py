@@ -4,7 +4,7 @@ import asyncio
 import base64
 import subprocess
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import json
 import logging
@@ -3780,6 +3780,118 @@ def _inv_build_manifest(session_id: str, base: Path) -> dict:
     }
 
 
+def _inv_mark_streams(record: dict) -> list:
+    """The operator's own timestamped entries, flattened to (kind, time, text)."""
+    out = []
+    for entry in record.get("evp_timestamps") or []:
+        out.append(("evp", entry.get("time"), entry.get("note", "")))
+    for entry in record.get("anomalies") or []:
+        out.append(("anomaly", entry.get("time"), entry.get("description", "")))
+    for entry in record.get("notes") or []:
+        out.append(("note", entry.get("time"), entry.get("note", "")))
+    for entry in record.get("emf_readings") or []:
+        out.append(("emf", entry.get("time"),
+                    f"{entry.get('reading','')} @ {entry.get('location','')}".strip(" @")))
+    for entry in record.get("events") or []:
+        out.append((f"event:{entry.get('category','general')}",
+                    entry.get("time"), entry.get("description", "")))
+    return out
+
+
+def _inv_link_investigation(session_id: str, manifest: dict) -> dict | None:
+    """Join a synced device bundle to the investigation it was recorded during.
+
+    The two halves are captured independently: Phoebe's record is what the
+    operator noticed, the bundle is what Dio heard while they noticed it. They
+    share no id, so the join is by wall-clock time — both sides write naive local
+    ISO timestamps, so they compare directly.
+
+    The payoff is the mark correlation. An EVP the operator flagged at 21:34:12
+    resolves to the audio chunk whose span contains it, so the bundle records
+    which file to actually listen to rather than leaving someone to work it out
+    from two clocks later.
+
+    Returns the block to embed in manifest.json, or None when nothing matched —
+    an unmatched bundle stays unmatched rather than being attached to whichever
+    investigation happened to be nearest.
+    """
+    started_at = manifest.get("started_at")
+    start_dt = None
+    if started_at:
+        try:
+            start_dt = datetime.fromisoformat(started_at)
+        except ValueError:
+            start_dt = None
+
+    if start_dt is not None:
+        inv_id, basis = investigation.find_session_for(start_dt), "time_window"
+    else:
+        # Dio's clock was never set, so there is no time to match on. Fall back
+        # to the investigation open right now, and record that the link is an
+        # inference rather than a match — the manifest must not imply more
+        # certainty than the timestamps support.
+        inv_id = (investigation._active or {}).get("session_id")
+        basis = "active_session_no_rtc"
+
+    if not inv_id:
+        return None
+    record = investigation.get_session(inv_id)
+    if not record:
+        return None
+
+    # Marks inside this recording's own span. A hunt can span several bundles,
+    # so an entry logged while Dio was not recording belongs to neither.
+    duration_ms = manifest.get("duration_ms") or 0
+    marks = []
+    if start_dt is not None:
+        end_dt = start_dt + timedelta(milliseconds=duration_ms)
+        audio = [c for c in manifest.get("captures", []) if c.get("kind") == "audio"]
+        for kind, when, text in _inv_mark_streams(record):
+            if not when:
+                continue
+            try:
+                t = datetime.fromisoformat(when)
+            except ValueError:
+                continue
+            if not (start_dt <= t <= end_dt):
+                continue
+            offset_ms = int((t - start_dt).total_seconds() * 1000)
+            hit = next((c for c in audio
+                        if c.get("start_ms", 0) <= offset_ms
+                        < c.get("start_ms", 0) + (c.get("duration_ms") or 0)), None)
+            marks.append({
+                "kind": kind, "at": when, "offset_ms": offset_ms, "text": text,
+                "audio_file": hit.get("file") if hit else None,
+                "offset_in_file_ms": (offset_ms - hit.get("start_ms", 0)) if hit else None,
+            })
+        marks.sort(key=lambda m: m["offset_ms"])
+
+    counts = manifest.get("counts") or {}
+    investigation.attach_device_session(inv_id, {
+        "session_id": manifest.get("session_id"),
+        "device":     manifest.get("device"),
+        "mode":       manifest.get("mode"),
+        "started_at": started_at,
+        "duration_ms": duration_ms,
+        "complete":   manifest.get("complete"),
+        "counts":     counts,
+        "path":       str(INVESTIGATIONS_DIR / session_id),
+        "match":      basis,
+        "linked_at":  datetime.now().isoformat(timespec="seconds"),
+    })
+
+    return {
+        "session_id":   inv_id,
+        "location":     record.get("location"),
+        "investigator": record.get("investigator"),
+        "started":      record.get("started"),
+        "ended":        record.get("ended"),
+        "weather":      record.get("weather"),
+        "match":        basis,
+        "marks":        marks,
+    }
+
+
 @app.post("/investigations/{session_id}/finalize")
 async def investigation_finalize(session_id: str):
     """Close out a synced session: build manifest.json from the uploaded NDJSON
@@ -3794,19 +3906,27 @@ async def investigation_finalize(session_id: str):
         for sub in _INV_SUBDIRS:
             (base / sub).mkdir(exist_ok=True)
         manifest = _inv_build_manifest(session_id, base)
+        # Cross-link before writing, so manifest.json is complete on first read
+        # and a consumer never has to know a second pass happened.
+        manifest["investigation"] = _inv_link_investigation(session_id, manifest)
         tmp = base / "manifest.json.part"
         tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         tmp.replace(base / "manifest.json")
         return manifest
 
     manifest = await asyncio.to_thread(_finalize)
-    log.info("[inv] finalized %s — mode=%s captures=%d env=%d%s",
+    linked = manifest.get("investigation")
+    log.info("[inv] finalized %s — mode=%s captures=%d env=%d%s → %s",
              session_id, manifest["mode"], len(manifest["captures"]),
              manifest["counts"]["env"],
-             "" if manifest["complete"] else " (INCOMPLETE — no session_end)")
+             "" if manifest["complete"] else " (INCOMPLETE — no session_end)",
+             f"{linked['session_id']} ({len(linked['marks'])} marks)"
+             if linked else "no matching investigation")
     return {"ok": True, "session_id": session_id, "path": str(base),
             "mode": manifest["mode"], "counts": manifest["counts"],
-            "complete": manifest["complete"]}
+            "complete": manifest["complete"],
+            "investigation": linked["session_id"] if linked else None,
+            "marks": len(linked["marks"]) if linked else 0}
 
 
 @app.get("/investigations")
@@ -3826,10 +3946,14 @@ async def investigations_list():
             if mf.exists():
                 try:
                     m = json.loads(mf.read_text(encoding="utf-8"))
+                    inv = m.get("investigation") or {}
                     out.append({"session_id": d.name, "mode": m.get("mode"),
                                 "started_at": m.get("started_at"),
                                 "counts": m.get("counts"), "complete": m.get("complete"),
-                                "finalized": True})
+                                "finalized": True,
+                                "investigation": inv.get("session_id"),
+                                "location": inv.get("location"),
+                                "marks": len(inv.get("marks") or [])})
                     continue
                 except (json.JSONDecodeError, OSError):
                     pass
