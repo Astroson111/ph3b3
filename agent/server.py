@@ -2502,12 +2502,18 @@ async def transcribe_audio(request: Request, body: dict):
                 log.info("[device-cmd] iris %r → %s", _text[:60], _cmd)
                 return {"text": _text, "error": None, "device_command": _cmd,
                         "speak": device_commands.confirmation(_cmd)}
-        # Native photo loop: tell Dio (and only Dio) to run her on-device capture
-        # loop when this utterance is a vision request routed to HER camera. The
-        # firmware branches on "camera":"dio"; absent/other → normal chat.
+        # Native photo loop: tell a Stack-Chan to run her on-device capture loop
+        # when this utterance is a vision request routed to HER camera. The value
+        # NAMES the unit, so each one keys off itself; absent/other → normal chat.
+        #
+        # Gating on == "stackchan" meant Pan (X-Ph3b3-Device: pan) never received
+        # the field at all, so her vision was dead. Dio still gets the "dio"
+        # literal her firmware compares against — new firmware matches on
+        # SC_DEVICE_NAME and keeps "dio" as a legacy alias, so the two sides can
+        # be rolled out in either order without a broken window.
         _resp = {"text": _text, "error": result.get("error")}
-        if _device == "stackchan" and _vision_intercept(_text, device=_device) == "look":
-            _resp["camera"] = "dio"
+        if _device in device_auth.STACKCHAN_DEVICES and _vision_intercept(_text, device=_device) == "look":
+            _resp["camera"] = "dio" if _device == "stackchan" else _device
         return _resp
     finally:
         try:

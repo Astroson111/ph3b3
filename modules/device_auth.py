@@ -33,6 +33,12 @@ KEYS_PATH = Path(PH3B3_DATA) / "device_keys.json"
 # name (X-Ph3b3-Device header) -> human label.
 KNOWN_DEVICES = {"iris": "Iris", "stackchan": "Dio", "pan": "Pan"}
 
+# Stack-Chan-class units: the ones with an on-device camera that can run the
+# native photo loop. Iris is a combadge with no camera, so she is NOT in here.
+# Kept beside KNOWN_DEVICES so adding a third Stack-Chan is one edit, not a
+# hunt for hardcoded names scattered through the routes.
+STACKCHAN_DEVICES = frozenset({"stackchan", "pan"})
+
 MIN_KEY_LEN = 8
 
 _cache: dict | None = None
