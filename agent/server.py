@@ -3739,7 +3739,10 @@ def _inv_build_manifest(session_id: str, base: Path) -> dict:
     start = next((e for e in events if e.get("type") == "session_start"), {})
     end   = next((e for e in events if e.get("type") == "session_end"), None)
 
-    env_keys = ("temp_c", "humidity_pct", "pressure_pa", "temp_source", "env_age_ms")
+    # temp_f is derived on the device and travels with temp_c; both must be
+    # listed or the extra key leaks to the capture's top level instead of its env.
+    env_keys = ("temp_c", "temp_f", "humidity_pct", "pressure_pa",
+                "temp_source", "env_age_ms")
     captures = []
     for e in events:
         if e.get("type") not in ("audio", "photo"):

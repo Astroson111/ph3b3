@@ -65,8 +65,9 @@ def ndjson(*objs) -> bytes:
 
 
 def env(t=18.4, h=52.0, p=101325.0, age=0, src="sht30"):
-    return {"temp_c": t, "humidity_pct": h, "pressure_pa": p,
-            "temp_source": src, "env_age_ms": age}
+    # temp_f mirrors what the device writes: derived from temp_c, sent alongside.
+    return {"temp_c": t, "temp_f": round(t * 9 / 5 + 32, 2), "humidity_pct": h,
+            "pressure_pa": p, "temp_source": src, "env_age_ms": age}
 
 
 # ── 1. Record Room: ENV only, no media ───────────────────────────────────────
@@ -94,6 +95,8 @@ check("no captures", m["captures"] == [])
 check("marked complete", m["complete"] is True)
 check("started_at from RTC", m["started_at"] == "2026-07-29T21:00:00")
 check("env readings carry values", m["env_readings"][0]["temp_c"] == 18.4)
+check("fahrenheit carried alongside", m["env_readings"][0]["temp_f"] == 65.12,
+      m["env_readings"][0])
 # The bundle shape is identical across modes — empty dirs, not missing ones.
 check("photos/ exists though empty", (_TMP / SID / "photos").is_dir())
 check("audio/ exists though empty", (_TMP / SID / "audio").is_dir())
@@ -132,6 +135,8 @@ check("one audio + one photo capture", kinds == ["audio", "photo"], kinds)
 aud = m["captures"][0]
 check("audio capture keeps its file path", aud["file"] == "audio/chunk_0001.wav")
 check("audio capture has nested env", aud["env"]["temp_c"] == 18.4, aud["env"])
+check("temp_f nested too, not leaked", "temp_f" in aud["env"] and "temp_f" not in aud,
+      aud)
 check("env age travels with the capture", aud["env"]["env_age_ms"] == 10110)
 check("env fields not left at capture top level", "temp_c" not in aud, aud.keys())
 check("photo bytes preserved", m["captures"][1]["bytes"] == 8400)
