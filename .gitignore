@@ -36,3 +36,7 @@ FUTURE.md
 # files would still publish a ready-made prompt list usable against any other
 # generator. Keep them on the machine; run them before touching the floor.
 tests/floor_*_probe.py
+
+# Security audit — LOCAL ONLY. Documents open findings on a live, internet-
+# reachable host; publishing it hands over a current vulnerability map.
+docs/security_audit_*.md
