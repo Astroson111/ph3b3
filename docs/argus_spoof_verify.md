@@ -24,7 +24,7 @@ Two layers guard heartbeat ingest:
 | Unauthenticated heartbeat | 401 | **401** (perimeter fail-closed) |
 | Oversize payload (>512 B) | 413 | **413** |
 | Malformed JSON | 400 | **400** |
-| Authed `stackchan` from IP ≠ `dio_host` | 403 + logged | **403 "unverified device identity"** + `[ARGUS] rejected spoofed heartbeat: 'stackchan' from 127.0.0.1 (verified dio_host=192.168.0.22)` |
+| Authed `stackchan` from IP ≠ `dio_host` | 403 + logged | **403 "unverified device identity"** + `[ARGUS] rejected spoofed heartbeat: 'stackchan' from 127.0.0.1 (verified dio_host=192.0.2.22)` |
 | Genuine `stackchan` from the pinned IP | accepted, no false-reject | **accepted** `{"ok": true}` |
 
 The 401/413/400 cases were exercised against the live server. The IP-pin 403 was

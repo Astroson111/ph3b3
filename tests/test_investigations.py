@@ -77,7 +77,8 @@ lines = ndjson(
     {"type": "session_start", "ms": 0, "rtc": "2026-07-29T21:00:00",
      "session_id": SID, "device": "dio", "mode": "record_room",
      "env_unit": "env-iii", "audio": False, "photos": False,
-     "sample_rate": 16000, "chunk_sec": 10},
+     "sample_rate": 16000, "chunk_sec": 10, "clock": "server",
+     "tz_offset_min": -240},
     {"type": "env", "ms": 12, "rtc": "2026-07-29T21:00:00", **env()},
     {"type": "env", "ms": 5012, "rtc": "2026-07-29T21:00:05", **env(t=18.1)},
     {"type": "session_end", "ms": 9000, "rtc": "2026-07-29T21:00:09",
@@ -110,7 +111,8 @@ lines = ndjson(
     {"type": "session_start", "ms": 0, "rtc": "2026-07-29T21:30:00",
      "session_id": SID2, "device": "dio", "mode": "live_capture",
      "env_unit": "env-iii", "audio": True, "photos": True,
-     "sample_rate": 16000, "chunk_sec": 10},
+     "sample_rate": 16000, "chunk_sec": 10, "clock": "server",
+     "tz_offset_min": -240},
     {"type": "env", "ms": 10, "rtc": "2026-07-29T21:30:00", **env()},
     {"type": "audio", "ms": 10120, "rtc": "2026-07-29T21:30:10",
      "file": "audio/chunk_0001.wav", "start_ms": 120, "duration_ms": 10000,
@@ -156,7 +158,8 @@ good = ndjson(
     {"type": "session_start", "ms": 0, "rtc": "2026-07-29T22:00:00",
      "session_id": SID3, "device": "dio", "mode": "evp_recorder",
      "env_unit": "env-iii", "audio": True, "photos": False,
-     "sample_rate": 16000, "chunk_sec": 10},
+     "sample_rate": 16000, "chunk_sec": 10, "clock": "server",
+     "tz_offset_min": -240},
     {"type": "env", "ms": 8, "rtc": "2026-07-29T22:00:00", **env()},
 )
 truncated = good + b'{"type":"audio","ms":10008,"rtc":"2026-07-2'
@@ -239,7 +242,8 @@ lines = ndjson(
     {"type": "session_start", "ms": 0, "rtc": iso(base_t),
      "session_id": SID6, "device": "dio", "mode": "evp_recorder",
      "env_unit": "env-iii", "audio": True, "photos": False,
-     "sample_rate": 16000, "chunk_sec": 10},
+     "sample_rate": 16000, "chunk_sec": 10, "clock": "server",
+     "tz_offset_min": -240},
     {"type": "env", "ms": 5, "rtc": iso(base_t), **env()},
     # chunk 1 covers 0-10 s, chunk 2 covers 10-20 s, chunk 3 covers 20-30 s
     {"type": "audio", "ms": 10000, "rtc": iso(base_t + timedelta(seconds=10)),
@@ -296,7 +300,8 @@ far = datetime(2026, 8, 1, 12, 0, 0)
 lines = ndjson(
     {"type": "session_start", "ms": 0, "rtc": iso(far), "session_id": SID7,
      "device": "dio", "mode": "record_room", "env_unit": "env-iii",
-     "audio": False, "photos": False, "sample_rate": 16000, "chunk_sec": 10},
+     "audio": False, "photos": False, "sample_rate": 16000, "chunk_sec": 10, "clock": "server",
+     "tz_offset_min": -240},
     {"type": "env", "ms": 5, "rtc": iso(far), **env()},
     {"type": "session_end", "ms": 9000, "rtc": iso(far + timedelta(seconds=9)),
      "reason": "stopped", "env_samples": 1, "audio_chunks": 0, "photos": 0,
@@ -319,6 +324,40 @@ m6 = json.loads((_TMP / SID6 / "manifest.json").read_text())
 kinds = [k["kind"] for k in m6["investigation"]["marks"]]
 check("out-of-span note excluded", "note" not in kinds, kinds)
 check("in-span EVP still there", "evp" in kinds, kinds)
+
+
+# ── 8. An unsynced device clock must not be time-matched ─────────────────────
+# Dio's RTC is set by nothing unless she syncs it from Nyx, so it holds whatever
+# it was last left on — UTC while this machine runs local time. Such a timestamp
+# is not merely wrong, it is of unknown origin, and comparing it to Phoebe's
+# local stamps would produce a confident mismatch rather than an honest refusal.
+print("\n[8] untrusted clock refused")
+SID8 = "dio_unsynced_20260729_210000"
+lines = ndjson(
+    {"type": "session_start", "ms": 0, "rtc": iso(base_t),
+     "session_id": SID8, "device": "dio", "mode": "record_room",
+     "env_unit": "env-iii", "audio": False, "photos": False,
+     "sample_rate": 16000, "chunk_sec": 10,
+     "clock": "device", "tz_offset_min": 0},          # <- never synced
+    {"type": "env", "ms": 5, "rtc": iso(base_t), **env()},
+    {"type": "session_end", "ms": 9000, "rtc": iso(base_t + timedelta(seconds=9)),
+     "reason": "stopped", "env_samples": 1, "audio_chunks": 0, "photos": 0,
+     "audio_gaps": 0, "duration_ms": 9000},
+)
+put(SID8, "manifest.ndjson", lines)
+r8 = client.post(f"/investigations/{SID8}/finalize", headers=HEADERS)
+check("finalize still succeeds", r8.status_code == 200, r8.text)
+# base_t falls squarely inside the hunt from section 6 — a trusted clock WOULD match.
+check("unsynced clock is not time-matched", r8.json()["investigation"] is None, r8.json())
+m8 = json.loads((_TMP / SID8 / "manifest.json").read_text())
+check("clock provenance recorded", m8["clock"] == "device", m8.get("clock"))
+check("offset recorded", m8["tz_offset_min"] == 0, m8.get("tz_offset_min"))
+
+# And the trusted one from section 6 still matches, proving the guard is the
+# discriminator rather than something else having broken.
+m6b = json.loads((_TMP / SID6 / "manifest.json").read_text())
+check("synced clock still matches", m6b["investigation"] is not None)
+check("synced clock recorded as server", m6b["clock"] == "server", m6b.get("clock"))
 
 shutil.rmtree(_INV_TMP, ignore_errors=True)
 shutil.rmtree(_TMP, ignore_errors=True)

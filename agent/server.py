@@ -3772,6 +3772,13 @@ def _inv_build_manifest(session_id: str, base: Path) -> dict:
         "complete":    end is not None,          # false = session was cut short
         "sample_rate": start.get("sample_rate"),
         "chunk_sec":   start.get("chunk_sec"),
+        # Clock provenance. "server" = the device synced to this machine before
+        # recording, so its timestamps are directly comparable to Phoebe's.
+        # "device" = an RTC nothing ever set; absent = a bundle predating the
+        # field, which is treated as trustworthy so old sessions don't change
+        # meaning retroactively.
+        "clock":         start.get("clock"),
+        "tz_offset_min": start.get("tz_offset_min"),
         "counts":      counts,
         "truncated_lines": truncated,
         "env_readings": [{k: e.get(k) for k in ("ms", "rtc", *env_keys)}
@@ -3825,6 +3832,16 @@ def _inv_link_investigation(session_id: str, manifest: dict) -> dict | None:
             start_dt = datetime.fromisoformat(started_at)
         except ValueError:
             start_dt = None
+
+    # A device RTC that was never set holds whatever it was last left on — Dio's
+    # sat on UTC while this machine runs local time, a silent four-hour skew. Such
+    # a timestamp is not merely wrong, it is of UNKNOWN origin, so it must not be
+    # compared to Phoebe's local stamps at all. Sessions recorded after a
+    # successful sync say clock:"server" and are trustworthy; anything else falls
+    # through to the active-investigation path, which claims nothing on its own.
+    if manifest.get("clock") not in ("server", None):
+        log.info("[inv] %s has clock=%r — not time-matching", session_id, manifest.get("clock"))
+        start_dt = None
 
     if start_dt is not None:
         inv_id, basis = investigation.find_session_for(start_dt), "time_window"
@@ -3930,6 +3947,32 @@ async def investigation_finalize(session_id: str):
             "complete": manifest["complete"],
             "investigation": linked["session_id"] if linked else None,
             "marks": len(linked["marks"]) if linked else 0}
+
+
+@app.get("/time")
+async def server_time():
+    """The clock a device should set itself to.
+
+    Dio has an RTC that nothing ever sets, so it holds whatever it was last left
+    on — in practice UTC while this machine runs local time, a silent four-hour
+    skew. That matters because investigation bundles are joined to hunt records by
+    wall-clock time, and Phoebe stamps her records with naive local `datetime.now()`.
+    The two clocks that have to agree are the device's and this server's, so the
+    device syncs to THIS rather than to NTP: no DNS, no timezone string on the
+    device, and by construction it lands on the exact clock the join compares
+    against.
+
+    `iso` is deliberately naive local, matching what the investigation module
+    writes. `offset_min` is included so a bundle can record which offset it was
+    stamped in and stop being ambiguous later."""
+    now = datetime.now()
+    offset = now.astimezone().utcoffset()
+    return {
+        "iso":        now.isoformat(timespec="seconds"),
+        "epoch":      int(now.timestamp()),
+        "offset_min": int(offset.total_seconds() // 60) if offset else 0,
+        "tz":         now.astimezone().tzname() or "",
+    }
 
 
 @app.get("/investigations")

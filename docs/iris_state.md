@@ -31,7 +31,7 @@ not on the combadge. Default posture:
 - **Test on BATTERY, not the Nyx USB port.** On Nyx USB she can brown out during
   WiFi association — a *power* condition, not an Iris fault. On battery the radio
   has the current it needs and the flakiness disappears.
-- Before any re-flash, check her **MAC** = `70:04:1d:d5:e9:a0`. She and Dio are
+- Before any re-flash, check her **MAC** (recorded outside the repo). She and Dio are
   both ESP32-S3; a wrong-device flash has happened before.
 
 ## Current state (audit 2026-07-19)
