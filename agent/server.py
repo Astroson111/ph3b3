@@ -257,6 +257,77 @@ app.add_middleware(
     allow_credentials=False,
 )
 
+# ── Failed-auth throttle ─────────────────────────────────────────────────────
+# This server is published to the public internet through Tailscale Funnel, and
+# until now the auth path had no rate limit and logged nothing on failure. An
+# attempt could run for weeks and leave no trace — the 2026-07-29 audit put it
+# plainly: "401s are never logged. Absence of iris in the journal proves nothing."
+#
+# Deliberately permissive on the threshold and strict on the logging. The goal is
+# to make guessing slow and *visible*, not to lock out a device that is merely
+# misconfigured — which, right now, all three are: they hold pre-rotation keys and
+# will fail every heartbeat until reflashed.
+_AUTH_FAIL_WINDOW_S = 300      # look-back window
+_AUTH_FAIL_MAX      = 10       # failures in that window before throttling
+_AUTH_BLOCK_S       = 300      # how long a throttled key is refused
+_AUTH_TRACK_MAX     = 2048     # hard cap on tracked keys (see note below)
+
+_auth_fails: dict[str, list[float]] = {}
+_auth_blocked: dict[str, float] = {}
+
+
+def _auth_client_key(request: Request) -> str:
+    """Identify the caller for throttling.
+
+    Behind the Funnel every request arrives from 127.0.0.1, so the peer address
+    alone would pool the entire internet into one bucket — one attacker would
+    throttle every real user. X-Forwarded-For carries the true client, but it is
+    caller-supplied and trivially forged, so it is honoured ONLY when the
+    connection itself came from loopback (i.e. from the Funnel proxy). From
+    anywhere else the peer address is the truth and the header is ignored.
+    """
+    peer = (request.client.host if request.client else "") or "?"
+    if peer in ("127.0.0.1", "::1"):
+        xff = request.headers.get("X-Forwarded-For", "")
+        if xff:
+            return "fwd:" + xff.split(",")[0].strip()[:45]
+    return "peer:" + peer
+
+
+def _auth_note_failure(key: str, path: str, device: str) -> None:
+    now = time.time()
+    # Bounded: a forged X-Forwarded-For could otherwise mint unlimited keys and
+    # exhaust memory — turning a throttle into a denial of service against us.
+    if len(_auth_fails) > _AUTH_TRACK_MAX:
+        cutoff = now - _AUTH_FAIL_WINDOW_S
+        for k in [k for k, v in _auth_fails.items() if not v or v[-1] < cutoff]:
+            _auth_fails.pop(k, None)
+        if len(_auth_fails) > _AUTH_TRACK_MAX:
+            _auth_fails.clear()          # last resort; better than unbounded growth
+            log.warning("[auth] failure table cleared under pressure")
+
+    hits = [t for t in _auth_fails.get(key, []) if t > now - _AUTH_FAIL_WINDOW_S]
+    hits.append(now)
+    _auth_fails[key] = hits
+    # Never log the credential, only who/where/how many.
+    log.warning("[auth] 401 %s path=%s device=%s (%d in %ds)",
+                key, path, device or "-", len(hits), _AUTH_FAIL_WINDOW_S)
+    if len(hits) >= _AUTH_FAIL_MAX:
+        _auth_blocked[key] = now + _AUTH_BLOCK_S
+        log.error("[auth] THROTTLED %s after %d failures — refusing for %ds",
+                  key, len(hits), _AUTH_BLOCK_S)
+
+
+def _auth_blocked_for(key: str) -> int:
+    """Seconds remaining on a block, or 0."""
+    until = _auth_blocked.get(key, 0)
+    left = int(until - time.time())
+    if left <= 0:
+        _auth_blocked.pop(key, None)
+        return 0
+    return left
+
+
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
     # CORS preflights — let CORSMiddleware handle these.
@@ -273,6 +344,14 @@ async def basic_auth(request: Request, call_next):
     # Login / logout pages are public.
     if request.url.path in ("/login", "/logout"):
         return await call_next(request)
+
+    # Refuse a throttled caller before doing any credential comparison — a blocked
+    # key should cost this server nothing, which is the point of the throttle.
+    _ckey = _auth_client_key(request)
+    _blk = _auth_blocked_for(_ckey)
+    if _blk:
+        return Response(content="Too many failed attempts", status_code=429,
+                        headers={"Retry-After": str(_blk)})
 
     if not AUTH_PASS:
         return Response(
@@ -320,6 +399,7 @@ async def basic_auth(request: Request, call_next):
                 pass
 
     if not authed:
+        _auth_note_failure(_ckey, request.url.path, dev_name)
         # Browser requests (Accept: text/html) → redirect to login page.
         if "text/html" in request.headers.get("Accept", ""):
             return RedirectResponse(url="/login", status_code=303)
@@ -329,6 +409,11 @@ async def basic_auth(request: Request, call_next):
         # Sending it would trigger Firefox's native Basic Auth dialog for any
         # unauthenticated JS fetch from the panel — the "second auth screen."
         return Response(content="Unauthorized", status_code=401)
+
+    # Success clears the record: a typo, or a device whose key has since been
+    # corrected, should not carry a penalty forward.
+    _auth_fails.pop(_ckey, None)
+    _auth_blocked.pop(_ckey, None)
 
     # Account-management routes trust this to tell an owner from a device.
     request.state.auth_kind = auth_kind
