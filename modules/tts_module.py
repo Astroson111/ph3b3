@@ -228,9 +228,19 @@ class TTSModule:
         """Synthesise one chunk to raw s16le/22050/mono PCM (headerless), or None."""
         model = model or VOICE_MODEL
         try:
-            cmd = f'echo {subprocess.list2cmdline([text])} | {PIPER_BIN} --model {model} --output-raw'
+            # NO SHELL. Piper reads its text from stdin, so the old
+            # `echo <text> | piper` never needed one — and subprocess.list2cmdline()
+            # is the WINDOWS quoting function: on POSIX it wraps in DOUBLE quotes,
+            # inside which sh still performs $(...) and backtick substitution.
+            # Since this text arrives from the model (server.py's `speak` tool) and
+            # can be steered by a crafted message or a poisoned document, that was
+            # arbitrary command execution as the service user. Passing argv as a
+            # list and the text via stdin removes the shell from the path entirely,
+            # so there is no quoting to get right.
             proc = subprocess.run(
-                cmd, shell=True, capture_output=True, timeout=20,
+                [PIPER_BIN, "--model", model, "--output-raw"],
+                input=text.encode("utf-8"),
+                capture_output=True, timeout=20,
                 env={**os.environ, **_XDG_ENV},
             )
             return proc.stdout or None
@@ -250,9 +260,15 @@ class TTSModule:
         device_arg = f" --device={sink}" if sink else ""
         dur = len(pcm) / 2 / 22050.0                 # s16le mono @ 22050 Hz
         try:
+            # argv list, no shell: the sink name comes from pactl and is not
+            # attacker-controlled today, but a device name is still external input
+            # and there is no reason to hand it to a shell.
+            pacat = ["pacat", "--playback", "--raw", "--format=s16le",
+                     "--rate=22050", "--channels=1"]
+            if sink:
+                pacat.append(f"--device={sink}")
             subprocess.run(
-                f"pacat --playback --raw --format=s16le --rate=22050 --channels=1{device_arg}",
-                shell=True, input=pcm, check=True, timeout=dur + 15,
+                pacat, input=pcm, check=True, timeout=dur + 15,
                 env={**os.environ, **_XDG_ENV},
             )
             return True
@@ -324,8 +340,12 @@ class TTSModule:
             return None
         with self._lock:
             try:
-                cmd = f'echo {subprocess.list2cmdline([tts_text])} | {PIPER_BIN} --model {model} --output-raw'
-                proc = subprocess.run(cmd, shell=True, capture_output=True, timeout=30)
+                # Same fix as _piper_raw: no shell, text via stdin. See the note there.
+                proc = subprocess.run(
+                    [PIPER_BIN, "--model", model, "--output-raw"],
+                    input=tts_text.encode("utf-8"),
+                    capture_output=True, timeout=30,
+                )
                 raw_pcm = proc.stdout
                 if not raw_pcm:
                     return None
