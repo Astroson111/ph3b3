@@ -4203,6 +4203,13 @@ _EDIT_PENDING_STATES = frozenset(
     {"queued", "evicting", "starting", "loading", "sampling"})
 
 
+# Per-session quality tier. In-memory ON PURPOSE: the brief wants a restart to
+# fall back to "standard", and an in-process dict gives that for free rather than
+# needing an expiry rule. Keyed the same way edit rate-limiting is, so "session"
+# means one thing across Morpheus.
+_quality_session: dict[str, str] = {}
+
+
 def _edit_session_key(request: Request) -> str:
     """Stable per-caller key for edit rate-limiting: panel session cookie if the
     caller logged in via /login, else the Basic-auth user, else the client host."""
@@ -4335,18 +4342,47 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
     # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
     _morpheus_floor_gate(positive, negative, request)
 
+    # ── Quality tier (Aelion) ─────────────────────────────────────────────────
+    # Resolved HERE, before the job is queued and therefore before run_generation
+    # takes the GPU lock. A bad tier costs a 400 and nothing else: no lock held,
+    # no Ollama evicted, no model swapped out for a request that was never going
+    # to run. That ordering is the requirement, not an implementation detail.
+    _qkey = _edit_session_key(request)
+    try:
+        quality = morpheus.resolve_quality(
+            body.get("quality") or _quality_session.get(_qkey)
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if body.get("quality"):
+        _quality_session[_qkey] = quality["quality"]   # sticky for this session
+
     params = {
         "positive":  positive,
         "negative":  negative,
         "width":     int(body.get("width",  1024)),
         "height":    int(body.get("height", 1024)),
-        "steps":     int(body.get("steps",  morpheus.SDXL_STEPS)),
         "seed":      int(body.get("seed",   -1)),
         "ckpt_name": body.get("ckpt_name",  morpheus.SDXL_CKPT),
+        # steps / cfg / sampler / scheduler come from the TIER, never the body.
+        # `steps` used to be caller-supplied and UNBOUNDED — int(body.get("steps"))
+        # accepted 1 or 10000. Naming a tier is now the only way to influence
+        # sampling, which is the point of an allowlist.
+        **quality,
     }
     job_id = morpheus.create_job()
     background_tasks.add_task(morpheus.run_generation, job_id, params)
-    return {"job_id": job_id}
+    return {"job_id": job_id, "quality": quality["quality"]}
+
+
+@app.get("/image/quality")
+async def image_quality(request: Request):
+    """Tier list for the panel selector, plus this session's current choice."""
+    cur = _quality_session.get(_edit_session_key(request), morpheus.QUALITY_DEFAULT)
+    return {"current": cur, "default": morpheus.QUALITY_DEFAULT,
+            "tiers": [{"id": k, "label": v["label"], "hint": v["hint"],
+                       "steps": v["steps"]}
+                      for k, v in morpheus.QUALITY_TIERS.items()]}
 
 
 @app.post("/image/edit/run")

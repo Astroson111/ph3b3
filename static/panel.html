@@ -595,6 +595,8 @@
       cursor: pointer;
     }
     .morph-eng-sel:focus { border-color: var(--purple); }
+    .morph-qual-hint { margin-left:.5rem; font-size:.78rem; color: var(--dim); }
+    .morph-eng-row { display:flex; align-items:center; margin:.4rem 0 0; }
     .morph-eng-sel option:disabled { color: var(--dim); font-style: italic; }
     .morph-textarea {
       display: block; width: 100%;
@@ -1561,6 +1563,12 @@
           <option value="ltx-fast">Clip · Fast — LTX (~1.5 min)</option>
           <option value="wan-fast">Clip · Quality — Wan (~10 min)</option>
         </select>
+      </div>
+      <div class="morph-eng-row" id="morphQualRow">
+        <label for="morphQualSel" class="sr">Quality</label>
+        <select id="morphQualSel" class="morph-eng-sel" title="Sampling quality — higher tiers take longer">
+        </select>
+        <span id="morphQualHint" class="morph-qual-hint"></span>
       </div>
       <div class="sr" id="morphEngRow">
         <span class="sr-l" data-i18n="morpheus.engine">Engine</span>
@@ -3383,7 +3391,7 @@ async function refreshStatus() {
   }
 }
 refreshStatus();
-wgRefresh(); egressRefresh(); acctInit(); dgInit();  // WireGuard + Account + Paired-devices cards live in Status (default pane)
+wgRefresh(); egressRefresh(); acctInit(); dgInit(); qualInit();  // WireGuard + Account + Paired-devices cards live in Status (default pane)
 setInterval(refreshStatus, 10_000);
 
 // ── chat + audio ──────────────────────────────────────────────────────────────
@@ -3779,6 +3787,34 @@ if (!MIC_OK) {
   micBtn.addEventListener('touchend',   e => { e.preventDefault(); stopHold();  }, {passive:false});
 }
 
+
+// ── Morpheus quality tier ─────────────────────────────────────────────────────
+// Options come from /image/quality, never hardcoded here. The server owns the
+// allowlist; a client that invented a tier would just be rejected, and a client
+// that duplicated the list would drift from it.
+async function qualInit() {
+  const sel  = document.getElementById('morphQualSel');
+  const hint = document.getElementById('morphQualHint');
+  if (!sel) return;
+  try {
+    const d = await fetch('/image/quality').then(r => r.json());
+    sel.innerHTML = '';
+    d.tiers.forEach(t => {
+      const o = document.createElement('option');
+      o.value = t.id;
+      o.textContent = t.label;
+      o.dataset.hint = t.hint + ' · ' + t.steps + ' steps';
+      sel.appendChild(o);
+    });
+    sel.value = d.current || d.default;
+    const show = () => {
+      const o = sel.selectedOptions[0];
+      hint.textContent = o ? o.dataset.hint : '';
+    };
+    show();
+    sel.addEventListener('change', show);
+  } catch (e) { /* selector simply stays empty if the server is unreachable */ }
+}
 
 // ── WireGuard tunnel toggle ───────────────────────────────────────────────────
 async function wgRefresh() {
@@ -4521,7 +4557,8 @@ document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
       const res  = await fetch('/image/generate', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({positive, negative_prompt, steps, width, height, seed}),
+        body: JSON.stringify({positive, negative_prompt, width, height, seed,
+                              quality: (document.getElementById('morphQualSel') || {}).value}),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));

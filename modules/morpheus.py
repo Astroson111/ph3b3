@@ -54,6 +54,74 @@ DB_PATH      = Path(os.getenv("MORPHEUS_DB_PATH",
                               str(MORPHEUS_DATA / "generations.db")))
 SDXL_CKPT    = os.getenv("MORPHEUS_CKPT",  "sd_xl_base_1.0.safetensors")
 SDXL_STEPS   = int(os.getenv("MORPHEUS_STEPS", "20"))
+
+# ── Quality tiers (Aelion) ───────────────────────────────────────────────────
+# An ALLOWLIST, not a set of sliders. The caller names a tier; the numbers come
+# from here and nowhere else. That is the whole safety property: no request can
+# ask for a sampler that does not exist, 400 steps, or a CFG that produces
+# garbage, because no request supplies those values at all.
+#
+# Bounds are stated alongside the table so a future edit that pushes a tier
+# outside them fails a self-check at import rather than at render time.
+QUALITY_STEP_BOUNDS = (20, 50)
+QUALITY_CFG_BOUNDS  = (6.5, 8.5)
+QUALITY_SAMPLERS    = frozenset({"dpmpp_2m", "dpmpp_3m_sde"})
+QUALITY_SCHEDULERS  = frozenset({"karras"})
+QUALITY_DEFAULT     = "standard"
+
+QUALITY_TIERS = {
+    "draft":    {"steps": 20, "cfg": 7.0, "sampler_name": "dpmpp_2m",
+                 "scheduler": "karras", "label": "Draft",
+                 "hint": "Fast, iterative"},
+    "standard": {"steps": 30, "cfg": 7.5, "sampler_name": "dpmpp_2m",
+                 "scheduler": "karras", "label": "Standard",
+                 "hint": "Balanced, recommended"},
+    "premium":  {"steps": 40, "cfg": 8.0, "sampler_name": "dpmpp_2m",
+                 "scheduler": "karras", "label": "Premium",
+                 "hint": "Detailed, richer output"},
+    "museum":   {"steps": 50, "cfg": 8.5, "sampler_name": "dpmpp_3m_sde",
+                 "scheduler": "karras", "label": "Museum",
+                 "hint": "Maximum quality, slower"},
+}
+
+# Import-time self-check: a mis-edited tier is caught here, not on the GPU.
+for _n, _t in QUALITY_TIERS.items():
+    assert QUALITY_STEP_BOUNDS[0] <= _t["steps"] <= QUALITY_STEP_BOUNDS[1], _n
+    assert QUALITY_CFG_BOUNDS[0] <= _t["cfg"] <= QUALITY_CFG_BOUNDS[1], _n
+    assert _t["sampler_name"] in QUALITY_SAMPLERS, _n
+    assert _t["scheduler"] in QUALITY_SCHEDULERS, _n
+
+
+def resolve_quality(tier: str | None) -> dict:
+    """Tier name -> sampling parameters. Raises ValueError on anything unknown.
+
+    Called BEFORE the GPU lock is acquired, so a bad tier costs a rejection and
+    nothing else — no lock held, no Ollama evicted, no model swapped out for a
+    request that was never going to run.
+    """
+    name = (tier or QUALITY_DEFAULT).strip().lower()
+    if name not in QUALITY_TIERS:
+        raise ValueError(
+            f"unknown quality tier {name!r}; choose one of: "
+            + ", ".join(sorted(QUALITY_TIERS))
+        )
+    t = QUALITY_TIERS[name]
+    # Re-validated on every call rather than trusted from the table. The table is
+    # the only writer today, but this function is the boundary the GPU sits
+    # behind, and boundaries should not assume their callers stayed honest.
+    lo, hi = QUALITY_STEP_BOUNDS
+    if not (isinstance(t["steps"], int) and lo <= t["steps"] <= hi):
+        raise ValueError(f"steps out of bounds for tier {name!r}")
+    clo, chi = QUALITY_CFG_BOUNDS
+    if not (isinstance(t["cfg"], (int, float)) and clo <= float(t["cfg"]) <= chi):
+        raise ValueError(f"cfg out of bounds for tier {name!r}")
+    if t["sampler_name"] not in QUALITY_SAMPLERS:
+        raise ValueError(f"sampler not allowed for tier {name!r}")
+    if t["scheduler"] not in QUALITY_SCHEDULERS:
+        raise ValueError(f"scheduler not allowed for tier {name!r}")
+    return {"quality": name, "steps": t["steps"], "cfg": float(t["cfg"]),
+            "sampler_name": t["sampler_name"], "scheduler": t["scheduler"]}
+
 SDXL_NEG     = os.getenv(
     "MORPHEUS_NEG",
     "text, watermark, multiple objects, cluttered background, blurry",
@@ -541,6 +609,15 @@ def build_workflow(params: dict) -> dict:
     wf["5"]["inputs"]["height"]    = params.get("height", 1024)
     wf["3"]["inputs"]["seed"]      = seed
     wf["3"]["inputs"]["steps"]     = params.get("steps",  SDXL_STEPS)
+    # cfg / sampler / scheduler were baked into the workflow template. They are
+    # request params now so a quality tier can set them — still allowlist-derived,
+    # never caller-supplied numbers.
+    if params.get("cfg") is not None:
+        wf["3"]["inputs"]["cfg"] = float(params["cfg"])
+    if params.get("sampler_name"):
+        wf["3"]["inputs"]["sampler_name"] = params["sampler_name"]
+    if params.get("scheduler"):
+        wf["3"]["inputs"]["scheduler"] = params["scheduler"]
     return wf
 
 
