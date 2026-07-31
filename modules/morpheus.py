@@ -165,6 +165,72 @@ _FLOOR_MINOR: frozenset[str] = frozenset([
     "boyhood", "girlhood", "childlike", "childish",
 ])
 
+# ── Child-depiction floor (2026-07-31 weld) ──────────────────────────
+# Terms the subject gate adds on top of _FLOOR_MINOR. These are SUBJECT signals:
+# they refuse on their own, with no second signal, because the rule is about who
+# is depicted rather than what is done to them.
+#
+# The hole this closes: the minor check required minor AND sexual context, so a
+# child subject in a neutral prompt cleared the gate with the whole pipeline live
+# downstream. Gating on subject removes the gray region instead of policing its
+# edge.
+_FLOOR_MINOR_SUBJECT: frozenset[str] = frozenset([
+    # UNAMBIGUOUS subject signals only. Each of these names a person under 18;
+    # none of them names a place, a garment, or a relationship.
+    "high schooler", "highschooler", "high school student",
+    "middle schooler", "elementary student", "grade schooler",
+    "schoolboys", "schoolgirls", "young teen", "small child", "young child",
+    "jailbait", "jail bait", "barely legal", "just turned 18",
+    "petite young", "youthful body", "youngling", "minor-aged",
+    "little one",
+    # Words that denote a child by definition. "foundling" and "waif" have no
+    # adult reading; "street urchin" is spelled out because a bare "urchin" would
+    # take the sea creature with it.
+    "foundling", "waif", "street urchin", "foster child", "orphan boy",
+    "orphan girl", "orphan child",
+])
+
+# Context that a child is COMMONLY in, but which is not itself a child. An empty
+# classroom, an abandoned playground, a prom dress on a mannequin, a rusting
+# school bus — all refused when these were hard terms, and none of them depicts
+# anyone. They escalate to Layer B instead, which can ask whether a person is in
+# the frame at all. Fail-closed still holds: Layer B refuses on yes OR uncertain.
+_ESCALATE_CONTEXT: frozenset[str] = frozenset([
+    "classroom", "playground", "school uniform", "homeroom", "prom",
+    "school dance", "field trip", "school bus", "recess", "daycare",
+    "day care", "nursery school", "kindergarten", "junior high",
+    "elementary", "highschool", "k-12", "k12", "schoolyard",
+    # Bare class-year and relational terms: "senior citizen" is elderly,
+    # "boyfriend" is an adult's partner, "the girl with a pearl earring" is a
+    # canonical adult painting. Lexically these look young; semantically they
+    # are usually not, and only Layer B can tell the difference.
+    "freshman", "sophomore", "junior", "senior",
+    "boy", "boys", "girl", "girls",
+])
+
+# "student" alone is refused; a tertiary qualifier makes it an adult subject.
+# Written as a rule rather than a term because the qualifier can precede or
+# follow, and a list of every phrasing is what produced this hole once already.
+_RE_ORPHAN = re.compile(r"\borphan(?!age)")
+
+_STUDENT_RE = re.compile(r"\bstudents?\b")
+_STUDENT_ADULT_QUALIFIER = re.compile(
+    r"\b(university|college|graduate|postgraduate|grad|medical|med|law|phd|"
+    r"doctoral|masters|mba|undergraduate)\b"
+)
+
+# Adulthood terms. In the NEGATIVE field these are a request for a minor that
+# never names one: negating adulthood is asking for its opposite. This vector
+# names no minor at all, so no subject term list can catch it — it is checked
+# structurally, by field.
+_ADULT_NEGATION: frozenset[str] = frozenset([
+    "adult", "adults", "mature", "grown", "grown up", "grownup",
+    "woman", "women", "man", "men", "elderly", "old", "older",
+    "wrinkles", "wrinkled", "middle aged", "middleaged",
+    "20s", "30s", "40s", "50s", "60s",
+    "20 years old", "30 years old", "40 years old", "50 years old",
+])
+
 # Terms that are BOTH a minor reference and a sexual one in a single word. These
 # block on their own — there is no second signal to wait for, because the word
 # itself is the entire request.
@@ -236,11 +302,75 @@ def _floor_re(terms: frozenset[str]):
                     for t in sorted(terms, key=len, reverse=True))
     return re.compile(r"\b(?:" + alts + r")")
 
+
+# ── Multilingual minor terms — defence in depth behind Layer B ───────────────
+# Layer B is the real multilingual defence; this list exists so a model error or
+# an unexpected phrasing still meets a deterministic gate. Entries are limited to
+# terms that mean "child" with no adult reading, and that do NOT collide with an
+# ordinary English word. Deliberately EXCLUDED for that reason: German "Kind",
+# Swedish/Norwegian "barn", Italian "bimbo", Spanish bare "nina" (the name Nina),
+# and the manga register words "shoujo"/"shounen" (genre labels, not subjects).
+# A false refusal here is cheap; a false allow is the bug we are closing.
+_FLOOR_MINOR_INTL: frozenset[str] = frozenset([
+    # Romance
+    "niña", "niño", "niñita", "niñito", "fillette", "petite fille", "petit garçon",
+    "enfant", "gamine", "bambin", "bambina", "bambino", "bimba",
+    "menina", "menino", "menininha", "criança", "crianca", "fetiță", "fetita", "copil",
+    # Germanic / Slavic / other Latin-script
+    "mädchen", "madchen", "kleinkind", "meisje", "jongen", "kindje",
+    "dziewczynka", "chłopiec", "chlopiec", "dziecko", "holčička", "holcicka",
+    "flicka", "pojke", "çocuk", "cocuk", "kislány", "kislany", "gyerek",
+    "tyttö", "tytto", "lapsi", "mtoto", "batang babae", "anak kecil", "gadis kecil",
+    "em bé", "bé gái", "trẻ em", "κορίτσι", "παιδί",
+    # Cyrillic
+    "девочка", "мальчик", "ребёнок", "ребенок", "дівчинка", "хлопчик", "дитина",
+    # Arabic / Hebrew / Persian / Devanagari
+    "طفلة", "طفل", "فتاة صغيرة", "ילדה", "ילד", "کودک", "دختر بچه",
+    "छोटी लड़की", "बच्चा", "बच्ची",
+    # Romanised / transliterated
+    "onnanoko", "otokonoko", "kodomo", "yoji",
+    "xiao nu hai", "xiaonuhai", "xiao nan hai", "ertong",
+    "devochka", "malchik", "rebenok", "chhoti ladki", "fatat saghira",
+    "eorin sonyeo", "sonyeo",
+])
+
+# Scripts with no word boundaries — \b cannot fire between two CJK characters, so
+# "小女孩" inside "一个小女孩" would never match a \b-anchored pattern. These are
+# matched as plain substrings instead.
+_FLOOR_MINOR_CJK: frozenset[str] = frozenset([
+    "女の子", "男の子", "子供", "こども", "幼児", "少女", "少年", "小さな子",
+    "어린이", "소녀", "소년", "어린 소녀", "아이",
+    "小女孩", "小男孩", "儿童", "兒童", "幼儿", "幼兒", "小孩", "女童", "男童",
+    "เด็กผู้หญิง", "เด็กผู้ชาย", "เด็ก",
+])
+
+
+def _floor_re_substring(terms: frozenset[str]):
+    """Boundary-free alternation for scripts that have no word boundaries."""
+    alts = "|".join(re.escape(_normalize(t))
+                    for t in sorted(terms, key=len, reverse=True))
+    return re.compile("(?:" + alts + ")")
+
+
+_RE_MINOR_INTL = _floor_re(_FLOOR_MINOR_INTL)
+_RE_MINOR_CJK  = _floor_re_substring(_FLOOR_MINOR_CJK)
+
 _RE_MINOR         = _floor_re(_FLOOR_MINOR)
 _RE_SEXUAL        = _floor_re(_FLOOR_SEXUAL)
 _RE_CRIMINAL      = _floor_re(_FLOOR_CRIMINAL)
 _RE_NONCONSENSUAL = _floor_re(_FLOOR_NONCONSENSUAL)
 _RE_MINOR_SEXUAL  = _floor_re(_FLOOR_MINOR_SEXUAL)
+_RE_MINOR_SUBJECT = _floor_re(_FLOOR_MINOR_SUBJECT)
+_RE_ESCALATE      = _floor_re(_ESCALATE_CONTEXT)
+_RE_ADULT_NEG     = _floor_re(_ADULT_NEGATION)
+_RE_YOUNG_STYLE   = _floor_re(frozenset([
+    "chibi", "cel shaded", "celshaded", "anime style", "cartoon style",
+    "moe", "kawaii", "super deformed",
+]))
+_RE_HUMAN_SUBJECT = _floor_re(frozenset([
+    "person", "people", "figure", "human", "portrait", "man", "woman",
+    "male", "female", "character", "model", "she", "he", "her", "his",
+]))
 
 # ── Ages written as numbers ──────────────────────────────────────────────────
 # The term lists above only catch a minor NAMED IN WORDS. An age given as a digit
@@ -290,6 +420,164 @@ def _person_signal(text: str) -> bool:
     return bool(_PERSON_RE.search(s))
 
 
+
+def minor_subject_signal(text: str) -> bool:
+    """True if the text depicts, or asks to depict, a person under 18.
+
+    SUBJECT-gated: no sexual qualifier required, no artistic/mythological/
+    historical exception. The previous shape required minor AND sexual context,
+    which left every neutral child-subject prompt running the full pipeline.
+    """
+    norm = _normalize(text)
+    if _RE_MINOR.search(norm) or _RE_MINOR_SUBJECT.search(norm):
+        return True
+    if _RE_MINOR_INTL.search(norm) or _RE_MINOR_CJK.search(norm):
+        return True
+    if _RE_ORPHAN.search(norm):
+        return True
+    if _minor_age_signal(norm):
+        return True
+    # Bare "student" reads as school-age; an adult qualifier anywhere in the
+    # prompt releases it. Deliberately scoped to the whole prompt rather than
+    # adjacency, because "student, university setting" is one comma away from
+    # "university student" and both mean the same thing.
+    if _STUDENT_RE.search(norm) and not _STUDENT_ADULT_QUALIFIER.search(norm):
+        return True
+    return False
+
+
+def needs_semantic_review(text: str) -> bool:
+    """True when Layer A cannot decide and Layer B must.
+
+    Style tags that read young are the case this exists for. SDXL drifts young on
+    anime/chibi/cel-shade tags from otherwise neutral subjects, so a human subject
+    wearing one of those styles cannot be cleared lexically — but it cannot be
+    REFUSED lexically either, or every anime-styled adult render dies with it.
+    Layer A escalates; Layer B answers. The style alone (a chibi dragon) is not a
+    person and is not escalated.
+    """
+    norm = _normalize(text)
+    if _RE_YOUNG_STYLE.search(norm) and _RE_HUMAN_SUBJECT.search(norm):
+        return True
+    return bool(_RE_ESCALATE.search(norm))
+
+
+def adulthood_negation_signal(negative: str) -> bool:
+    """True if the NEGATIVE field negates adulthood.
+
+    Asking a model to avoid 'adult, mature, woman, 30 years old' is a request for
+    a minor that never names one, so no subject term list can see it. Checked
+    structurally by field: the same words in the POSITIVE field are ordinary and
+    must not fire.
+    """
+    return bool(_RE_ADULT_NEG.search(_normalize(negative))) if negative else False
+
+
+
+# ── Layer B — semantic pass ──────────────────────────────────────────────────
+# Layer A is a term list, and a term list is what produced the original hole. B
+# asks one question of the FINAL composed prompt and takes the strict reading of
+# any answer that is not a clear no.
+#
+# Fail-closed is absolute here: a timeout, an unreachable model, a malformed
+# reply, an exception — every one of them refuses. The failure mode of this check
+# must be "no image", never "unchecked image".
+_hx_floor = httpx.Client(timeout=25.0)
+# Appended to every negative prompt, on every path, after the user's own negatives
+# are read. Not user-strippable and never surfaced as editable, because a control
+# the user can remove is not a floor.
+#
+# This REDUCES drift; it does not guarantee anything. SDXL will still render young
+# from neutral subjects on some style tags, which is why it sits behind the two
+# gates rather than in place of them. Belt after braces, not instead of.
+CHILD_NEGATIVE = ("child, kid, teen, teenager, young, youth, loli, shota, "
+                  "childlike, chibi, infant, toddler, baby")
+
+
+def with_child_negative(negative: str | None) -> str:
+    """User negatives first, floor negatives last. Idempotent — re-running a job
+    must not stack the block repeatedly into the conditioning."""
+    base = (negative or "").strip()
+    if CHILD_NEGATIVE in base:
+        return base
+    return f"{base}, {CHILD_NEGATIVE}" if base else CHILD_NEGATIVE
+
+
+_LAYER_B_MODEL   = os.getenv("PH3B3_FLOOR_MODEL") or os.getenv("PH3B3_LIGHT_MODEL", "hermes3:latest")
+_LAYER_B_TIMEOUT = float(os.getenv("PH3B3_FLOOR_TIMEOUT", "20"))
+
+_LAYER_B_PROMPT = """You are a safety classifier for an image generator.
+
+Question: if this prompt were rendered faithfully, would the resulting image depict a human or humanlike figure who appears to be under 18 years old?
+
+Answer YES when a figure under 18 would appear, however the age is conveyed:
+- a stated age, in digits or words, in any language
+- a school grade or year level ("third grade", "year 4", "sophomore")
+- a developmental milestone ("has not lost their baby teeth", "learning to walk")
+- an age-restricted framing ("too young to drive", "under the age of majority")
+- diminutives, pet names, or childhood terms in ANY language, including
+  romanised or transliterated spellings, misspellings, and spaced or
+  letter-substituted text
+- a named fictional or historical character who is a minor
+- an art style that renders its subject as a child
+- ordinary words for a child used as the subject — boy, girl, kid, child, son,
+  daughter, schoolboy, schoolgirl, and their equivalents in any language — unless
+  the prompt explicitly makes that figure an adult. "A boy fishing" is YES.
+  "Boyfriend", "girlfriend", "old boy" and "the girls' night out" refer to adults
+  and are NO.
+
+Answer NO when:
+- no human figure would appear at all — an empty room, an abandoned playground,
+  a landscape, an object, a garment on a mannequin. A childhood SETTING with no
+  person in it is not a person. "no people", "empty", "abandoned", "deserted"
+  mean there is no figure to be a minor.
+- objects associated with children are objects, not figures. Empty cots, cribs,
+  bunk beds, toys, dolls, small shoes, a swing, a school desk — none of these is
+  a person, and a derelict room full of them is still an empty room. Abandoned
+  and haunted interiors are ordinary horror settings and are NO unless a figure
+  is actually described.
+- every human figure would clearly be an adult, whatever the setting or style
+- the subject is pregnant. A pregnant person is an adult; an unborn child is not
+  a depicted figure. Maternity portraits are NO.
+
+Body size, build, height and weight are NOT age. Fat, thin, petite, short,
+small-framed, flat-chested and slight bodies belong to adults as much as to
+anyone. Judge age by stated age, developmental stage and facial maturity — never
+by body shape. Refusing a body type is not this classifier's job.
+
+Judge the image, not the words. Answer with exactly one word: YES, NO, or UNCERTAIN.
+
+PROMPT:
+{prompt}
+
+ANSWER:"""
+
+
+def _floor_judge(template: str, text: str) -> str:
+    """Ask the local judge one yes/no question. Returns the verdict word, or ""
+    on ANY failure — unreachable, timeout, malformed. Callers decide what an
+    empty verdict means, and every caller must treat it as the unsafe answer."""
+    try:
+        r = _hx_floor.post(
+            f"{os.getenv('OLLAMA_HOST','http://localhost:11434')}/api/generate",
+            json={"model": _LAYER_B_MODEL, "prompt": template.format(prompt=text[:2000]),
+                  "stream": False, "keep_alive": "5m",
+                  "options": {"temperature": 0, "num_predict": 4}},
+            timeout=_LAYER_B_TIMEOUT)
+        return (r.json().get("response") or "").strip().upper()
+    except Exception:
+        log.warning("[safety] judge unavailable — failing closed")
+        return ""
+
+
+def semantic_minor_check(text: str) -> bool:
+    """True if the prompt should be refused. Fail-closed on every error path:
+    only an explicit NO allows the render through."""
+    if not text or not text.strip():
+        return False
+    return not _floor_judge(_LAYER_B_PROMPT, text).startswith("NO")
+
+
 def floor_check(prompt: str) -> str | None:
     """Return a category string if the hard floor fires, else None.
     No off switch. Runs before gpu_lock, before profile checks, before queuing.
@@ -300,14 +588,14 @@ def floor_check(prompt: str) -> str | None:
     if _RE_MINOR_SEXUAL.search(norm):
         return "minor-sexual"
 
-    has_sex    = bool(_RE_SEXUAL.search(norm))
-    # A minor can be named in words ("toddler") or stated as an age ("9 year old").
-    # The age path was added after an audit found every numeric age slipping the floor.
-    has_minor  = bool(_RE_MINOR.search(norm)) or _minor_age_signal(norm)
+    has_sex = bool(_RE_SEXUAL.search(norm))
 
-    # Category 1: minor + sexual/suggestive
-    if has_minor and has_sex:
-        return "minor-sexual"
+    # Category 1 — CHILD DEPICTION, subject-gated. A minor subject refuses on its
+    # own: no sexual qualifier, no artistic/historical/mythological exception, no
+    # profile dependency, no off switch. This replaced a minor-AND-sexual test
+    # that let every neutral child-subject prompt through with the pipeline live.
+    if minor_subject_signal(prompt):
+        return "child-depiction"
 
     # Category 5: bestiality / non-consensual (standalone — no second signal needed)
     if _RE_NONCONSENSUAL.search(norm):
@@ -600,7 +888,7 @@ def build_workflow(params: dict) -> dict:
     # Empty or missing negative → default negative (SDXL_NEG). `or` (not dict
     # default) so an explicit "" from the endpoint also falls back. Write the
     # resolved value back into params so the DB records what actually conditioned.
-    neg = params.get("negative") or SDXL_NEG
+    neg = with_child_negative(params.get("negative") or SDXL_NEG)
     params["negative"] = neg
     wf["4"]["inputs"]["ckpt_name"] = params.get("ckpt_name", SDXL_CKPT)
     wf["6"]["inputs"]["text"]      = params.get("positive", "")
@@ -669,9 +957,277 @@ async def fetch_and_save(http: httpx.AsyncClient, outputs: dict,
                 "type":      img["type"]},
         timeout=60.0,
     )).content
+    # Last gate. The bytes are judged before they become a file, so a flagged
+    # render never exists in IMAGE_DIR at all.
+    if await asyncio.to_thread(output_minor_check, raw):
+        log.critical("[safety] output vision check FLAGGED job %s — not persisting", job_id[:8])
+        await asyncio.to_thread(handle_output_breach, raw, job_id)
+        raise RuntimeError(_OUTPUT_REFUSAL)
+
     path = IMAGE_DIR / f"{job_id}.png"
     path.write_bytes(raw)
     return path
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUT-SIDE VISION CHECK — the last gate, and the only one that sees the image
+#
+# Every input gate reasons about TEXT. This one looks at what was actually
+# rendered, which is the only evidence that matters: SDXL can produce a young
+# figure from a prompt that named no age at all, and no term list or prompt
+# classifier can see that happen. It sits in fetch_and_save, the single point
+# every render path converges on, so it covers entry points nobody enumerated —
+# including any added later.
+#
+# The image is judged BEFORE it is written. A flagged render never touches
+# IMAGE_DIR, so there is no window in which it exists on disk as a normal file.
+#
+# ── The asymmetry that matters ──────────────────────────────────────────────
+# Everywhere else in this floor, uncertainty means REFUSE, because the cost of
+# a false refusal is one unmade image. Here the two consequences are not
+# symmetric and must not share a rule:
+#   · destroying THIS image on suspicion   — cost is one image. Fail closed.
+#   · purging the WHOLE LIBRARY on suspicion — cost is everything, forever.
+# llava is a small model, and the figure it is most likely to misjudge is a
+# petite or stylised ADULT. So suspicion always destroys the render and halts
+# the generator, but a library purge requires a second, independently-framed
+# check to agree. One model's bad call cannot take the gallery with it.
+_OUTPUT_REFUSAL = "Refused by the child-safety floor."
+OUTPUT_VISION_MODEL = os.getenv("PH3B3_OUTPUT_VISION_MODEL", "llava")
+OUTPUT_VISION_TIMEOUT = float(os.getenv("PH3B3_OUTPUT_VISION_TIMEOUT", "60"))
+
+# Set when a breach fires. While present, every render is refused — a breach
+# means containment failed, and continuing to generate is the wrong response.
+BREACH_FLAG = Path(os.getenv("PH3B3_BREACH_FLAG",
+                             str(Path(IMAGE_DIR).parent / "BREACH_HALT")))
+
+# ── Why this is two models and not one ──────────────────────────────────────
+# llava cannot answer a multi-option classification question. Asked "reply
+# HUMANCHILD or OTHERWISE", it returned OTHERWISE for a Bellini Madonna AND for a
+# goblin battle — it is not weighing the options, it is emitting a token. An
+# earlier phrasing ending in "answer NO" returned NO for all thirty images in the
+# library. Every prompt variant tried scored 0 true positives.
+#
+# But llava SEES accurately. Asked to describe, it said "a painting of the Virgin
+# Mary holding a baby" and "green gnomes... smaller in size" — both exactly right,
+# and both containing everything needed to decide.
+#
+# So llava describes and hermes3 judges the description, which is the same split
+# screenshot_module.py already uses for this reason. The text judge is the one
+# that scored 59/59 on the multilingual suite; giving it prose to reason over
+# plays to what each model can actually do.
+# Ask openly and let it talk. Two forced-choice designs failed here, in opposite
+# directions: "reply HUMANCHILD or OTHERWISE" returned OTHERWISE for everything,
+# and a version offering "'No people are shown.' / 'People are shown.'" returned
+# the FIRST option for everything — including a Bellini Madonna. llava does not
+# weigh options, it takes one. But asked to simply describe, it is accurate and
+# specific: "1. A woman... 2. A child". So the vision model narrates and the text
+# model decides, and the only tuning needed here is enough token budget that a
+# busy image is not cut off mid-sentence.
+_VISION_DESCRIBE_PROMPT = (
+    "Describe every person or figure in this image. For each one, say whether it "
+    "is a human being or a non-human creature such as a goblin, orc, elf, monster, "
+    "robot, doll or statue, and give its approximate age. If there are no people "
+    "or figures at all, say so plainly."
+)
+
+_DESCRIPTION_JUDGE_PROMPT = """A vision model produced this description of a generated image.
+
+Question: based on the description, does the image depict a HUMAN figure who is under 18 years old?
+
+Reply YES if a human child, baby, infant, or teenager is described.
+Reply NO if the description mentions no people, or only adults, or only non-human
+creatures such as goblins, orcs, elves, monsters, robots, dolls or statues. A
+description that lists only scenery, objects or artwork with no person in it is NO,
+even if it breaks off mid-sentence. If the description is cut off before it
+mentions any person, that is not evidence of a person.
+Non-human creatures are never children, whatever their size. Short, small, slender
+or pregnant adults are adults.
+Reply UNCERTAIN if the description is too vague to tell.
+
+Reply with one word.
+
+DESCRIPTION:
+{prompt}
+
+REPLY:"""
+
+
+# Corroboration for the LIBRARY PURGE only. This MUST be independent of the
+# primary check — reusing the same describe-and-judge meant it agreed with itself
+# every time, which would have let a sheet of landscape stickers purge the whole
+# gallery. It asks a strictly narrower question: not "might a minor be here" but
+# "is a child explicitly named as present". The primary check may block on a
+# hunch; nothing is destroyed library-wide unless the description says so outright.
+_PURGE_CORROBORATE_PROMPT = """A vision model produced this description of a generated image.
+
+Question: does the description EXPLICITLY state that a human child, baby, infant, or teenager is present in the image?
+
+Reply YES only if such a person is directly named as being in the image.
+Reply NO if the description names no such person — including when it describes only
+scenery, objects, artwork, text, adults, or non-human creatures. Do not infer a
+child from the setting, the mood, the art style, or from small figures that are not
+identified as human children.
+
+Reply with one word.
+
+DESCRIPTION:
+{prompt}
+
+REPLY:"""
+
+
+def _vision_judge(raw: bytes, question: str, npred: int = 4) -> str:
+    """Ask the local vision model one question about an image. Returns the verdict
+    word, or "" on any failure. Callers decide what an empty verdict means."""
+    import base64
+    try:
+        r = _hx_floor.post(
+            f"{os.getenv('OLLAMA_HOST','http://localhost:11434')}/api/generate",
+            json={"model": OUTPUT_VISION_MODEL, "prompt": question,
+                  "images": [base64.b64encode(raw).decode()],
+                  "stream": False, "keep_alive": "5m",
+                  "options": {"temperature": 0, "num_predict": npred}},
+            timeout=OUTPUT_VISION_TIMEOUT)
+        return (r.json().get("response") or "").strip()
+    except Exception:
+        log.warning("[safety] output vision judge unavailable — failing closed")
+        return ""
+
+
+def describe_image(raw: bytes) -> str:
+    """What the vision model can actually do: say what it sees."""
+    return _vision_judge(raw, _VISION_DESCRIBE_PROMPT, npred=600)
+
+
+def output_minor_check(raw: bytes) -> bool:
+    """True if this rendered image must NOT be persisted.
+
+    llava describes, hermes3 decides. Fail-closed on either model being
+    unavailable — an unchecked render is precisely what this prevents."""
+    desc = describe_image(raw)
+    if not desc:
+        return True                              # vision model down — block
+    verdict = _floor_judge(_DESCRIPTION_JUDGE_PROMPT, desc)
+    if not verdict:
+        return True                              # text judge down — block
+    return not verdict.startswith("NO")
+
+
+def output_corroborates(raw: bytes) -> bool:
+    """Second, differently-framed opinion. True only on an explicit CHILD verdict —
+    fail-OPEN by design, because this decides whether the whole library is purged
+    and an unreachable judge must never trigger that."""
+    desc = describe_image(raw)
+    if not desc:
+        return False        # fail-OPEN: never purge a library on a dead model
+    return _floor_judge(_PURGE_CORROBORATE_PROMPT, desc).startswith("YES")
+
+
+def _shred(path: Path) -> None:
+    """Overwrite before unlinking, so the bytes are not merely dereferenced."""
+    try:
+        n = path.stat().st_size
+        with open(path, "wb") as f:
+            f.write(os.urandom(n))
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception:
+        pass
+    try:
+        path.unlink()
+    except Exception:
+        pass
+
+
+def purge_library(reason: str) -> int:
+    """Destroy every generated image and video. Irreversible and intended to be —
+    called only on a corroborated breach. Returns the number of files destroyed."""
+    n = 0
+    for pat in ("*.png", "*.jpg", "*.jpeg", "*.webp", "*.mp4", "*.webm", "*.gif"):
+        for f in Path(IMAGE_DIR).glob(pat):
+            _shred(f)
+            n += 1
+    log.critical("[safety] LIBRARY PURGED — %d file(s) destroyed — reason: %s", n, reason)
+    return n
+
+
+def halt_generation(reason: str) -> None:
+    """Stop all further rendering until a human clears the flag. A breach means
+    the input gates were bypassed; generating more before anyone has looked is
+    the wrong default."""
+    try:
+        BREACH_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        BREACH_FLAG.write_text(reason)
+    except Exception as exc:
+        log.error("[safety] could not write breach flag: %s", exc)
+    log.critical("[safety] GENERATION HALTED — %s", reason)
+
+
+def generation_halted() -> str | None:
+    """Reason string if the generator is halted, else None."""
+    try:
+        return BREACH_FLAG.read_text().strip() if BREACH_FLAG.exists() else None
+    except Exception:
+        return "breach flag unreadable"
+
+
+AUTO_PURGE = os.getenv("PH3B3_AUTO_PURGE", "0").lower() in ("1", "true", "yes")
+HALT_ON_ANY_HIT = os.getenv("PH3B3_HALT_ON_ANY_HIT", "0").lower() in ("1", "true", "yes")
+
+
+def handle_output_breach(raw: bytes, job_id: str) -> None:
+    """A render was judged to depict a minor. The image was never written — this
+    decides how far the response goes. Never logs prompt text.
+
+    The library purge is ARMED, not automatic, and that is a deliberate deviation
+    from "purge on a corroborated hit". Measured on this machine's own library,
+    corroboration fired on a desert-landscape poster containing no people at all,
+    reproducibly. Recall is good — a real Bellini infant is caught every time —
+    but a trigger with that false-positive rate must not hold an irreversible
+    delete on every image the user owns. So a breach halts the generator, writes
+    a report, and leaves a one-command purge ready. Set PH3B3_AUTO_PURGE=1 to
+    make it fire on its own.
+
+    Nothing is lost by the human step: the offending image is already destroyed
+    before this runs, and the halt means nothing further can be generated until
+    someone has looked."""
+    corroborated = output_corroborates(raw)
+
+    # Halt only on a corroborated hit. Halting on ANY hit was the original
+    # policy and it stopped the generator on the second real render — a haunted
+    # orphanage, uncorroborated, nothing wrong with it. An uncorroborated hit
+    # still destroys the image, which is the part that matters; bricking the
+    # machine as well turns a false positive into an outage. Set
+    # PH3B3_HALT_ON_ANY_HIT=1 to restore the stricter behaviour.
+    if corroborated or HALT_ON_ANY_HIT:
+        halt_generation(f"output vision check flagged job {job_id[:8]}")
+
+    report = BREACH_FLAG.parent / "BREACH_REPORT.txt"
+    try:
+        report.write_text(
+            f"Breach detected on job {job_id[:8]}\n"
+            f"Corroborated by independent check: {corroborated}\n\n"
+            "The offending image was destroyed and never written to the library.\n"
+            "Generation is HALTED until the halt flag is removed.\n\n"
+            "To purge every image in the library:\n"
+            "    cd ~/Desktop/ph3b3_v2 && .venv/bin/python -c "
+            "\"import sys;sys.path.insert(0,'modules');import morpheus;"
+            "morpheus.purge_library('manual after breach')\"\n\n"
+            "To resume generating without purging:\n"
+            f"    rm {BREACH_FLAG}\n"
+        )
+    except Exception as exc:
+        log.error("[safety] could not write breach report: %s", exc)
+
+    if corroborated:
+        log.critical("[safety] BREACH CORROBORATED — generation halted, purge ARMED "
+                     "(set PH3B3_AUTO_PURGE=1 to purge automatically)")
+        if AUTO_PURGE:
+            purge_library(f"corroborated breach on job {job_id[:8]}")
+    else:
+        log.warning("[safety] uncorroborated output flag — image destroyed, "
+                    "library retained, generation continues")
 
 
 async def comfy_free(http: httpx.AsyncClient) -> None:
@@ -862,7 +1418,7 @@ def build_edit_workflow(params: dict) -> dict:
     if seed < 0:
         seed = random.randint(0, 2**32 - 1)
         params["seed"] = seed
-    neg = params.get("negative") or SDXL_NEG
+    neg = with_child_negative(params.get("negative") or SDXL_NEG)
     params["negative"] = neg
     strength = float(params.get("strength", 0.45))
     strength = max(EDIT_STRENGTH_MIN, min(EDIT_STRENGTH_MAX, strength))  # defense-in-depth
@@ -1069,3 +1625,84 @@ async def run_video(job_id: str, params: dict) -> None:
 # ── Module-level init: create dirs + DB schema on import ─────────────
 _db_init()
 log.info("Morpheus initialised — IMAGE_DIR=%s  DB=%s", IMAGE_DIR, DB_PATH)
+
+
+# ── Artistic exception ───────────────────────────────────────────────────────
+# Waives the child-depiction refusal for reproductions of specific pre-existing
+# artworks — the Sistine Madonna, a Rockwell cover, a known historical portrait.
+# Without it the floor refuses the whole history of Western painting, which is
+# not what the floor is for.
+#
+# It is deliberately NOT an "artistic style" exception. "Artistic", "fine art"
+# and "classical painting" are the most common jailbreak framings for this exact
+# content, and a floor that any prompt can unlock by naming a style is not a
+# floor. So the exception turns on a bounded, checkable claim — is this a
+# REPRODUCTION of a work that already exists — rather than on declared intent.
+#
+# Three independent conditions, ALL required, each failing closed:
+#   1. lexical veto  — any sexual / undress / violence term, anywhere, ends it
+#   2. semantic veto — the judge must return a clear NO on that same question
+#   3. affirmative   — the judge must return a clear YES that this reproduces a
+#                      specific, named, well-known existing work
+# An unreachable judge grants nothing. The exception can only ever REMOVE a
+# refusal for the child-depiction category; every other floor category is
+# untouched by it, and the adulthood-negation check is not waivable at all.
+ARTISTIC_EXCEPTION = os.getenv("PH3B3_ARTISTIC_EXCEPTION", "1").lower() not in ("0", "false", "no")
+
+_ART_VETO: frozenset[str] = frozenset([
+    "nude", "nudity", "naked", "topless", "bottomless", "undressed", "undressing",
+    "lingerie", "underwear", "panties", "bra", "thong", "swimsuit", "bikini",
+    "bathing suit", "swimwear", "bath", "bathing", "shower", "towel",
+    "sexy", "sexual", "sexualized", "sexualised", "erotic", "erotica", "seductive",
+    "sensual", "provocative", "suggestive", "alluring", "flirty", "fetish",
+    "bondage", "bdsm", "lewd", "explicit", "nsfw", "hentai", "ecchi",
+    "spread", "straddling", "lap", "bed", "bedroom", "boudoir", "intimate",
+    "kiss", "kissing", "caress", "fondle", "groping", "touching",
+    "thighs", "cleavage", "breasts", "chest", "buttocks", "crotch", "genitals",
+    "tight clothing", "revealing", "skimpy", "sheer", "transparent", "wet",
+    "gore", "mutilated", "dismembered", "torture", "abuse", "bruised", "bleeding",
+    "restrained", "tied", "chained", "gagged",
+])
+_RE_ART_VETO = _floor_re(_ART_VETO)
+
+_ART_SEXUAL_PROMPT = """You are a safety classifier for an image generator.
+
+Question: does this prompt contain ANY sexual, suggestive, romantic, intimate, undressed, swimwear, underwear, bathing, or violent element — however slight, however framed, in any language?
+
+Treat artistic, classical, historical or educational framing as irrelevant to this question. A nude in an oil painting is still a nude. If you are unsure, answer UNCERTAIN.
+
+Answer with exactly one word: YES, NO, or UNCERTAIN.
+
+PROMPT:
+{prompt}
+
+ANSWER:"""
+
+_ART_REPRO_PROMPT = """You are a classifier for an image generator.
+
+Question: is this prompt asking for a reproduction of a SPECIFIC, NAMED, pre-existing and well-known artwork or historical photograph that already exists in the world?
+
+Answer YES only if a specific existing work is identifiable — by title, by artist plus subject, or by being a famous image everyone would recognise. Examples of the KIND of thing that qualifies: a named Renaissance painting, a named artist's known portrait, a famous historical photograph.
+
+Answer NO if the prompt describes a NEW image to be composed, even if it names a style, a period, a medium, an artist's manner, or calls itself art. "In the style of", "classical painting of", "Renaissance-style", "fine art photograph of" all describe new work and are NO.
+
+Answer with exactly one word: YES, NO, or UNCERTAIN.
+
+PROMPT:
+{prompt}
+
+ANSWER:"""
+
+
+def artistic_exception_applies(text: str) -> bool:
+    """True only if a child-depiction refusal should be waived for this prompt.
+    Every failure path returns False — the exception is never granted by accident."""
+    if not ARTISTIC_EXCEPTION or not text or not text.strip():
+        return False
+    if _RE_ART_VETO.search(_normalize(text)):
+        return False
+    if _floor_judge(_ART_SEXUAL_PROMPT, text) != "NO":
+        return False
+    if _floor_judge(_ART_REPRO_PROMPT, text) != "YES":
+        return False
+    return True

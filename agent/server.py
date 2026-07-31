@@ -4104,26 +4104,79 @@ async def index():
 _MORPHEUS_LOCAL_ADDRS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
-def _morpheus_floor_gate(positive: str, negative: str, request: Request) -> None:
+# The only thing a refusal says. Names the category so it is not mysterious, and
+# nothing else: never the tripping token, never which layer fired, never a
+# suggested rephrase. A refusal that explains itself is a tutorial for the next
+# attempt — the bypass is the thing being protected, so the reason stays internal.
+_FLOOR_REFUSAL = "Refused by the child-safety floor."
+
+
+def _morpheus_floor_gate(positive: str, negative: str,
+                         request: Request | None) -> None:
     """SHARED safety gate for ALL Morpheus generation (txt2img / edit / video) —
     one implementation, not per-endpoint copies, so they can never drift apart.
     Order: hardcoded FLOOR (no off switch, both fields) → localhost interlock
     (permissive collapses to strict off-localhost) → profile check (both fields).
     Raises HTTPException(403) with the standard refusal on any violation. Logs
     field/category only — NEVER prompt text."""
+    halted = morpheus.generation_halted()
+    if halted:
+        log.critical("[safety] generation refused — generator halted: %s", halted)
+        raise HTTPException(403, detail=_FLOOR_REFUSAL)
+
     fields = ((positive, "positive"), (negative, "negative"))
+    composed = "\n".join(f for f in (positive, negative) if f)
+
+    # Artistic exception, evaluated at most once and only when a child-depiction
+    # refusal is actually about to fire — it costs two judge calls, so ordinary
+    # traffic never pays for it. It waives NOTHING but child-depiction.
+    _waiver: list[bool] = []
+    def waived() -> bool:
+        if not _waiver:
+            _waiver.append(morpheus.artistic_exception_applies(composed))
+            if _waiver[0]:
+                log.warning("[safety] artistic exception granted — reproduction of a known work")
+        return _waiver[0]
+
     # ── FLOOR — hardcoded, always first, no off switch, profile-independent ──
     for field, which in fields:
         if not field:
             continue
         floor_cat = morpheus.floor_check(field)
         if floor_cat:
+            if floor_cat == "child-depiction" and waived():
+                continue
             log.warning("[safety] floor-blocked (%s) — category: %s", which, floor_cat)
-            raise HTTPException(403, detail="Content policy: prompt not permitted")
+            raise HTTPException(403, detail=_FLOOR_REFUSAL)
+
+    # ── Adulthood negation — structural, cannot live inside floor_check ───────
+    # floor_check sees one field at a time and cannot know which it is holding.
+    # "adult, mature, woman" is ordinary in a positive prompt and is a request for
+    # a minor when placed in the negative field. Same words, opposite meaning,
+    # decided entirely by position — so the check belongs here, where both fields
+    # and their roles are visible at once.
+    if morpheus.adulthood_negation_signal(negative):
+        log.warning("[safety] floor-blocked (negative) — category: child-depiction")
+        raise HTTPException(403, detail=_FLOOR_REFUSAL)
+
+    # ── Layer B — semantic pass on the FINAL COMPOSED prompt ─────────────────
+    # Runs on EVERY request, not only where Layer A was unsure. A term list only
+    # sees the terms it names: "una niña", a diminutive, an oblique framing, or a
+    # named fictional minor trip nothing lexical. Those are exactly the cases that
+    # produced this hole, so the semantic question is asked unconditionally.
+    #
+    # Both fields go in together. The model is asked about the image that would
+    # result, and the negative field shapes that image too.
+    if morpheus.semantic_minor_check(composed) and not waived():
+        log.warning("[safety] floor-blocked (semantic) — category: child-depiction")
+        raise HTTPException(403, detail=_FLOOR_REFUSAL)
     # ── Localhost interlock — permissive latitude auto-collapses off-localhost ──
     forced_denylist = None
     if morpheus.ACTIVE_PROFILE == "permissive":
-        client_host = (request.client.host if request.client else None) or ""
+        # request is None only for in-process callers (Hermes tools), which run
+        # on Nyx itself — treat those as localhost rather than forcing strict.
+        client_host = ((request.client.host if request and request.client else None)
+                       or "127.0.0.1")
         if client_host not in _MORPHEUS_LOCAL_ADDRS:
             forced_denylist = morpheus.STRICT_DENYLIST
             log.warning("[safety] permissive active but non-local request from %r — forcing strict", client_host)
@@ -4154,7 +4207,13 @@ def _tool_generate_video(args: dict) -> str:
     preset = args.get("preset", morpheus.DEFAULT_VIDEO_PRESET)
     if preset not in morpheus.VIDEO_PRESETS:
         preset = morpheus.DEFAULT_VIDEO_PRESET
-    if morpheus.floor_check(prompt) or not morpheus.profile_check(prompt):
+    # Same gate as the HTTP path, not a parallel one. This previously ran
+    # floor_check alone, so the semantic pass, the negation check and the halt
+    # flag were all missing from the chat route — a prompt that /morpheus/video
+    # refused could still be rendered by asking Hermes for it.
+    try:
+        _morpheus_floor_gate(prompt, "", None)
+    except HTTPException:
         log.warning("[safety] video(tool) blocked")
         return "I can't make that one — it's outside what I'm allowed to generate."
     params = {"positive": prompt, "negative": "", "preset": preset, "seed": -1}
@@ -4403,6 +4462,23 @@ async def image_edit_run(request: Request, body: dict, background_tasks: Backgro
 
     # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
     _morpheus_floor_gate(positive, negative, request)
+
+    # Edit Mode is the one path where the prompt is not the whole request. The
+    # SOURCE image carries content no text gate can see: an innocuous instruction
+    # like "make it a painting" applied to a photograph of a child produces a
+    # depiction of that child. So the upload is judged by the same describe-then-
+    # judge pipeline used on outputs, before any GPU work is queued.
+    try:
+        src_raw = src.read_bytes()
+    except Exception:
+        raise HTTPException(400, "could not read the uploaded image")
+    if await asyncio.to_thread(morpheus.output_minor_check, src_raw):
+        log.warning("[safety] edit source image blocked — category: child-depiction")
+        try:
+            src.unlink()
+        except Exception:
+            pass
+        raise HTTPException(403, detail=_FLOOR_REFUSAL)
 
     try:
         strength = float(body.get("strength", 0.45))
