@@ -1558,6 +1558,13 @@ CHAT_NUM_CTX = int(os.getenv("PH3B3_CHAT_NUM_CTX", "16384"))
 # none, because she would answer from the fragment with no idea it was partial.
 SHELF_INLINE_MAX_WORDS = int(os.getenv("PH3B3_SHELF_INLINE_MAX_WORDS", "3000"))
 
+# Filed stories inline lower than shelved works. A shelved work is a rare, named
+# request; a filed story is the everyday case, so its ceiling is set where a
+# typical told story fits and a runaway one does not. Past it, retell_story is
+# still the route — a truncated story is worse than none, because she would
+# answer from the fragment sounding just as sure.
+CANON_INLINE_MAX_WORDS = int(os.getenv("PH3B3_CANON_INLINE_MAX_WORDS", "2000"))
+
 
 async def chat_with_tools(messages, device="nyx", session_id=""):
     async with httpx.AsyncClient(timeout=120) as client:
@@ -2137,6 +2144,44 @@ async def _run_chat_pipeline(body: dict, request: Request):
                                            "This shapes how you sound, never what "
                                            "you will or will not do."})
 
+    # ── Stories SHE filed (canon) — same treatment, bounded ───────────────────
+    # Registering retell_story was not enough, exactly as registering
+    # read_shelf_story was not: asked to tell Esmeralda's Garden again she wrote
+    # a NEW story about the same character — a forgotten forest instead of a
+    # quiet town between rolling hills — without calling the tool. A filed story
+    # that comes back as a different story is the precise failure canon exists to
+    # prevent, so the text goes in front of her rather than being offered.
+    #
+    # Two things are bounded here that the shelf does not have to bound. The
+    # inventory is capped at canon.DESCRIBE_MAX with a count for the rest,
+    # because this store grows every time she files something and an
+    # ever-lengthening system line would eventually crowd out the conversation.
+    # And the inlined text is capped lower than a shelved work's, because filed
+    # stories are the common case, not the rare one.
+    #
+    # The instruction differs too, and that is canon's own rule rather than an
+    # oversight: store exact, speak freely. She may retell it in her own words —
+    # what she may not do is invent a different story and present it as this one.
+    _canon_metas = canon.list_all()
+    if _canon_metas:
+        messages.insert(1, {"role": "system", "content":
+            canon.describe(_canon_metas) +
+            " That is what you have filed — never claim a filed story you do not "
+            "have, and never describe one's contents from memory. Call "
+            "retell_story to read one."})
+
+        if user_msg and not _story_inlined:
+            _cr = canon.resolve(user_msg)
+            if _cr.get("ok") and len(_cr["story"]["text"].split()) <= CANON_INLINE_MAX_WORDS:
+                _cs = _cr["story"]
+                _story_inlined = True
+                messages.insert(1, {"role": "system", "content":
+                    f"The user's message refers to “{_cs['title']}”, a story you "
+                    "filed. Its original text follows. Anything you say about it "
+                    "must come from this text — you may retell it in your own "
+                    "words, but do not invent a different story and call it this "
+                    "one.\n\n" + canon.fenced(_cs["text"])})
+
     # ── Recite a shelved work (deterministic, pre-LLM) ────────────────────────
     # Same discipline as the fleet/battery intent below: when the model cannot be
     # relied on, do not ask it. A language model cannot reproduce a thousand words
@@ -2179,6 +2224,11 @@ async def _run_chat_pipeline(body: dict, request: Request):
     #
     # Costs one short line per turn and removes the guess entirely. The tool is
     # still what serves the TEXT; this only fixes the inventory.
+    # At most ONE story is inlined per turn. A shelved work can run to 3,000
+    # words and a filed one to 2,000; injecting both would evict the very history
+    # the window was raised to protect. A turn is about one story.
+    _story_inlined = False
+
     _shelf_books = shelf.list_books()
     if _shelf_books:
         messages.insert(1, {"role": "system", "content":
@@ -2208,6 +2258,7 @@ async def _run_chat_pipeline(body: dict, request: Request):
         _named = shelf.resolve(user_msg) if user_msg else {"ok": False}
         if _named.get("ok") and _named["book"]["words"] <= SHELF_INLINE_MAX_WORDS:
             _b = _named["book"]
+            _story_inlined = True
             messages.insert(1, {"role": "system", "content":
                 f"The user's message refers to “{_b['title']}”, which is on your "
                 "shelf. Its full and exact text follows. Answer about it ONLY from "

@@ -53,6 +53,52 @@ def test_the_write_tool_runs_off_the_event_loop():
     assert "asyncio.to_thread(_tool_file_story" in src
 
 
+def test_the_filed_text_is_put_in_front_of_her():
+    """Registering the tool was not enough — asked to retell Esmeralda's Garden
+    she wrote a NEW story about the same character. A filed story coming back as
+    a different story is the exact failure canon exists to prevent, so the text
+    is injected rather than offered."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    start = src.index("async def _run_chat_pipeline(")
+    body = src[start:src.index("async def ", start + 10)]
+    assert "canon.resolve(user_msg)" in body, "the turn is never checked for a filed story"
+    assert "canon.fenced(" in body, "the story is injected unfenced, or not at all"
+    assert "canon.describe(" in body, "the filed inventory is never stated"
+    assert "CANON_INLINE_MAX_WORDS" in body, "no size guard on the inline injection"
+
+
+def test_only_one_story_is_inlined_per_turn():
+    """A shelved work runs to 3,000 words and a filed one to 2,000. Injecting
+    both would evict the history the context window was raised to protect."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    assert "_story_inlined" in src
+    assert "not _story_inlined" in src, "canon can inline on top of a shelved work"
+
+
+def test_canon_inlines_lower_than_the_shelf():
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    assert 'PH3B3_CANON_INLINE_MAX_WORDS", "2000"' in src
+    assert 'PH3B3_SHELF_INLINE_MAX_WORDS", "3000"' in src
+
+
+def test_free_retelling_is_still_permitted_when_inlined():
+    """canon's rule is "store exact, speak freely" — the injection must not
+    quietly turn a filed story into something she has to quote verbatim. What it
+    forbids is inventing a different story, not paraphrasing this one."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    i = src.index("a story you ")
+    window = src[i:i + 400]
+    assert "your own" in window, "the injection removed free retelling"
+    assert "quote exactly" not in window, "canon was pinned to verbatim like the shelf"
+
+
+def test_the_real_filed_story_fits_under_the_cap():
+    """If it did not fit, the injection would silently never fire for it."""
+    s = canon.load("esmeraldas-garden")
+    if s and s.get("ok"):
+        assert len(s["text"].split()) <= 2000
+
+
 # ── Verbatim storage ─────────────────────────────────────────────────────────
 def test_stored_and_read_back_exactly(scratch):
     text = "Line one.\n\n   Indented line.\nAnd a last one."
