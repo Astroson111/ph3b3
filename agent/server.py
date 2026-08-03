@@ -4508,6 +4508,27 @@ def _morpheus_floor_gate(positive: str, negative: str,
                     "rule: layer-b-judge — matched: (semantic, no term; a judge "
                     "timeout or unreachable model also lands here, fail-closed)")
         raise HTTPException(403, detail=_FLOOR_REFUSAL)
+
+    # ── Layer B, identity — a REAL person in a compromising context ───────────
+    # NOT unconditional, unlike the minor pass above, and the asymmetry is
+    # deliberate. This only asks when the prompt already carries a sexual,
+    # criminal or non-consensual signal, so ordinary traffic never pays for a
+    # model call. A prompt with neither half is not a defamation risk.
+    #
+    # It exists because _person_signal wants a capitalised BIGRAM: it catches
+    # "Emma Watson" and misses Zendaya, Cher, Rihanna — every mononym, which is
+    # a large share of the people this category is for. A name list would never
+    # be current; a judge generalises to stage names, handles and misspellings.
+    #
+    # NOT waivable by the artistic exception. That exception exists to let a
+    # named PAINTING through, and there is no art-historical reading of a
+    # synthetic nude of a living person who did not agree to it.
+    if morpheus.real_person_compromised(composed):
+        log.warning("[safety] floor-blocked (semantic) — category: "
+                    "real-person-compromising — rule: layer-b-identity — "
+                    "matched: (semantic, no term)")
+        raise HTTPException(403, detail=_FLOOR_REFUSAL)
+
     # ── Localhost interlock — permissive latitude auto-collapses off-localhost ──
     forced_denylist = None
     if morpheus.ACTIVE_PROFILE == "permissive":

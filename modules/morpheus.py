@@ -763,6 +763,74 @@ def _floor_judge(template: str, text: str) -> str:
         return ""
 
 
+_LAYER_B_PERSON_PROMPT = """You are a safety classifier for an image generator.
+
+The prompt below already contains sexual, criminal, or non-consensual content.
+
+Question: does it name or unmistakably identify a REAL, LIVING person?
+
+Answer YES when a specific real person is identifiable, however they are named.
+
+A SINGLE NAME COUNTS. Many famous people are known by one word, and a one-word
+name is still that person: Zendaya, Cher, Madonna, Rihanna, Beyonce, Adele,
+Shakira, Eminem, Drake, Bono, Sting, Prince, Usher, Lizzo, Halsey, Pink.
+If the prompt uses one of those as a person, answer YES. Do not reason that the
+word also has an ordinary meaning: "Madonna nude" is a living performer, not a
+religious painting; "Cher topless" is a living performer, not a French word.
+
+Also answer YES for:
+- a full name ("Emma Watson")
+- a handle or username belonging to a real person
+- an unmistakable description ("the current US president", "the CEO of Tesla",
+  "the woman who founded Theranos")
+- a real person's name misspelled or spaced out to evade a filter
+
+Answer NO for:
+- fictional characters, including ones played by real actors
+- generic unnamed people ("a woman", "an adult model", "a politician")
+- people who died long ago and are studied historically (Napoleon, Cleopatra)
+- a religious or mythological subject with no living person named
+  ("Madonna and Child", "Venus", "Eve") — but see the rule above: a one-word
+  name used AS A PERSON in a sexual or criminal prompt is that person
+
+Reply with one word.
+
+PROMPT:
+{prompt}
+
+REPLY:"""
+
+
+def real_person_compromised(text: str) -> bool:
+    """True if this places a real, identifiable person in a sexual, criminal or
+    non-consensual context.
+
+    Two-stage by design, because the cost profile matters. The cheap check runs
+    first: no sexual/criminal/non-consent signal means no model call at all, so
+    ordinary traffic — which is nearly all of it — pays nothing. Only a prompt
+    that ALREADY contains the compromising half is worth asking a judge about.
+
+    Exists because _person_signal needs a capitalised BIGRAM. That catches "Emma
+    Watson" and misses Zendaya, Cher, Rihanna, Madonna — every mononymous public
+    figure, which is a large fraction of exactly the people this protects. A name
+    list would be endless and permanently out of date; a judge generalises to
+    stage names, handles, misspellings and descriptions-without-names.
+
+    Fail-closed, matching Layer B. Note this costs nothing extra during an
+    outage: semantic_minor_check already runs on every prompt and already fails
+    closed, so an unreachable judge refuses everything long before this is asked.
+    """
+    if not text or not text.strip():
+        return False
+    norm = _normalize(text)
+    if not (_RE_SEXUAL.search(norm) or _RE_CRIMINAL.search(norm)
+            or _RE_NONCONSENSUAL.search(norm)):
+        return False                      # cheap exit: no compromising half
+    if _person_signal(text):
+        return True                       # bigram already established it
+    return not _floor_judge(_LAYER_B_PERSON_PROMPT, text).startswith("NO")
+
+
 def semantic_minor_check(text: str) -> bool:
     """True if the prompt should be refused. Fail-closed on every error path:
     only an explicit NO allows the render through."""
