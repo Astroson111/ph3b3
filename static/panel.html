@@ -401,6 +401,25 @@
     .lv-prev { flex:0 0 auto; width:2rem; height:2rem; border-radius:.4rem; cursor:pointer;
       background:transparent; color:var(--accent,#c060e0); border:1px solid var(--accent,#c060e0); font-size:.7rem; }
     .lv-prev:hover { background:var(--accent,#c060e0); color:#fff; }
+    /* Shelf — list of permanent works, and the reader they open into. */
+    .shelf-list { display:flex; flex-direction:column; gap:.4rem; }
+    .shelf-item { display:flex; flex-direction:column; align-items:flex-start; gap:.1rem;
+      width:100%; text-align:left; cursor:pointer; padding:.5rem .6rem; border-radius:.4rem;
+      background:transparent; border:1px solid var(--border); color:var(--text); font:inherit; }
+    .shelf-item:hover { border-color:var(--accent,#a06cd5); }
+    .shelf-t { font-size:.86rem; font-weight:600; }
+    .shelf-s { font-size:.72rem; color:var(--dim); }
+    .shelf-modal { max-width:44rem; max-height:82vh; display:flex; flex-direction:column; }
+    /* The reader scrolls, the header does not — a long work must not push its
+       own close button off the screen. */
+    .shelf-body { overflow-y:auto; padding-right:.4rem; line-height:1.65;
+      font-size:.9rem; color:var(--text); }
+    .shelf-body h1 { font-size:1.25rem; margin:.2rem 0 .1rem; }
+    .shelf-body h2 { font-size:1.02rem; margin:1.4rem 0 .5rem; color:var(--accent,#a06cd5); }
+    .shelf-body h3 { font-size:.86rem; margin:.1rem 0 .1rem; color:var(--dim); font-weight:600; }
+    .shelf-body p { margin:.62rem 0; }
+    .shelf-body em { color:var(--dim); }
+    .shelf-body hr { border:none; border-top:1px solid var(--border); margin:1.1rem 0; }
     .lv-note { font-size:.74rem; color:var(--dim); margin-top:.3rem; line-height:1.4; }
     .lv-note .lv-tier-strong { color:#5fbf7f; }
     .lv-note .lv-tier-functional { color:#d8a24a; }
@@ -1215,6 +1234,16 @@
       <div class="lv-note" id="emoNote"></div>
     </div>
 
+    <!-- ══ Shelf — permanent authored works, read-only ═════════════════════════
+         Read surface only. There is no edit control here because there is no
+         write route to call: the API is GET-only and the files are 444 in the
+         repo. ══════════════════════════════════════════════════════════════ -->
+    <div class="card">
+      <div class="card-title" data-i18n="status.shelf">Shelf</div>
+      <div id="shelfList" class="shelf-list"></div>
+      <div class="lv-note" id="shelfNote" data-i18n="status.shelf.note">Permanent works. Read-only — they are part of Ph3b3, not something she generated.</div>
+    </div>
+
     <div class="card">
       <div class="card-title">
         <span data-i18n="status.tunnel">Remote Tunnel (WireGuard)</span>
@@ -1247,6 +1276,16 @@
     </div>
 
     <!-- Account modal — hidden until "Change…" -->
+    <div class="modal-backdrop" id="shelfModal" hidden>
+      <div class="modal shelf-modal" role="dialog" aria-modal="true" aria-labelledby="shelfModalTitle">
+        <div class="modal-hd">
+          <span id="shelfModalTitle">…</span>
+          <button class="modal-x" id="shelfCloseBtn" type="button" aria-label="Close">&times;</button>
+        </div>
+        <div class="shelf-body" id="shelfBody"></div>
+      </div>
+    </div>
+
     <div class="modal-backdrop" id="acctModal" hidden>
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="acctModalTitle">
         <div class="modal-hd">
@@ -3439,7 +3478,7 @@ async function refreshStatus() {
   }
 }
 refreshStatus();
-wgRefresh(); egressRefresh(); acctInit(); dgInit(); qualInit(); emotionInit();  // WireGuard + Account + Paired-devices + Emotion cards live in Status (default pane)
+wgRefresh(); egressRefresh(); acctInit(); dgInit(); qualInit(); emotionInit(); shelfInit();  // WireGuard + Account + Paired-devices + Emotion + Shelf cards live in Status (default pane)
 setInterval(refreshStatus, 10_000);
 
 // ── chat + audio ──────────────────────────────────────────────────────────────
@@ -3934,6 +3973,83 @@ async function emotionInit() {
       }
     });
   } catch (e) { /* selector stays as-is if the server is unreachable */ }
+}
+
+// ── Shelf ─────────────────────────────────────────────────────────────────────
+// Read-only by construction: there is no write route to call, so there is no
+// edit affordance to build. The list and the reader are the whole surface.
+//
+// The renderer escapes FIRST and marks up second. These are trusted works, but
+// "trusted" is a fact about the author and not about the pipeline — the day a
+// second work lands on the shelf from somewhere less careful, the escaping is
+// what makes that a non-event.
+function shelfMd(src) {
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inline = s => esc(s).replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  const out = [];
+  let para = [];
+  const flush = () => { if (para.length) { out.push('<p>' + inline(para.join(' ')) + '</p>'); para = []; } };
+  for (const raw of src.split('\n')) {
+    const line = raw.trim();
+    if (!line)                  { flush(); continue; }
+    if (line === '---')         { flush(); out.push('<hr>'); continue; }
+    const h = line.match(/^(#{1,3})\s+(.*)$/);
+    if (h)                      { flush(); const n = h[1].length; out.push(`<h${n}>${inline(h[2])}</h${n}>`); continue; }
+    para.push(line);
+  }
+  flush();
+  return out.join('\n');
+}
+
+async function shelfInit() {
+  const list = document.getElementById('shelfList');
+  const modal = document.getElementById('shelfModal');
+  const body = document.getElementById('shelfBody');
+  const titleEl = document.getElementById('shelfModalTitle');
+  if (!list) return;
+
+  const close = () => { modal.hidden = true; body.innerHTML = ''; };
+  document.getElementById('shelfCloseBtn')?.addEventListener('click', close);
+  modal?.addEventListener('click', e => { if (e.target === modal) close(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !modal.hidden) close(); });
+
+  const open = async (slug) => {
+    try {
+      const b = await fetch('/shelf/' + encodeURIComponent(slug)).then(r => {
+        if (!r.ok) throw new Error(r.status); return r.json();
+      });
+      titleEl.textContent = b.title;
+      body.innerHTML = shelfMd(b.text);
+      body.scrollTop = 0;
+      modal.hidden = false;
+      document.getElementById('shelfCloseBtn')?.focus();
+    } catch (e) {
+      titleEl.textContent = t('status.shelf.err', 'Could not open that');
+      body.textContent = '';
+      modal.hidden = false;
+    }
+  };
+
+  try {
+    const d = await fetch('/shelf').then(r => r.json());
+    list.innerHTML = '';
+    if (!d.books || !d.books.length) {
+      list.innerHTML = `<div class="lv-note">${t('status.shelf.empty', 'Nothing on the shelf yet.')}</div>`;
+      return;
+    }
+    d.books.forEach(b => {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'shelf-item';
+      const ttl = document.createElement('span'); ttl.className = 'shelf-t'; ttl.textContent = b.title;
+      const sub = document.createElement('span'); sub.className = 'shelf-s';
+      sub.textContent = [b.subtitle, b.words ? b.words.toLocaleString() + ' words' : '']
+        .filter(Boolean).join(' · ');
+      el.append(ttl, sub);
+      el.addEventListener('click', () => open(b.slug));
+      list.appendChild(el);
+    });
+  } catch (e) { /* card stays empty if the server is unreachable */ }
 }
 
 // ── WireGuard tunnel toggle ───────────────────────────────────────────────────

@@ -123,6 +123,7 @@ from paths import PH3B3_DATA  # [DBG-AUDIO] instrumentation save-dir root
 from anime_module import AnimeModule
 from stories_module import StoriesModule
 import emotions                       # emotional state table (config/emotions.yaml)
+import shelf                          # permanent read-only works (stories/)
 from notes_module import NotesModule
 from timer_module import TimerModule
 from reminders_module import RemindersModule
@@ -4648,6 +4649,35 @@ async def emotion_set(body: dict):
     return {"selected": st["selected"], "resolved": st["resolved"],
             "label": emotions.label_of(st["resolved"]) if emotions.is_named(st["resolved"]) else None,
             "device": emotions.broadcast()}
+
+
+# ── Shelf ─────────────────────────────────────────────────────────────────────
+# Permanent authored works. GET only, and that is the entire security model:
+# there is no write route here, no write function in modules/shelf.py, and the
+# files are mode 444 in the repo. A shelved work cannot be altered through the
+# API because there is nothing to call — not because a check refuses it.
+
+@app.get("/shelf")
+async def shelf_list():
+    """Every shelved work, metadata only."""
+    return {"books": shelf.list_books()}
+
+
+@app.get("/shelf/{slug}")
+async def shelf_read(slug: str):
+    """One shelved work, verbatim.
+
+    Deliberately runs no content floor. These are authored works reviewed by a
+    human before they were committed, not model output and not user input; the
+    floor's job is to judge text whose provenance is unknown, and this text's
+    provenance is the point. Re-checking it on every read would mean a future
+    floor change could silently make a permanent work unavailable, which is the
+    opposite of what "permanent" is supposed to buy.
+    """
+    book = shelf.read(slug)
+    if not book:
+        raise HTTPException(404, "no such work on the shelf")
+    return book
 
 
 @app.post("/image/edit/run")
