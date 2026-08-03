@@ -185,6 +185,28 @@ def test_chat_is_told_the_real_inventory():
     assert "authoritative" in body, "the inventory is stated but not marked authoritative"
 
 
+def test_a_named_work_is_put_in_front_of_her():
+    """Telling her not to describe a work from memory did not stop her doing it.
+    When a turn names a shelved work, the text itself must be injected, so there
+    is nothing left to invent from."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    start = src.index("async def _run_chat_pipeline(")
+    body = src[start:src.index("async def ", start + 10)]
+    assert "shelf.resolve(user_msg)" in body, "the turn is never checked for a named work"
+    assert "shelf.fenced(" in body, "the work is injected unfenced, or not at all"
+    assert "SHELF_INLINE_MAX_WORDS" in body, "no size guard on the inline injection"
+
+
+def test_inline_cap_is_configured_and_sane():
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    assert 'PH3B3_SHELF_INLINE_MAX_WORDS", "3000"' in src
+
+
+def test_the_first_work_fits_under_the_inline_cap():
+    """If it did not fit, the injection would silently never fire for it."""
+    assert shelf.read("charles_and_eliza")["words"] <= 3000
+
+
 def test_the_tool_never_asks_a_bare_question():
     """Every failure string the tool can emit must name what IS available."""
     src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")

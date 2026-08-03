@@ -45,8 +45,11 @@ _SYSTEM = (
     "absent from the context and cannot be fetched. "
     'Return strict JSON: {"answerable": bool, "missing": [strings], '
     '"question": string or null}. When answerable is false, "question" MUST be a '
-    "short, natural question asking the user for the missing information "
-    '(e.g. "Which file do you mean?") — never a restatement of their request. '
+    "short, natural question asking the user for the missing information, and it "
+    "MUST carry enough context to be answerable — name what you do have, or what "
+    "you need, so the user is never asked to guess. Never a restatement of their "
+    "request, and never a bare question like \"which one?\" that could be asked "
+    "about anything. "
     "NEVER name, suggest or ask the user to pick a real musician, band, singer or "
     "recording artist. For anything musical, ask about STYLE, mood, era, "
     "instruments or tempo instead — \"what kind of sound?\", not \"which artist?\". "
@@ -87,11 +90,32 @@ def _scrub_artist_ask(q: str | None) -> str | None:
     return q
 
 
+# A clarifying question that names nothing is a dead end: it asks the user to
+# guess at a list only this process can see, costs a turn, and teaches nothing.
+# The prompt's own EXAMPLE used to be "Which file do you mean?" and the model
+# emitted it verbatim — which is the usual way an example fails. The example is
+# gone, but the guard matches the SHAPE rather than that one string, because the
+# next model will invent its own phrasing for the same dead end.
+_BARE_ASK_RE = re.compile(
+    r"^\s*(?:which|what)\s+"
+    r"(?:file|one|story|stories|item|document|doc|thing|work|book|entry|record)s?\b"
+    r"[^?]{0,40}?\?\s*$", re.I)
+
+
+def _scrub_bare_ask(q: str | None) -> str | None:
+    """Drop a clarifier that carries no information. Returning None sends
+    _clarifying to its missing-fields fallback, which at least names what it is
+    short of."""
+    if q and _BARE_ASK_RE.match(q.strip()):
+        return None
+    return q
+
+
 def _clarifying(missing: list, user_text: str, model_q: str | None) -> str:
     """Guarantee a sensible spoken question on a hold: prefer the model's, but
     reject an empty one or a verbatim echo of the request; fall back to the
     missing fields, then to a generic ask."""
-    mq = _scrub_artist_ask((model_q or "").strip())
+    mq = _scrub_bare_ask(_scrub_artist_ask((model_q or "").strip()))
     if mq and len(mq) > 4 and mq.lower() != (user_text or "").strip().lower():
         return mq
     if missing:

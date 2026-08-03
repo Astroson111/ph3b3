@@ -1492,6 +1492,14 @@ async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
 # me a story" is the actual waste; raising the window buys correctness now.
 CHAT_NUM_CTX = int(os.getenv("PH3B3_CHAT_NUM_CTX", "16384"))
 
+# Longest shelved work that may be inlined into a chat turn, in words. The tool
+# schemas already cost 8,324 tokens of the 16,384 window, leaving roughly 8,060
+# for prompt, history and reply; 3,000 words is about 4,000 tokens, which fits
+# beside CONV_WINDOW=8 without evicting the conversation. A longer work is served
+# by read_shelf_story instead — inlining half of one would be worse than inlining
+# none, because she would answer from the fragment with no idea it was partial.
+SHELF_INLINE_MAX_WORDS = int(os.getenv("PH3B3_SHELF_INLINE_MAX_WORDS", "3000"))
+
 
 async def chat_with_tools(messages, device="nyx", session_id=""):
     async with httpx.AsyncClient(timeout=120) as client:
@@ -2092,6 +2100,32 @@ async def _run_chat_pipeline(body: dict, request: Request):
             "other work on the shelf, and never describe what one of these "
             "contains from memory. To read or quote one, call read_shelf_story "
             "and use exactly what it returns."})
+
+        # And when the turn NAMES one, put the actual text in front of her.
+        #
+        # Telling her not to describe a work from memory did not stop her doing
+        # it: asked "what is Charles and Eliza about?" she produced a flying
+        # vehicle, ancient wisdom and magic. It is a WWII story about a scout and
+        # a nurse. She had not called the tool, and an instruction the model can
+        # decline to follow is not a control.
+        #
+        # So the text is injected deterministically, the same way the language
+        # directive and the datetime note are, and she is left with nothing to
+        # invent from. Fenced, because it is entering a prompt.
+        #
+        # Only on a CONFIDENT name match, so ordinary conversation pays nothing,
+        # and only for works small enough to sit in the window beside the history
+        # — above that the tool remains the route, because a truncated work would
+        # be worse than no work at all: she would speak from a fragment and sound
+        # exactly as certain.
+        _named = shelf.resolve(user_msg) if user_msg else {"ok": False}
+        if _named.get("ok") and _named["book"]["words"] <= SHELF_INLINE_MAX_WORDS:
+            _b = _named["book"]
+            messages.insert(1, {"role": "system", "content":
+                f"The user's message refers to “{_b['title']}”, which is on your "
+                "shelf. Its full and exact text follows. Answer about it ONLY from "
+                "this text — do not recall, infer or embellish, and quote exactly "
+                "when quoting.\n\n" + shelf.fenced(_b["text"])})
 
     # ── Live datetime (additive, ephemeral — constructed FRESH every request) ──
     # Full timestamp incl. weekday + TZ abbrev, tz-aware (ZoneInfo, DST-correct).
