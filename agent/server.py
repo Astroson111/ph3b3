@@ -538,6 +538,7 @@ TOOLS = [
     {"type":"function","function":{"name":"anime_random","description":"Random anime recommendation","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"add_story","description":"Save a story told to Ph3b3","parameters":{"type":"object","properties":{"name":{"type":"string"},"story":{"type":"string"}},"required":["name","story"]}}},
     {"type":"function","function":{"name":"recall_stories","description":"Recall stories by topic","parameters":{"type":"object","properties":{"topic":{"type":"string"}}}}},
+    {"type":"function","function":{"name":"read_shelf_story","description":"Read one of the PERMANENT works on Ph3b3's shelf — authored stories that belong to this system, like 'Charles and Eliza'. Use when asked to read, tell, recite or quote one of these by name, or when asked what stories/works she has. Accepts a loose title: case, spaces and underscores do not matter. Omit 'title' to list everything on the shelf. Returns the story text verbatim — quote it exactly, never rewrite or summarize it unless asked.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"Title as the user said it, e.g. 'Charles and Eliza'. Omit to list the shelf."}},"required":[]}}},
     {"type":"function","function":{"name":"add_note","description":"Save a quick note","parameters":{"type":"object","properties":{"content":{"type":"string"},"tag":{"type":"string","default":"general"}},"required":["content"]}}},
     {"type":"function","function":{"name":"read_last_note","description":"Read the most recent note","parameters":{"type":"object","properties":{"tag":{"type":"string"}}}}},
     {"type":"function","function":{"name":"search_notes","description":"Search notes","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}},
@@ -785,6 +786,7 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "anime_random": result = anime.random_rec()
         elif name == "add_story": result = stories.add_story_from_person(args["name"], args["story"])
         elif name == "recall_stories": result = stories.recall_stories(args.get("topic"))
+        elif name == "read_shelf_story": result = _tool_read_shelf_story(args)
         elif name == "add_note": result = notes.add(args["content"], args.get("tag","general"))
         elif name == "read_last_note": result = notes.read_last(args.get("tag"))
         elif name == "search_notes": result = notes.search(args["query"])
@@ -950,6 +952,38 @@ async def execute_tool(name, args, device="nyx", session_id=""):
 # SAME checks the HTTP routes call, and return the refusal as speech rather than
 # raising — she says why, out loud, instead of a 403 vanishing into a tool error.
 _amphion_last_job: str | None = None
+
+
+def _tool_read_shelf_story(args: dict) -> str:
+    """Read a permanent work off the shelf, by loose title.
+
+    Every failure path returns the shelf contents with it. A clarifying question
+    that does not say what the options are asks the user to guess at a list only
+    this process can see, and that is a worse outcome than not having the lookup
+    at all — so "which one?" is never returned bare.
+
+    The text is FENCED on the way back. It is trustworthy, but it is entering a
+    prompt, and the fence is a statement about the channel rather than about the
+    author.
+    """
+    title = (args.get("title") or "").strip()
+    if not title:
+        return shelf.describe_shelf() + " Ask for one by name to read it."
+
+    r = shelf.resolve(title)
+    if r["ok"]:
+        b = r["book"]
+        return (f"“{b['title']}”"
+                + (f" — {b['subtitle']}" if b.get("subtitle") else "")
+                + f" ({b['words']} words), stored permanently on the shelf. "
+                  "Read it as written:\n\n" + shelf.fenced(b["text"]))
+
+    names = shelf.describe_shelf(r["candidates"] or None)
+    if r["reason"] == "ambiguous":
+        return f"That could be more than one. {names} Which did you mean?"
+    if r["reason"] == "empty":
+        return "There is nothing on the shelf yet."
+    return f"I don't have anything by that name. {names}"
 
 
 async def _tool_generate_song(args: dict, device: str = "nyx") -> str:
@@ -4673,11 +4707,23 @@ async def shelf_read(slug: str):
     provenance is the point. Re-checking it on every read would mean a future
     floor change could silently make a permanent work unavailable, which is the
     opposite of what "permanent" is supposed to buy.
+
+    Accepts a loose name as well as an exact slug — "Charles and Eliza" resolves
+    the same as "charles_and_eliza". A miss returns 404 WITH the shelf contents
+    attached, so a caller is never told "not found" without being told what does
+    exist; an ambiguous name returns 300 with what it narrowed to.
     """
     book = shelf.read(slug)
-    if not book:
-        raise HTTPException(404, "no such work on the shelf")
-    return book
+    if book:
+        return book
+
+    r = shelf.resolve(slug)
+    if r["ok"]:
+        return r["book"]
+    if r["reason"] == "ambiguous":
+        raise HTTPException(300, {"error": "ambiguous", "candidates": r["candidates"]})
+    raise HTTPException(404, {"error": "no such work on the shelf",
+                              "candidates": r["candidates"]})
 
 
 @app.post("/image/edit/run")

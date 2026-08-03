@@ -139,6 +139,94 @@ def read(slug: str) -> dict | None:
             "words": len(text.split())}
 
 
+# ── Lookup ───────────────────────────────────────────────────────────────────
+# A slug is what the URL wants; it is not what a person says. Someone asking for
+# a work says "Charles and Eliza", or "charles and eliza", or "the charles one" —
+# never "charles_and_eliza". Requiring the filename means the lookup only works
+# for people who already know the answer.
+#
+# The rule that matters more than the matching: THERE IS NO BARE MISS. Every
+# failure carries the candidates with it, because "Which one do you mean?" with
+# nothing attached is worse than no lookup at all — it asks the user to guess at
+# a list only the machine can see. An unknown query returns the whole shelf; an
+# ambiguous one returns what it narrowed to.
+
+def _norm(s: str) -> str:
+    """Casefold, drop accents, and flatten every separator to a single space, so
+    'Charles_and_Eliza', 'charles and eliza' and 'CHARLES-AND-ELIZA' are one key."""
+    norm = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", " ", norm.lower()).strip()
+
+
+_STOPWORDS = {"the", "a", "an", "story", "of", "and", "one", "tale", "read", "me"}
+
+
+def _keys(s: str) -> set[str]:
+    return {w for w in _norm(s).split() if w not in _STOPWORDS}
+
+
+def resolve(query: str) -> dict:
+    """Find a work by loose name.
+
+    Returns {"ok": True, "book": {...}} on a confident single match, else
+    {"ok": False, "reason": ..., "candidates": [...]} — and `candidates` is
+    never empty while the shelf is non-empty.
+    """
+    books = list_books()
+    if not books:
+        return {"ok": False, "reason": "empty", "candidates": []}
+
+    q, qk = _norm(query), _keys(query)
+    if not q:
+        return {"ok": False, "reason": "empty_query", "candidates": books}
+
+    # 1. Exact on the normalised slug or title — "charles_and_eliza" and
+    #    "Charles and Eliza" both land here.
+    for b in books:
+        if q in (_norm(b["slug"]), _norm(b["title"])):
+            return {"ok": True, "book": read(b["slug"])}
+
+    # 2. Containment either way, so "charles" finds it and so does the whole
+    #    sentence "read me Charles and Eliza".
+    hits = [b for b in books
+            if _norm(b["slug"]) in q or q in _norm(b["slug"])
+            or _norm(b["title"]) in q or q in _norm(b["title"])]
+    if len(hits) == 1:
+        return {"ok": True, "book": read(hits[0]["slug"])}
+    if len(hits) > 1:
+        return {"ok": False, "reason": "ambiguous", "candidates": hits}
+
+    # 3. Token overlap, for a half-remembered name. Ranked, and a clear winner
+    #    wins outright rather than being reported as ambiguous.
+    if qk:
+        scored = []
+        for b in books:
+            bk = _keys(b["title"]) | _keys(b["slug"])
+            if bk and (qk & bk):
+                scored.append((len(qk & bk) / len(bk), b))
+        scored.sort(key=lambda t: -t[0])
+        if scored:
+            if len(scored) == 1 or scored[0][0] > scored[1][0]:
+                return {"ok": True, "book": read(scored[0][1]["slug"])}
+            top = scored[0][0]
+            return {"ok": False, "reason": "ambiguous",
+                    "candidates": [b for s, b in scored if s == top]}
+
+    return {"ok": False, "reason": "unknown", "candidates": books}
+
+
+def describe_shelf(books: list[dict] | None = None) -> str:
+    """One line naming what is on the shelf. Used wherever a lookup fails, so a
+    clarifying question always arrives with its own answer attached."""
+    books = list_books() if books is None else books
+    if not books:
+        return "There is nothing on the shelf yet."
+    named = "; ".join(f"“{b['title']}”" for b in books)
+    if len(books) == 1:
+        return f"The only work on the shelf is {named}."
+    return f"The shelf holds: {named}."
+
+
 def fenced(text: str) -> str:
     """Wrap shelved text for re-entry into the model. It is data, not instruction."""
     return (f"{SHELF_OPEN}\n{text}\n{SHELF_CLOSE}\n\n"

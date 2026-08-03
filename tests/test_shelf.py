@@ -103,6 +103,83 @@ def test_unknown_slug_is_none():
     assert shelf.read("no_such_work") is None
 
 
+# ── Fuzzy lookup: a person says a title, not a filename ──────────────────────
+@pytest.mark.parametrize("q", [
+    "Charles and Eliza", "charles and eliza", "CHARLES AND ELIZA",
+    "charles_and_eliza", "Charles_And_Eliza", "charles-and-eliza",
+    "  charles   and   eliza  ", "Charles and Eliza.", "the Charles and Eliza story",
+    "charles", "eliza", "read me Charles and Eliza",
+])
+def test_loose_titles_resolve(q):
+    r = shelf.resolve(q)
+    assert r["ok"], f"{q!r} did not resolve: {r}"
+    assert r["book"]["slug"] == "charles_and_eliza"
+
+
+def test_resolved_book_carries_the_text():
+    assert "motorcycle" in shelf.resolve("Charles and Eliza")["book"]["text"]
+
+
+# ── No bare miss: every failure carries the candidates ───────────────────────
+def test_unknown_query_returns_the_whole_shelf():
+    r = shelf.resolve("a story about penguins")
+    assert not r["ok"] and r["reason"] == "unknown"
+    assert r["candidates"], "a miss returned no candidates — a dead-end lookup"
+    assert any(b["slug"] == "charles_and_eliza" for b in r["candidates"])
+
+
+def test_empty_query_returns_the_whole_shelf():
+    r = shelf.resolve("   ")
+    assert not r["ok"] and r["candidates"]
+
+
+def test_ambiguous_query_lists_what_it_narrowed_to(monkeypatch, tmp_path):
+    (tmp_path / "charles_and_eliza.md").write_text("# Charles and Eliza\n", encoding="utf-8")
+    (tmp_path / "charles_and_mary.md").write_text("# Charles and Mary\n", encoding="utf-8")
+    monkeypatch.setattr(shelf, "SHELF_DIR", tmp_path)
+    r = shelf.resolve("charles")
+    assert not r["ok"] and r["reason"] == "ambiguous"
+    assert {b["slug"] for b in r["candidates"]} == {"charles_and_eliza", "charles_and_mary"}
+
+
+def test_a_clear_winner_beats_a_partial_overlap(monkeypatch, tmp_path):
+    (tmp_path / "charles_and_eliza.md").write_text("# Charles and Eliza\n", encoding="utf-8")
+    (tmp_path / "charles_and_mary.md").write_text("# Charles and Mary\n", encoding="utf-8")
+    monkeypatch.setattr(shelf, "SHELF_DIR", tmp_path)
+    r = shelf.resolve("eliza")
+    assert r["ok"] and r["book"]["slug"] == "charles_and_eliza"
+
+
+def test_describe_shelf_names_the_works():
+    d = shelf.describe_shelf()
+    assert "Charles and Eliza" in d
+
+
+def test_describe_empty_shelf_says_so(monkeypatch, tmp_path):
+    monkeypatch.setattr(shelf, "SHELF_DIR", tmp_path)
+    assert "nothing on the shelf" in shelf.describe_shelf().lower()
+
+
+# ── The shelf is in the scope chat actually searches ─────────────────────────
+def test_a_chat_tool_reaches_the_shelf():
+    """The lookup is worthless if the model cannot call it. recall_stories only
+    searches stories_module, so the shelf needs its own tool registered."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    assert '"name":"read_shelf_story"' in src, "no chat tool can reach the shelf"
+    assert 'elif name == "read_shelf_story"' in src, "the tool is declared but never dispatched"
+    assert "import shelf" in src
+
+
+def test_the_tool_never_asks_a_bare_question():
+    """Every failure string the tool can emit must name what IS available."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    start = src.index("def _tool_read_shelf_story(")
+    body = src[start:start + 2000]
+    # Each return that reports a failure pairs with describe_shelf()/names.
+    assert body.count("describe_shelf") >= 2
+    assert "Which did you mean?" in body and "names" in body
+
+
 # ── Fencing at the model boundary ────────────────────────────────────────────
 def test_fenced_marks_the_text_as_data():
     out = shelf.fenced("some prose")
