@@ -215,3 +215,44 @@ voices:
 # Indonesian are offered TEXT-ONLY: official Piper has no voice clearing the bar
 # for them (see FUTURE_GOALS). Dutch: pim chosen over the brief's mls suggestion
 # (cleaner single-speaker) — a flagged substitution.
+
+  # ── English alternatives to Alba (unreviewed) ──────────────────────────────
+  # Alba stays the invariant primary: her id is the lang code, her model is never
+  # edited, and she remains the fallback for every voiceless language. These are
+  # additions beside her, not replacements.
+  #
+  # Added because English had exactly ONE voice while Spanish had four, so the
+  # picker had nothing to offer anyone who found Alba hard to listen to — the
+  # selector was never missing, the choice was.
+  #
+  # Three deliberately different axes rather than three of the same thing: a male
+  # voice (different pitch entirely), a neutral US female (no accent to decode),
+  # and a softer British female (same family as Alba, gentler delivery). Whichever
+  # quality is the trigger, one of these changes it.
+  #
+  # status: unreviewed on purpose — approving is by ear, in the Status tab, and is
+  # not a thing tooling decides.
+  en_ryan:
+    model: en_US-ryan-high.onnx
+    lang: en
+    display_name: "Ryan — English (United States)"
+    script: latin
+    tier: strong
+    sample_text: "Hello! I'm Phoebe."
+    status: unreviewed
+  en_lessac:
+    model: en_US-lessac-high.onnx
+    lang: en
+    display_name: "Lessac — English (United States)"
+    script: latin
+    tier: strong
+    sample_text: "Hello! I'm Phoebe."
+    status: unreviewed
+  en_jenny:
+    model: en_GB-jenny_dioco-medium.onnx
+    lang: en
+    display_name: "Jenny — English (England)"
+    script: latin
+    tier: strong
+    sample_text: "Hello! I'm Phoebe."
+    status: unreviewed
