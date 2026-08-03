@@ -19,8 +19,44 @@ except ImportError:                       # pragma: no cover
     from modules import voices as _voices
 
 
+# ── Wire sample rate ─────────────────────────────────────────────────────────
+# Piper renders at 22050 Hz. That is fine over a socket on the LAN and expensive
+# over TLS on an ESP32-S3: 22050/16-bit/mono is ~57 KB/s of base64 sustained, and
+# a device that cannot hold that starves mid-word however deep its buffer is.
+# 16 kHz costs 27% less and keeps every formant that matters for speech — the
+# content above 8 kHz in a TTS voice is sibilance, not intelligibility.
+#
+# Consumers must read the rate from the WAV header. Browsers always did; Dio was
+# hard-coded to 22050 until the firmware was taught to parse it.
+PIPER_RATE = 22050
+WIRE_RATE = int(os.getenv("PH3B3_TTS_WIRE_RATE", "16000"))
+
+
+def _resample_s16(pcm: bytes, src: int, dst: int) -> bytes:
+    """Downsample signed-16 mono PCM. Box-filters before decimating, because
+    dropping samples outright folds everything above the new Nyquist back into
+    the audible band as a metallic buzz."""
+    if src == dst or not pcm:
+        return pcm
+    try:
+        import numpy as np
+    except Exception:
+        return pcm                      # numpy absent: ship it at source rate
+    a = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
+    if a.size == 0:
+        return pcm
+    ratio = src / dst
+    width = max(1, int(round(ratio)))
+    if width > 1:                       # cheap anti-alias ahead of the decimation
+        kern = np.ones(width, dtype=np.float32) / width
+        a = np.convolve(a, kern, mode="same")
+    idx = np.arange(0, a.size, ratio, dtype=np.float32)
+    out = np.interp(idx, np.arange(a.size, dtype=np.float32), a)
+    return np.clip(out, -32768, 32767).astype("<i2").tobytes()
+
+
 def trim_silence_b64(b64, thr=350, keep_ms=40):
-    """Trim leading/trailing near-silence from a base64 WAV (22050/mono/16-bit),
+    """Trim leading/trailing near-silence from a base64 WAV (mono/16-bit, any rate),
     keeping `keep_ms` of pad each side.
 
     Piper emits ~100 ms of silence at each end of every utterance; concatenating
@@ -31,7 +67,12 @@ def trim_silence_b64(b64, thr=350, keep_ms=40):
     try:
         wav = base64.b64decode(b64)
         wf = wave.open(io.BytesIO(wav), "rb")
-        if (wf.getframerate(), wf.getnchannels(), wf.getsampwidth()) != (22050, 1, 2):
+        rate = wf.getframerate()
+        # Rate-agnostic on purpose. This used to demand exactly 22050 and bail
+        # otherwise — which would have silently stopped trimming the moment the
+        # wire rate changed, letting Piper's ~200ms of dead air back between every
+        # chunk. Mono 16-bit is still required; the rate is read, not assumed.
+        if (wf.getnchannels(), wf.getsampwidth()) != (1, 2):
             return b64
         s = array.array("h")
         s.frombytes(wf.readframes(wf.getnframes()))
@@ -44,14 +85,14 @@ def trim_silence_b64(b64, thr=350, keep_ms=40):
             j -= 1
         if i >= j:
             return b64  # all silence — leave as-is
-        keep = int(22050 * keep_ms / 1000)
+        keep = int(rate * keep_ms / 1000)
         i = max(0, i - keep)
         j = min(n, j + keep)
         buf = io.BytesIO()
         with wave.open(buf, "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
-            w.setframerate(22050)
+            w.setframerate(rate)
             w.writeframes(s[i:j].tobytes())
         return base64.b64encode(buf.getvalue()).decode("ascii")
     except Exception:
@@ -349,12 +390,13 @@ class TTSModule:
                 raw_pcm = proc.stdout
                 if not raw_pcm:
                     return None
+                pcm = _resample_s16(raw_pcm, PIPER_RATE, WIRE_RATE)
                 buf = io.BytesIO()
                 with wave.open(buf, 'wb') as wf:
                     wf.setnchannels(1)
                     wf.setsampwidth(2)
-                    wf.setframerate(22050)
-                    wf.writeframes(raw_pcm)
+                    wf.setframerate(WIRE_RATE)
+                    wf.writeframes(pcm)
                 return base64.b64encode(buf.getvalue()).decode('ascii')
             except Exception as e:
                 log.error(f"TTS synthesize error: {e}")

@@ -2212,14 +2212,36 @@ def _tts_stream_new(chunks, voice=None):
     _TTS_STREAMS[sid] = {"chunks": chunks, "audio": {}, "ts": now, "voice": voice}
     return sid
 
+async def _tts_synth_into(st, n):
+    """Synthesize one chunk into the stream's cache. Safe to call twice."""
+    if n in st["audio"] or n < 0 or n >= len(st["chunks"]):
+        return
+    st["audio"][n] = None                      # claim the slot so prefetch can't double-run
+    b64 = await asyncio.to_thread(tts.synthesize_to_b64, st["chunks"][n], st.get("voice")) or ""
+    st["audio"][n] = trim_silence_b64(b64) if b64 else ""   # drop Piper's ~200ms per-chunk gaps
+
+
 async def _tts_chunk_b64(sid, n):
+    """Return chunk n, and start chunk n+1 synthesizing in the background.
+
+    Without the prefetch, Dio waits at every chunk boundary while Piper works —
+    measured at ~1.1s per chunk, which is a full second of silence dropped into
+    the middle of a story. Synthesis is roughly ten times faster than playback
+    (1.1s of compute per 10s of speech), so there is ample time to have the next
+    chunk ready before the current one finishes; it just was never started early.
+
+    The cost is one chunk of memory ahead of the playhead, which is nothing
+    against the 15-minute stream TTL that already holds every chunk synthesized
+    so far."""
     st = _TTS_STREAMS.get(sid)
     if not st or n < 0 or n >= len(st["chunks"]):
         return None
     st["ts"] = time.monotonic()
-    if n not in st["audio"]:
-        b64 = await asyncio.to_thread(tts.synthesize_to_b64, st["chunks"][n], st.get("voice")) or ""
-        st["audio"][n] = trim_silence_b64(b64) if b64 else ""   # drop Piper's ~200ms per-chunk gaps
+    await _tts_synth_into(st, n)
+    while st["audio"].get(n) is None:           # a prefetch is mid-flight; wait for it
+        await asyncio.sleep(0.02)
+    if n + 1 < len(st["chunks"]) and (n + 1) not in st["audio"]:
+        asyncio.create_task(_tts_synth_into(st, n + 1))
     return st["audio"][n]
 
 
