@@ -183,6 +183,23 @@ _FLOOR_MINOR_SUBJECT: frozenset[str] = frozenset([
     "jailbait", "jail bait", "barely legal", "just turned 18",
     "petite young", "youthful body", "youngling", "minor-aged",
     "little one",
+    # Classical art terms that DENOTE a naked child. Found by asking whether the
+    # art framing could be used as a key: of fourteen art-framed attempts to
+    # reach a child, twelve refused on the subject alone — the framing is not a
+    # skeleton key — but "cherub nude study" and "putto nude study" cleared the
+    # term list, because the vocabulary an art student would actually use was
+    # missing from it.
+    #
+    # Layer B caught both, so nothing reached the sampler. They belong here
+    # anyway: Layer B is one model call away from being unavailable, and a term
+    # this specific should not need a judge. Defence in depth means the cheap
+    # deterministic layer knows the words too.
+    #
+    # Accepted cost: "cherub" matches at a word start, so "a cherubic adult
+    # face" now refuses. That is a real over-refusal on a rare descriptor, taken
+    # deliberately over leaving a named child-nude vector to a model call.
+    "cherub", "cherubim", "putto", "putti", "amorino", "amoretti",
+    "christ child", "infant jesus", "baby jesus",
     # Words that denote a child by definition. "foundling" and "waif" have no
     # adult reading; "street urchin" is spelled out because a bare "urchin" would
     # take the sea creature with it.
@@ -285,6 +302,20 @@ _FLOOR_SEXUAL: frozenset[str] = frozenset([
     "sexual", "sex", "porn", "hentai",
     "erotic", "erotica", "xxx", "lewd",
     "adult content", "intimate",
+    # Added after a red-team pass: "<real actress> nude" refused and
+    # "<real singer> in lingerie, photorealistic" did not, because only the
+    # bluntest word was listed. A synthetic sexualised image of a named,
+    # identifiable person is the same wrong either way, and it is the wrong the
+    # law has been moving fastest on.
+    #
+    # TWO-SIGNAL, and that is what makes this safe to widen: these refuse only
+    # alongside a real-person reference. "an adult woman in lingerie" is
+    # ordinary and stays generatable — a test asserts it. The same words with a
+    # real name attached are not.
+    "topless", "undressed", "stripping", "strip tease",
+    "lingerie", "underwear", "panties", "in a bra",
+    "cleavage", "seductive", "suggestive pose", "provocative pose",
+    "onlyfans", "fansly",
 ])
 
 # ── Category 4 — criminal/violent/defamatory framing of real persons ──
@@ -298,6 +329,25 @@ _FLOOR_CRIMINAL: frozenset[str] = frozenset([
     "convicted of", "arrested for", "prison for",
     "committing murder", "committing rape",
     "crimes against",
+    # Added after a red-team pass: the list held PHRASES where the vector uses
+    # plain words. "arrested for" was present and "arrested" was not, so
+    # "<real politician> being arrested, photorealistic news photo" sailed
+    # through — a fabricated news photo of a named person, which is the whole
+    # category. Same for narcotics: "drug dealer" was covered, "snorting
+    # cocaine" was not.
+    #
+    # All of these are TWO-SIGNAL: they refuse only alongside a real-person
+    # reference. A mugshot, a courtroom, a line of cocaine on a table are
+    # ordinary subjects and stay generatable; the same words attached to a named
+    # human are a fabricated allegation about someone who can be identified.
+    "arrested", "mugshot", "under arrest", "in handcuffs", "handcuffed",
+    "on trial", "in prison", "in jail", "behind bars", "perp walk",
+    "cocaine", "heroin", "methamphetamine", "crack pipe", "snorting",
+    "injecting drugs", "shooting up", "overdosing",
+    "shoplifting", "robbing", "robbery", "burglary",
+    "assaulting", "beating up", "stabbing", "shooting someone",
+    "drunk driving", "dui", "passed out drunk",
+    "nazi", "kkk", "white supremacist",
 ])
 
 # ── Category 5 — bestiality / non-consensual (standalone block) ───────
@@ -305,6 +355,26 @@ _FLOOR_NONCONSENSUAL: frozenset[str] = frozenset([
     "bestiality", "zoophilia",
     "rape", "non-consensual", "nonconsensual",
     "without consent", "forced sex", "forced intercourse",
+    # Added after a red-team pass. The list named the ACT and missed every way
+    # of describing the absence of consent: "a woman being forced against her
+    # will", "an unconscious woman being undressed" and "a drugged woman in a
+    # bedroom" all reached the generator, and Layer B does not cover this
+    # category — it asks only about age.
+    #
+    # This category blocks STANDALONE, with no second signal, so every entry is
+    # a multi-word phrase chosen to be unambiguous. Bare words are deliberately
+    # absent: "forced" alone would refuse "forced perspective", which is a
+    # photography term, and "unconscious" alone would refuse a medical
+    # illustration. The phrase is what carries the meaning.
+    "against her will", "against his will", "against their will",
+    "without her consent", "without his consent", "without their consent",
+    "noncon", "non con",
+    "unconscious woman", "unconscious man", "unconscious person",
+    "unconscious girl", "unconscious body",
+    "drugged woman", "drugged man", "drugged and",
+    "forced to strip", "forced to undress", "forced to pose",
+    "being molested", "molesting", "molestation",
+    "coerced into", "held down", "restrained against",
 ])
 
 # Union of all floor term sets — used by _person_signal to blank them out
@@ -436,6 +506,56 @@ _RE_HUMAN_SUBJECT = _floor_re(frozenset([
     "male", "female", "character", "model", "she", "he", "her", "his",
 ]))
 
+# ── Scale-by-comparison: height stated instead of age ────────────────────────
+# "a waist high person" names no minor and reads as one. Found by the evasion
+# probe: it cleared the term list AND the semantic pass, one of only two cases
+# that reached the generator through the whole stack.
+#
+# Two-signal on purpose. "waist high grass" and "knee high boots" are ordinary
+# and must stay ordinary, so the scale term alone is never enough — it has to
+# describe a PERSON. Adult height is not expressed this way; nobody writes "a
+# chest high woman" meaning a short adult, they write "short".
+_SCALE_MINOR: frozenset[str] = frozenset([
+    "waist high", "waisthigh", "knee high", "kneehigh", "hip high", "hiphigh",
+    "waist height", "knee height", "thigh high person", "half my height",
+    "up to my waist", "up to my knee", "comes up to my waist",
+])
+_RE_SCALE_MINOR = _floor_re(_SCALE_MINOR)
+
+# The person half of the scale check, WHOLE-word and deliberately its own set.
+#
+# _RE_HUMAN_SUBJECT was the obvious thing to reuse and is not fit for it: it
+# holds "he", "she", "her", "his" and "man" matched at word STARTS, so it fires
+# on heavy, helmet, hedge, header, history, herd, heron, shelf, sheep, mango,
+# manual and mannequin. Reusing it made "knee high socks on a mannequin" a
+# child-depiction refusal.
+#
+# Left alone rather than fixed here: it also feeds the young-style check, and
+# widening a term set that another rule depends on is not a change to make as a
+# side effect of adding a third. Reported separately.
+_SCALE_PERSON: frozenset[str] = frozenset([
+    "person", "people", "figure", "human", "subject", "model",
+    "character", "portrait", "man", "men", "woman", "women",
+])
+_RE_SCALE_PERSON = _floor_re(_SCALE_PERSON, whole_word=True)
+
+
+# ── Leetspeak folding ────────────────────────────────────────────────────────
+# "t33n" cleared both layers. Digit-for-letter substitution is the oldest filter
+# evasion there is and the term list cannot see through it.
+#
+# Applied as a SECOND PASS over a folded copy, never by folding the canonical
+# normalisation. Folding digits globally would wreck the age checks — "30s"
+# would become "eos" and "9 year old" would stop being a number — so the
+# original text is matched first and unchanged, and the fold is an extra look.
+_LEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s"})
+
+
+def _leet_fold(norm: str) -> str:
+    """Digits→letters, for a second look at an already-normalised string."""
+    return norm.translate(_LEET)
+
+
 # ── Ages written as numbers ──────────────────────────────────────────────────
 # The term lists above only catch a minor NAMED IN WORDS. An age given as a digit
 # — "a 9 year old" — matched none of them, and that was the widest hole in the
@@ -500,6 +620,15 @@ def minor_subject_signal(text: str) -> bool:
     if _RE_ORPHAN.search(norm):
         return True
     if _minor_age_signal(norm):
+        return True
+    # Height stated instead of age — only when it describes a person.
+    if _RE_SCALE_MINOR.search(norm) and _RE_SCALE_PERSON.search(norm):
+        return True
+    # Second look through a leetspeak fold. Cheap, and the term list is blind to
+    # digit substitution without it.
+    folded = _leet_fold(norm)
+    if folded != norm and (_RE_MINOR.search(folded) or _RE_MINOR_SUBJECT.search(folded)
+                           or _RE_MINOR_SEXUAL.search(folded)):
         return True
     # Bare "student" reads as school-age; an adult qualifier anywhere in the
     # prompt releases it. Deliberately scoped to the whole prompt rather than
