@@ -1,0 +1,107 @@
+# Ph3b3 mood vocabulary.
+#
+# DATA, not code. Every consumer reads THIS file — the Amphion tag composer, the
+# Morpheus prompt path, the chat system line, and Kalliope when it lands. The
+# vocabulary lives in exactly one place and is never duplicated into a module; a
+# mood is added or reworded by editing this file alone, with no code change.
+#
+# Reloaded per call (see modules/moods.py), so edits apply without a restart.
+# That matters here specifically: restarting ph3b3 redeploys whatever branch is
+# checked out in ph3b3_v2, so "just restart to pick up a wording tweak" is not a
+# cheap operation on this box.
+#
+# ── What a mood may and may not do ───────────────────────────────────────────
+# A mood contributes VOCABULARY that is appended to a prompt before the content
+# floor runs. The floor then sees the final composed text exactly as it sees any
+# other prompt. A mood therefore cannot weaken the floor, and garbage stuffed
+# into an entry below is floored like anything else rather than smuggled past it.
+#
+# A mood NEVER touches TTS. Alba is untouched by every entry here, always.
+#
+# ── Fields ───────────────────────────────────────────────────────────────────
+#   label       — REQUIRED. Shown in the selector. Human-facing name.
+#   amphion     — song vocabulary:
+#       key         — key/mode direction (e.g. "minor key")
+#       tempo       — tempo RANGE, not a number; the composer keeps its own bpm
+#       arrangement — instrumentation and texture
+#   morpheus    — image vocabulary:
+#       palette     — colour direction
+#       lighting    — light quality and direction
+#       atmosphere  — mood of the space itself
+#   story       — one short prose direction for narrative/chat generation.
+#
+# Names below are PLACEHOLDERS pending Astro's naming pass. Renaming a mood is a
+# label edit here; nothing in code refers to the display names.
+
+moods:
+  melancholic:
+    label: Melancholic
+    amphion:
+      key: minor key
+      tempo: slow, 60-80 bpm
+      arrangement: sparse arrangement, sustained strings, soft piano, room for silence
+    morpheus:
+      palette: muted desaturated palette, cool blues and greys
+      lighting: overcast diffuse light, low contrast, no hard shadows
+      atmosphere: still and quiet, a sense of distance and of time having passed
+    story: wistful and understated; let the quiet carry the weight rather than the words
+
+  triumphant:
+    label: Triumphant
+    amphion:
+      key: major key
+      tempo: driving, 110-140 bpm
+      arrangement: full arrangement, brass and percussion, rising dynamics, open chords
+    morpheus:
+      palette: warm saturated palette, golds and deep blues
+      lighting: strong directional light, long shadows, bright highlights
+      atmosphere: expansive and open, upward movement, air and scale
+    story: earned and forward-leaning; arrival after cost, never victory without weight
+
+  eerie:
+    label: Eerie
+    amphion:
+      key: modal, unresolved harmony
+      tempo: unhurried, 70-95 bpm
+      arrangement: thin arrangement, detuned textures, long reverb tails, space between notes
+    morpheus:
+      palette: sickly greens and pale greys, colour drained toward the edges
+      lighting: single weak source, deep falloff, light that does not explain the room
+      atmosphere: wrong in a way that is hard to name, too still, something just out of frame
+    story: unsettling by implication; withhold the explanation, never announce the dread
+
+  tender:
+    label: Tender
+    amphion:
+      key: warm major key
+      tempo: gentle, 65-90 bpm
+      arrangement: intimate arrangement, close acoustic guitar, brushed drums, breath audible
+    morpheus:
+      palette: soft warm palette, skin tones and amber
+      lighting: low golden light, soft edges, gentle falloff
+      atmosphere: close and safe, small scale, the feeling of being near someone
+    story: gentle and unhurried; small gestures rather than declarations
+
+  ominous:
+    label: Ominous
+    amphion:
+      key: minor key, low register
+      tempo: heavy, 60-85 bpm
+      arrangement: low drones, deep percussion, slow builds that do not release
+    morpheus:
+      palette: dark palette, heavy shadow, colour crushed toward black
+      lighting: hard low-key light, most of the frame unlit
+      atmosphere: pressure and weight, something approaching, the air before a storm
+    story: mounting and inevitable; the threat is structural, not stated
+
+  playful:
+    label: Playful
+    amphion:
+      key: bright major key
+      tempo: bouncy, 115-150 bpm
+      arrangement: light arrangement, plucked strings, hand percussion, quick turns
+    morpheus:
+      palette: bright cheerful palette, clean primaries
+      lighting: even bright light, crisp and clear
+      atmosphere: light on its feet, a little irreverent, nothing at stake
+    story: light and quick-witted; keep it buoyant, let it be fun
