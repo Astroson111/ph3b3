@@ -241,6 +241,85 @@ def test_broadcast_is_inert_when_none(scratch_state):
     assert b["label"] is None
 
 
+# ── Battery reads as tiredness ───────────────────────────────────────────────
+# The one emotion that is a fact rather than a judgement. Each exclusion below
+# exists because without it she would be pinned to "tired" permanently.
+
+def _row(dev, batt, charging=0, state="HEALTHY"):
+    return {"device_id": dev, "battery": batt, "charging": charging, "state": state}
+
+
+def test_low_and_discharging_reads_tired():
+    got = emotions.battery_reads_tired([_row("stackchan", 8)])
+    assert got and got["device_id"] == "stackchan" and got["battery"] == 8
+
+
+def test_a_charging_device_is_not_tired():
+    """5% on the charger is recovering, not flagging. Without this she stays
+    tired all night while the fleet refills."""
+    assert emotions.battery_reads_tired([_row("stackchan", 5, charging=1)]) is None
+
+
+def test_a_silent_device_is_not_tired():
+    """Pan sits at battery 0, silent for 44 hours. A badge nobody is carrying
+    must not pin her to tired forever."""
+    assert emotions.battery_reads_tired([_row("pan", 0, state="SILENT")]) is None
+
+
+def test_a_device_with_no_battery_is_not_tired():
+    """Nyx and the services report None. A mains-powered box is never tired."""
+    assert emotions.battery_reads_tired([_row("nyx", None)]) is None
+
+
+def test_the_lowest_device_wins():
+    got = emotions.battery_reads_tired([_row("a", 18), _row("b", 3), _row("c", 12)])
+    assert got["device_id"] == "b"
+
+
+@pytest.mark.parametrize("batt,tired", [(0, True), (19, True), (20, True), (21, False), (100, False)])
+def test_threshold_boundary(batt, tired):
+    assert bool(emotions.battery_reads_tired([_row("x", batt)])) is tired
+
+
+def test_threshold_is_configurable():
+    assert emotions.battery_reads_tired([_row("x", 40)], threshold=50)
+    assert emotions.battery_reads_tired([_row("x", 40)], threshold=30) is None
+
+
+def test_empty_or_junk_fleet_is_no_opinion():
+    assert emotions.battery_reads_tired([]) is None
+    assert emotions.battery_reads_tired(None) is None
+
+
+def test_the_real_fleet_shape_does_not_false_positive():
+    """The actual fleet as observed: Dio charging at 100, Pan silent at 0, Iris
+    charging at 75, services reporting None. None of that is tiredness."""
+    fleet = [_row("nyx", None, state="HEALTHY"), _row("stackchan", 100, charging=1),
+             _row("pan", 0, state="SILENT"), _row("iris", 75, charging=1)]
+    assert emotions.battery_reads_tired(fleet) is None
+
+
+def test_battery_cannot_override_a_manual_pick(scratch_state):
+    """The selector's contract survives the feature: set_resolved refuses to move
+    anything but AUTO, so a flat battery cannot overwrite a deliberate choice."""
+    emotions.set_selected("joy")
+    emotions.set_resolved(emotions.TIRED_ID)
+    assert emotions.active() == "joy"
+
+
+def test_battery_can_move_the_state_under_auto(scratch_state):
+    emotions.set_selected(emotions.AUTO)
+    emotions.set_resolved(emotions.TIRED_ID)
+    assert emotions.active() == "tired"
+    assert emotions.get_state()["selected"] == emotions.AUTO
+
+
+def test_tired_exists_in_the_table():
+    """The battery path names this id directly; if it were renamed out of the
+    table the feature would silently stop working."""
+    assert emotions.is_named(emotions.TIRED_ID)
+
+
 # ── Hot-reload ───────────────────────────────────────────────────────────────
 def test_table_edit_is_picked_up(tmp_path, monkeypatch):
     f = tmp_path / "emotions.yaml"

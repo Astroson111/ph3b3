@@ -287,6 +287,52 @@ def iris_params(emotion_id: str) -> dict | None:
             "cadence": _num(block, "cadence", 0.5, 1.5, 1.0)}
 
 
+# ── Battery reads as tiredness ───────────────────────────────────────────────
+# A body running out of power being tired is the one emotion here that is not a
+# judgement call — it is a fact about the hardware, so it does not need a model
+# to notice it.
+#
+# Pure on purpose: it takes fleet rows as plain dicts rather than reaching for
+# Argus, so the policy can be tested without a store, a heartbeat or a device.
+#
+# TIRED_PCT is the threshold. Below it, and discharging, she reads tired.
+
+TIRED_PCT = 20
+TIRED_ID = "tired"
+
+
+def battery_reads_tired(fleet: list, threshold: int = TIRED_PCT) -> dict | None:
+    """The device whose battery reads as tiredness, or None.
+
+    Three exclusions, each of which would otherwise produce a permanent lie:
+
+      · NO BATTERY — Nyx and the services report None. A mains-powered box is
+        never tired.
+      · CHARGING — a device at 5% on the charger is recovering, not flagging.
+        Without this she would stay tired all night while everything refills.
+      · SILENT — a badge that has been dark for two days reports whatever it
+        last managed to send. Pan currently sits at battery 0, silent for 44
+        hours; counting that would pin her to tired forever over a device
+        nobody is carrying.
+
+    Returns the LOWEST qualifying device, so the most tired thing she is wins.
+    """
+    worst = None
+    for row in fleet or []:
+        batt = row.get("battery")
+        if batt is None:
+            continue
+        if row.get("charging"):
+            continue
+        if str(row.get("state", "")).upper() == "SILENT":
+            continue
+        if batt > threshold:
+            continue
+        if worst is None or batt < worst["battery"]:
+            worst = {"device_id": row.get("device_id"), "battery": batt}
+    return worst
+
+
 def announce(emotion_id: str) -> str:
     """Auto's read, stated in her own voice. Short on purpose: it has to be
     objectable at a glance, and a wall of vocabulary is not."""

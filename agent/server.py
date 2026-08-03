@@ -4483,6 +4483,39 @@ def _edit_session_key(request: Request) -> str:
 # the state is already standing and already visible in the selector before you
 # press generate, so there is nothing to announce and nothing to confirm.
 
+BATTERY_TIRED_PCT = int(os.getenv("PH3B3_BATTERY_TIRED_PCT", str(emotions.TIRED_PCT)))
+
+
+def _battery_tired() -> dict | None:
+    """Live fleet → the device whose battery reads as tiredness, or None.
+
+    Never raises: a fleet read that fails means "no opinion", not an error. This
+    runs on the /emotion poll path, which devices hit every 20 s, so it must not
+    be able to break the one endpoint the faces depend on.
+    """
+    try:
+        fleet = argus_store.fleet(load_contracts())
+        return emotions.battery_reads_tired(fleet, BATTERY_TIRED_PCT)
+    except Exception as e:
+        log.debug("[emotion] battery check unavailable (%s)", e)
+        return None
+
+
+def _emotion_apply_battery() -> dict | None:
+    """Under AUTO, let a flat battery set the state. Returns the tired device.
+
+    Deliberately NOT an override of a manual pick. The selector's whole contract
+    is that a human choice holds until a human changes it — set_resolved already
+    refuses to move anything but AUTO, so this inherits that for free. If she is
+    set to Joy on 4% battery, she stays Joy, and that is correct: the state is
+    what you asked for, not what the hardware feels like.
+    """
+    low = _battery_tired()
+    if low and emotions.is_named(emotions.TIRED_ID):
+        emotions.set_resolved(emotions.TIRED_ID)
+    return low
+
+
 def _emotion_infer(convo: str) -> str:
     """Auto's read: pick the emotion the CONVERSATION is in. Called after a chat
     turn, never on the generation path.
@@ -4517,6 +4550,14 @@ async def _emotion_auto_update(session) -> None:
     no model call, no latency, not even a table read."""
     try:
         if emotions.get_state()["selected"] != emotions.AUTO:
+            return
+        # A flat battery outranks the conversation. It is a fact about the body
+        # rather than a reading of the room, and no amount of cheerful chat makes
+        # a device on 8% not tired. Also skips the model call entirely.
+        _low = _emotion_apply_battery()
+        if _low:
+            log.info("[emotion] auto: tired — %s at %d%%",
+                     _low["device_id"], _low["battery"])
             return
         msgs = [m for m in session.messages() if m.get("role") in ("user", "assistant")][-8:]
         if not msgs:
@@ -4740,9 +4781,18 @@ async def emotion_get():
     documents itself as touching nothing so it can answer mid-startup, and a
     liveness probe must not start failing because a config file went missing.
     """
+    # Re-checked on every read, not only after a chat turn. A battery goes flat
+    # while nobody is talking to her — that is rather the point — so the state
+    # has to be able to change without a conversation to trigger it. Devices poll
+    # this every 20 s, which makes the poll itself the clock. Cheap and
+    # idempotent: set_resolved is a no-op unless AUTO is selected AND the value
+    # actually changed.
+    _low_batt = _emotion_apply_battery()
+
     st = emotions.get_state()
     return {"selected": st["selected"], "resolved": st["resolved"],
             "source": st["source"], "since": st["since"],
+            "battery_tired": _low_batt,
             "default": emotions.DEFAULT,
             "none": emotions.NONE, "auto": emotions.AUTO,
             "label": emotions.label_of(st["resolved"]) if emotions.is_named(st["resolved"]) else None,
