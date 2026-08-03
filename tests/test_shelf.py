@@ -170,6 +170,21 @@ def test_a_chat_tool_reaches_the_shelf():
     assert "import shelf" in src
 
 
+def test_chat_is_told_the_real_inventory():
+    """A tool the model declines to call is not a source of truth.
+
+    Asked "what stories do you have?", the model answered WITHOUT calling
+    read_shelf_story and invented a title that has never existed. The shelf is a
+    short fixed list, so the inventory is injected into the system layer and the
+    guess is removed rather than discouraged.
+    """
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    start = src.index("async def _run_chat_pipeline(")
+    body = src[start:src.index("async def ", start + 10)]
+    assert "describe_shelf" in body, "the chat pipeline never states the shelf inventory"
+    assert "authoritative" in body, "the inventory is stated but not marked authoritative"
+
+
 def test_the_tool_never_asks_a_bare_question():
     """Every failure string the tool can emit must name what IS available."""
     src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")

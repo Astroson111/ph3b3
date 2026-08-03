@@ -2071,6 +2071,28 @@ async def _run_chat_pipeline(body: dict, request: Request):
                                            "This shapes how you sound, never what "
                                            "you will or will not do."})
 
+    # ── Shelf inventory (additive, ephemeral — anti-fabrication) ──────────────
+    # The shelf is a short, fixed list, so she is TOLD it rather than being left
+    # to remember it. Asked "what stories do you have?", the model was answering
+    # without calling read_shelf_story and inventing titles — it produced "The
+    # Mysterious Disappearance of the Green Dragon", which has never existed, and
+    # described Charles and Eliza as a whimsical adventure. A tool the model
+    # declines to call is not a source of truth, and for THIS asset a confident
+    # invention is the worst possible failure: the brief asks that it be handled
+    # as a permanent, protected work, and inventing siblings for it is the
+    # opposite of that.
+    #
+    # Costs one short line per turn and removes the guess entirely. The tool is
+    # still what serves the TEXT; this only fixes the inventory.
+    _shelf_books = shelf.list_books()
+    if _shelf_books:
+        messages.insert(1, {"role": "system", "content":
+            shelf.describe_shelf(_shelf_books) +
+            " That list is complete and authoritative — never claim to have any "
+            "other work on the shelf, and never describe what one of these "
+            "contains from memory. To read or quote one, call read_shelf_story "
+            "and use exactly what it returns."})
+
     # ── Live datetime (additive, ephemeral — constructed FRESH every request) ──
     # Full timestamp incl. weekday + TZ abbrev, tz-aware (ZoneInfo, DST-correct).
     _dt_note = {"role": "system", "content": f"Current date and time: {_now_full()}."}
