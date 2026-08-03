@@ -168,5 +168,15 @@
   "amphion.variations": "Variations",
   "amphion.voice": "Voice",
   "amphion.voice.tone": "Tone",
-  "amphion.voice.preset": "Singer"
+  "amphion.voice.preset": "Singer",
+  "status.emotion": "Emotion",
+  "status.emotion.label": "Feeling",
+  "status.emotion.none": "None",
+  "status.emotion.auto": "Auto",
+  "status.emotion.now": "Currently feeling:",
+  "status.emotion.reading": "Reading the conversation…",
+  "status.emotion.hint.none": "No emotion applied.",
+  "status.emotion.hint.set": "Shapes her chat tone, Dio’s face and Iris’s display. Never her voice. Holds until you change it.",
+  "status.emotion.hint.auto": "Phoebe reads the conversation and sets this herself. Pick any state to hold it steady.",
+  "status.emotion.err": "Could not save that — the server did not accept it."
 }

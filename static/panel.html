@@ -1199,6 +1199,22 @@
         <div id="lvReviewList"></div>
       </div>
     </div>
+    <!-- ══ Emotion — ONE selector governing chat tone, Dio's face and Iris's UI ══
+         Its own card rather than a row in Language & Voice: emotion never touches
+         TTS, and grouping it with the voice picker would imply otherwise.
+         `emoNow` is the resolved state, shown only under Auto — under a manual
+         pick the selector already says it, and repeating it reads as a second
+         setting. ═══════════════════════════════════════════════════════════ -->
+    <div class="card">
+      <div class="card-title" data-i18n="status.emotion">Emotion</div>
+      <div class="lv-row">
+        <label class="lv-label" for="emoSel" data-i18n="status.emotion.label">Feeling</label>
+        <select id="emoSel" class="lv-sel"><option>…</option></select>
+      </div>
+      <div class="lv-note" id="emoNow" style="display:none"></div>
+      <div class="lv-note" id="emoNote"></div>
+    </div>
+
     <div class="card">
       <div class="card-title">
         <span data-i18n="status.tunnel">Remote Tunnel (WireGuard)</span>
@@ -3423,7 +3439,7 @@ async function refreshStatus() {
   }
 }
 refreshStatus();
-wgRefresh(); egressRefresh(); acctInit(); dgInit(); qualInit();  // WireGuard + Account + Paired-devices cards live in Status (default pane)
+wgRefresh(); egressRefresh(); acctInit(); dgInit(); qualInit(); emotionInit();  // WireGuard + Account + Paired-devices + Emotion cards live in Status (default pane)
 setInterval(refreshStatus, 10_000);
 
 // ── chat + audio ──────────────────────────────────────────────────────────────
@@ -3846,6 +3862,78 @@ async function qualInit() {
     show();
     sel.addEventListener('change', show);
   } catch (e) { /* selector simply stays empty if the server is unreachable */ }
+}
+
+// ── Emotion ───────────────────────────────────────────────────────────────────
+// Options come from /emotion, never hardcoded here — a state added to
+// config/emotions.yaml appears in this selector with no UI change, which is the
+// point of keeping the vocabulary in exactly one place. None is the default and
+// the regression anchor: selecting it means zero behaviour change anywhere.
+//
+// The selector shows SELECTED; the line above the hint shows RESOLVED. They
+// differ only under Auto, where the state moves on its own — and that is exactly
+// when the user needs to be able to see what she has settled on without opening
+// a log. Polling stops the moment Auto is not selected, so a fixed state costs
+// no traffic at all.
+let _emoPoll = null;
+async function emotionInit() {
+  const sel  = document.getElementById('emoSel');
+  const note = document.getElementById('emoNote');
+  const now  = document.getElementById('emoNow');
+  if (!sel) return;
+  try {
+    const d = await fetch('/emotion').then(r => r.json());
+    sel.innerHTML = '';
+    const add = (v, label) => {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = label; sel.appendChild(o);
+    };
+    add(d.none, t('status.emotion.none', 'None'));
+    d.emotions.forEach(e => add(e.id, e.label));   // labels are the server's
+    add(d.auto, t('status.emotion.auto', 'Auto'));
+    sel.value = d.selected || d.default;
+
+    // Under Auto, say what she has actually settled on. Blank until the first
+    // read lands — claiming a feeling she has not formed yet would be a lie.
+    const showResolved = (data) => {
+      if (!now) return;
+      if (sel.value === d.auto && data && data.label) {
+        now.textContent = t('status.emotion.now', 'Currently feeling:') + ' ' + data.label;
+        now.style.display = '';
+      } else if (sel.value === d.auto) {
+        now.textContent = t('status.emotion.reading', 'Reading the conversation…');
+        now.style.display = '';
+      } else {
+        now.style.display = 'none';
+      }
+    };
+    const poll = async () => {
+      if (sel.value !== d.auto) return;
+      try { showResolved(await fetch('/emotion').then(r => r.json())); } catch (e) {}
+    };
+    const show = (data) => {
+      if (sel.value === d.auto)       note.textContent = t('status.emotion.hint.auto', 'Phoebe reads the conversation and sets this herself. Pick any state to hold it steady.');
+      else if (sel.value === d.none)  note.textContent = t('status.emotion.hint.none', 'No emotion applied.');
+      else                            note.textContent = t('status.emotion.hint.set',  'Shapes her chat tone, Dio’s face and Iris’s display. Never her voice. Holds until you change it.');
+      showResolved(data);
+      clearInterval(_emoPoll); _emoPoll = null;
+      if (sel.value === d.auto) _emoPoll = setInterval(poll, 20000);   // Dio's own poll cadence
+    };
+    show(d);
+    sel.addEventListener('change', async () => {
+      try {
+        const r = await fetch('/emotion', {method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({emotion: sel.value})});
+        if (!r.ok) throw new Error(r.status);
+        show(await r.json());
+      } catch (e) {
+        // Say so rather than leaving a selector that looks set but isn't.
+        clearInterval(_emoPoll); _emoPoll = null;
+        note.textContent = t('status.emotion.err', 'Could not save that — the server did not accept it.');
+      }
+    });
+  } catch (e) { /* selector stays as-is if the server is unreachable */ }
 }
 
 // ── WireGuard tunnel toggle ───────────────────────────────────────────────────

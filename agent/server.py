@@ -122,6 +122,7 @@ from stt_module import STTModule
 from paths import PH3B3_DATA  # [DBG-AUDIO] instrumentation save-dir root
 from anime_module import AnimeModule
 from stories_module import StoriesModule
+import emotions                       # emotional state table (config/emotions.yaml)
 from notes_module import NotesModule
 from timer_module import TimerModule
 from reminders_module import RemindersModule
@@ -2017,6 +2018,24 @@ async def _run_chat_pipeline(body: dict, request: Request):
     if _lang_dir:
         messages.insert(1, {"role": "system", "content": _lang_dir})
 
+    # ── Emotion (additive — injected into the message COPY, not the history) ──
+    # The STATE is standing and persisted; the DIRECTIVE is rebuilt every turn
+    # from whatever the state is right now. Nothing is written into
+    # session.history, so changing the emotion changes how the next reply sounds
+    # without retroactively recolouring the transcript of the last one. NONE
+    # inserts nothing at all, which is the zero-behaviour-change anchor.
+    #
+    # Reads `active()`, so a manual pick and Auto's current read are handled by
+    # the same line — chat has no business knowing which of the two it is.
+    _emo_now = emotions.active()
+    if emotions.is_named(_emo_now):
+        _emo_dir = emotions.chat_terms(_emo_now)
+        if _emo_dir:
+            messages.insert(1, {"role": "system",
+                                "content": f"Tone for this reply: {_emo_dir}. "
+                                           "This shapes how you sound, never what "
+                                           "you will or will not do."})
+
     # ── Live datetime (additive, ephemeral — constructed FRESH every request) ──
     # Full timestamp incl. weekday + TZ abbrev, tz-aware (ZoneInfo, DST-correct).
     _dt_note = {"role": "system", "content": f"Current date and time: {_now_full()}."}
@@ -2158,6 +2177,13 @@ async def _run_chat_pipeline(body: dict, request: Request):
     _src = request.headers.get("X-Ph3b3-Device", "") or (device or "nyx")
     if user_msg:  chat_log.log_turn(_sid, _src, "user", user_msg)
     if response:  chat_log.log_turn(_sid, _src, "phoebe", response)
+
+    # Emotion, Auto mode: re-read the room now that this turn is in the history.
+    # Scheduled, never awaited — the reply is already composed and must not wait
+    # on a second model call to be returned. A no-op unless Auto is selected.
+    # Deliberately AFTER session.add above, so the read includes the turn that
+    # just happened rather than always trailing it by one.
+    asyncio.create_task(_emotion_auto_update(session))
 
     return response
 
@@ -4323,6 +4349,89 @@ def _edit_session_key(request: Request) -> str:
     return "host:" + ((request.client.host if request.client else "") or "?")
 
 
+# ── Emotion ───────────────────────────────────────────────────────────────────
+# Standing, persisted, and GLOBAL — deliberately not per-session like
+# _quality_session above. Quality is a property of one render; emotion is a
+# property of HER. Two browser tabs and a device must agree about how she feels,
+# or Dio's face and the panel disagree and one of them is lying. The state lives
+# in modules/emotions.py (PH3B3_DATA/emotion.json); nothing about it is cached
+# here, so a device poll and a panel read can never drift apart.
+#
+# There is no session dict to look up and no per-request override: the emotion is
+# whatever emotions.active() says right now. That is the whole point of the
+# feature, and it is why the Auto confirm round-trip that Mood needed is gone —
+# the state is already standing and already visible in the selector before you
+# press generate, so there is nothing to announce and nothing to confirm.
+
+def _emotion_infer(convo: str) -> str:
+    """Auto's read: pick the emotion the CONVERSATION is in. Called after a chat
+    turn, never on the generation path.
+
+    Any failure returns NONE, so a sulking Ollama leaves the previous state alone
+    rather than blocking a reply or guessing wildly."""
+    ids = [e["id"] for e in emotions.list_emotions()]
+    if not ids:
+        return emotions.NONE
+    prompt = ("Read this conversation and choose the single emotional state that "
+              "best fits how it currently feels.\n"
+              f"Answer with EXACTLY one word from this list: {', '.join(ids)}\n"
+              "No explanation, no punctuation, one word only.\n\n"
+              f"Conversation:\n{convo[:1500]}")
+    try:
+        raw = (amphion._default_llm(prompt) or "").strip().lower()
+    except Exception as e:
+        log.warning("[emotion] auto read failed (%s) — leaving the state alone", e)
+        return emotions.NONE
+    for i in ids:                      # substring: the model often replies "Melancholy."
+        if i in raw:
+            return i
+    return emotions.NONE
+
+
+async def _emotion_auto_update(session) -> None:
+    """If AUTO is selected, re-read the room from the recent turns and set the
+    resolved state. Fire-and-forget: this runs AFTER the reply is composed and
+    must never delay it, fail it, or change it.
+
+    Skipped entirely unless AUTO is selected, so a manual pick costs nothing —
+    no model call, no latency, not even a table read."""
+    try:
+        if emotions.get_state()["selected"] != emotions.AUTO:
+            return
+        msgs = [m for m in session.messages() if m.get("role") in ("user", "assistant")][-8:]
+        if not msgs:
+            return
+        convo = "\n".join(
+            f"{'User' if m['role'] == 'user' else 'Ph3b3'}: {str(m.get('content', ''))[:200]}"
+            for m in msgs)
+        read = await asyncio.to_thread(_emotion_infer, convo)
+        if emotions.is_named(read):
+            before = emotions.active()
+            emotions.set_resolved(read)
+            if read != before:
+                log.info("[emotion] auto: %s → %s", before, read)
+    except Exception as e:                 # never let a mood read break a chat turn
+        log.warning("[emotion] auto update failed (%s)", e)
+
+
+def _emotion_compose(text: str, kind: str):
+    """Apply the standing emotion to `text` BEFORE any floor runs.
+
+    Returns (composed_text, emotion_id).
+
+    Ordering is the whole safety story. Terms are appended here and the caller
+    then hands the COMPOSED text to the floor gate, so the floor inspects exactly
+    what will be generated. A hostile edit to emotions.yaml is floored like any
+    other input; there is no path by which emotion text reaches a generator
+    unfloored.
+    """
+    emo = emotions.active()
+    if not emotions.is_named(emo):      # none / unknown / retired entry
+        return text, emotions.NONE      # identity — the regression anchor
+    terms = emotions.amphion_terms(emo) if kind == "amphion" else emotions.morpheus_terms(emo)
+    return emotions.compose(text, terms), emo
+
+
 def _edit_pending_count(session_key: str) -> int:
     """Count this session's edit jobs still in flight (not done/error)."""
     return sum(
@@ -4441,6 +4550,12 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
     # the same safety gate below as the positive prompt.
     negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
 
+    # ── Emotion — composed BEFORE the floor, never after ──────────────────────
+    # The gate below must inspect the FINAL prompt. Composing here rather than
+    # after it is the entire reason an emotion entry cannot become a way past the
+    # floor: whatever emotions.yaml contributes is floored like any other input.
+    positive, emotion_id = _emotion_compose(positive, "morpheus")
+
     # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
     _morpheus_floor_gate(positive, negative, request)
 
@@ -4474,7 +4589,7 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
     }
     job_id = morpheus.create_job()
     background_tasks.add_task(morpheus.run_generation, job_id, params)
-    return {"job_id": job_id, "quality": quality["quality"]}
+    return {"job_id": job_id, "quality": quality["quality"], "emotion": emotion_id}
 
 
 @app.get("/image/quality")
@@ -4485,6 +4600,54 @@ async def image_quality(request: Request):
             "tiers": [{"id": k, "label": v["label"], "hint": v["hint"],
                        "steps": v["steps"]}
                       for k, v in morpheus.QUALITY_TIERS.items()]}
+
+
+@app.get("/emotion")
+async def emotion_get():
+    """The emotional state, for the panel selector AND for the devices.
+
+    ONE endpoint serves both on purpose. Dio's face and Iris's UI have to agree
+    with what the panel is showing, and the surest way to guarantee that is to
+    give them the same bytes rather than two views that drift.
+
+    `emotions` comes from config/emotions.yaml, never from anything hardcoded
+    here, so adding a state is a data edit with no code and no UI change. `stamp`
+    is the file's mtime: the reload rule is hot-reload (per-call re-read), and
+    surfacing the stamp is what keeps a stale read visible rather than silent.
+
+    Cheap enough to poll. It reads two small files and holds no lock a device can
+    contend on. Note it is deliberately NOT folded into /health — that endpoint
+    documents itself as touching nothing so it can answer mid-startup, and a
+    liveness probe must not start failing because a config file went missing.
+    """
+    st = emotions.get_state()
+    return {"selected": st["selected"], "resolved": st["resolved"],
+            "source": st["source"], "since": st["since"],
+            "default": emotions.DEFAULT,
+            "none": emotions.NONE, "auto": emotions.AUTO,
+            "label": emotions.label_of(st["resolved"]) if emotions.is_named(st["resolved"]) else None,
+            "emotions": emotions.list_emotions(),
+            "device": emotions.broadcast(),
+            "stamp": emotions.registry_stamp()}
+
+
+@app.post("/emotion")
+async def emotion_set(body: dict):
+    """Set the standing emotion. Accepts 'none', 'auto', or a state id.
+
+    Global and persisted — this is how she feels, not how this tab feels. It
+    holds until changed and survives a restart. Under 'auto' it is the INFERENCE
+    that moves; the selection stays 'auto' until a human changes it.
+    """
+    want = (body.get("emotion") or "").strip().lower()
+    try:
+        st = emotions.set_selected(want)
+    except ValueError:
+        raise HTTPException(400, f"unknown emotion: {want!r}")
+    log.info("[emotion] set to %s (manual)", want)
+    return {"selected": st["selected"], "resolved": st["resolved"],
+            "label": emotions.label_of(st["resolved"]) if emotions.is_named(st["resolved"]) else None,
+            "device": emotions.broadcast()}
 
 
 @app.post("/image/edit/run")
@@ -4912,6 +5075,12 @@ async def amphion_generate(request: Request, body: dict):
     if not tags:
         raise HTTPException(400, "a song description is required")
     lyrics = (body.get("lyrics") or "").strip()
+
+    # ── Emotion — composed BEFORE both floors ─────────────────────────────────
+    # Same ordering rule as Morpheus: the gates below see the FINAL tag string.
+    # Only `tags` is composed — lyrics are the user's words and are never touched.
+    tags, emotion_id = _emotion_compose(tags, "amphion")
+
     _amphion_floor_gate(tags, lyrics, request)
     await _amphion_music_floor(tags, lyrics)   # music-specific floor: voice-clone + copyright
     dur = _amphion_duration(body)
@@ -4944,6 +5113,7 @@ async def amphion_generate(request: Request, body: dict):
             "duration_estimated": duration_mode == "bars",
             "duration_note": duration_note,
             "bars": dur["bars"], "timesig": timesig,
+            "emotion": emotion_id,
             "whole_bar": grid["whole_bar"] if grid else None}
 
 
