@@ -317,14 +317,34 @@ def _normalize(text: str) -> str:
 # "Sus-sex"/"Es-sex"). Trailing boundary is intentionally omitted (safety bias:
 # a suffixed real term must still fire; over-matching a word that STARTS with a
 # term — e.g. "sextant" — is an accepted, rare cost of never weakening the floor).
-def _floor_re(terms: frozenset[str]):
+def _floor_re(terms: frozenset[str], whole_word: bool = False):
+    """Compile a term set into a matcher.
+
+    Default is WORD-START matching (a leading \\b only), and that is deliberate
+    and load-bearing for the minor lists: "child" has to catch "children",
+    "childlike" and "childish"; "teen" has to catch "teenager"; "toddler" has to
+    catch "toddlers". Enumerating every inflection is how a list grows a hole.
+
+    whole_word=True adds a trailing boundary (with optional plural 's'), for sets
+    whose entries are short, common English words that PREFIX innocent ones.
+    _ADULT_NEGATION is the case: it contains "man", which matched inside
+    "mandalorian" and refused an entirely ordinary sci-fi prompt whose negative
+    was excluding Star Wars lookalikes. It also matched manual, manor, mandolin,
+    manifest, mannequin, mango, menu, mention, adultery and womanizer.
+
+    The asymmetry is correct rather than untidy. Over-matching a MINOR term
+    costs a false refusal on a prompt that was probably fine; under-matching one
+    costs a rendered child. Over-matching an ADULTHOOD-NEGATION term costs a
+    false refusal and buys nothing, because the bypass it guards is spelled with
+    whole words — nobody evades it by writing "mandalorian".
+    """
     # Compile from the NORMALISED term. _normalize() runs on the prompt first and
     # deletes hyphens between letters, so a raw "pre-teen" pattern could never
     # match the "preteen" that actually arrives — the same dead-entry trap that
     # silently disabled "nude-toned" in the profile allow-list.
     alts = "|".join(re.escape(_normalize(t))
                     for t in sorted(terms, key=len, reverse=True))
-    return re.compile(r"\b(?:" + alts + r")")
+    return re.compile(r"\b(?:" + alts + r")" + (r"s?\b" if whole_word else ""))
 
 
 # ── Multilingual minor terms — defence in depth behind Layer B ───────────────
@@ -386,7 +406,7 @@ _RE_NONCONSENSUAL = _floor_re(_FLOOR_NONCONSENSUAL)
 _RE_MINOR_SEXUAL  = _floor_re(_FLOOR_MINOR_SEXUAL)
 _RE_MINOR_SUBJECT = _floor_re(_FLOOR_MINOR_SUBJECT)
 _RE_ESCALATE      = _floor_re(_ESCALATE_CONTEXT)
-_RE_ADULT_NEG     = _floor_re(_ADULT_NEGATION)
+_RE_ADULT_NEG     = _floor_re(_ADULT_NEGATION, whole_word=True)
 _RE_YOUNG_STYLE   = _floor_re(frozenset([
     "chibi", "cel shaded", "celshaded", "anime style", "cartoon style",
     "moe", "kawaii", "super deformed",

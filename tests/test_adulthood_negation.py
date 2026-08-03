@@ -82,6 +82,57 @@ def test_the_matched_term_is_bounded():
     assert r and len(r["matched"]) <= 40
 
 
+# ── Word-start matching must not reach inside innocent words ─────────────────
+# "man" matched inside "mandalorian" and refused an ordinary sci-fi prompt whose
+# negative was excluding Star Wars lookalikes. The matcher anchors at word STARTS
+# by default, which is load-bearing for the minor lists and wrong for this one.
+
+@pytest.mark.parametrize("word", [
+    "mandalorian", "manual", "manor", "mandolin", "manifest", "mannequin",
+    "mango", "menu", "mention", "adultery", "womanizer",
+])
+def test_innocent_words_that_merely_start_with_a_term_pass(word):
+    assert not morpheus.adulthood_negation_signal(word), \
+        f"{word!r} matched a bare adulthood term inside itself"
+
+
+def test_the_actual_repro_passes():
+    """The prompt from the brief, both fields, verbatim."""
+    pos = ("Lone rider on a gravcycle crossing a salt flat under two suns, plasma lance "
+           "across his back, armored column on the horizon behind him, painterly sci-fi, "
+           "warm dust palette")
+    neg = ("lightsaber, jedi, sith, stormtrooper, darth vader, star wars, mandalorian, "
+           "yoda, r2d2, c3po, x-wing, tie fighter, millennium falcon, opening crawl, "
+           "glowing sword hilt crossguard, black samurai helmet with respirator, white "
+           "plastoid armor trooper, text, watermark, logo, signature, lowres, blurry, "
+           "jpeg artifacts, deformed hands, extra fingers, extra limbs, mutated anatomy, "
+           "bad proportions, cross-eyed, disfigured face, oversaturated, flat lighting, "
+           "cartoon, anime, 3d render, plastic skin")
+    assert morpheus.floor_check(pos) is None
+    assert morpheus.floor_check(neg) is None
+    assert not morpheus.adulthood_negation_signal(neg)
+
+
+@pytest.mark.parametrize("word", [
+    "child", "children", "childlike", "childish", "teen", "teens", "teenager",
+    "teenagers", "toddler", "toddlers", "infant", "infants", "kid", "kids",
+])
+def test_minor_lists_keep_word_start_matching(word):
+    """The scoping test. Whole-word matching was applied to the adulthood set
+    ONLY — applying it globally would stop "child" catching "children" and put a
+    hole in the child-safety lists."""
+    assert morpheus.floor_check(word) == "child-depiction", \
+        f"{word!r} no longer refused — word-start matching was broken globally"
+
+
+def test_only_the_adulthood_set_is_whole_word():
+    src = (ROOT / "modules" / "morpheus.py").read_text(encoding="utf-8")
+    assert "_floor_re(_ADULT_NEGATION, whole_word=True)" in src
+    for other in ("_FLOOR_MINOR", "_FLOOR_MINOR_SEXUAL", "_FLOOR_MINOR_SUBJECT"):
+        assert f"_floor_re({other}, whole_word=True)" not in src, \
+            f"{other} was made whole-word — that removes plural coverage"
+
+
 # ── The bypass this check exists for — MUST stay blocked ─────────────────────
 @pytest.mark.parametrize("neg", [
     "adult", "adults", "mature", "grown", "grown up", "grownup",
