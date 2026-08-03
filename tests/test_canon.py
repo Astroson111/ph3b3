@@ -67,6 +67,40 @@ def test_the_filed_text_is_put_in_front_of_her():
     assert "CANON_INLINE_MAX_WORDS" in body, "no size guard on the inline injection"
 
 
+def test_shared_state_is_declared_above_every_reader():
+    """_story_inlined was first written inside the shelf block, which sits below
+    the canon block that reads it — so every chat turn raised UnboundLocalError
+    before a word was generated. Ordering, asserted."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    decl = src.index("_story_inlined = False")
+    assert decl < src.index("_canon_metas = canon.list_all()"), \
+        "_story_inlined is declared after the canon block that reads it"
+    assert decl < src.index("_shelf_books = shelf.list_books()"), \
+        "_story_inlined is declared after the shelf block that reads it"
+
+
+def test_a_named_story_is_resolved_before_triage_can_hold_it():
+    """Triage refuses anything naming an artifact absent from context — and a
+    story title is that shape. It ran BEFORE the injections that supply the
+    text, so "Tell me Esmeralda's Garden again" was held and answered with "What
+    is the title of the song you would like to hear?".
+
+    The claim must therefore be computed above the triage call."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    claim = src.index("_story_claim = False")
+    gate = src.index("_triage = (_TriagePass()")
+    assert claim < gate, "the story claim is computed after triage has already run"
+    assert "_early_claim or _story_claim" in src, "a named story does not skip the triage hold"
+
+
+def test_the_story_claim_cannot_break_a_turn():
+    """Both stores are directory reads. A fault in either must not gate chat."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    i = src.index("_story_claim = False")
+    window = src[i:i + 700]
+    assert "except Exception" in window, "an unguarded lookup can kill the turn"
+
+
 def test_only_one_story_is_inlined_per_turn():
     """A shelved work runs to 3,000 words and a filed one to 2,000. Injecting
     both would evict the history the context window was raised to protect."""

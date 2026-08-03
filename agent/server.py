@@ -2049,8 +2049,30 @@ async def _run_chat_pipeline(body: dict, request: Request):
         session.add("assistant", _blocked)
         return _blocked
 
+    # A named story is answerable BY CONSTRUCTION — do not let triage hold it.
+    #
+    # Triage refuses anything referring to "a specific file, artifact or prior
+    # detail absent from the context", and a story title is exactly that shape.
+    # But the context it is judging has not been built yet: the shelf and canon
+    # injections run further down this function, so triage was declaring
+    # Esmeralda's Garden missing roughly forty lines before the code that puts
+    # its full text into the prompt. "Tell me Esmeralda's Garden again" came back
+    # as "What is the title of the song you would like to hear?" — a hold, and a
+    # clarifying question about the wrong medium entirely.
+    #
+    # Resolving here is cheap: both are directory listings and a string match, no
+    # model call. If either store can name it, the turn is answerable and triage
+    # is skipped for the same reason an early intent claim skips it.
+    _story_claim = False
+    if user_msg:
+        try:
+            _story_claim = bool(shelf.resolve(user_msg).get("ok")
+                                or canon.resolve(user_msg).get("ok"))
+        except Exception:
+            _story_claim = False       # a lookup fault must not gate the turn
+
     _early_claim = intent_registry.resolve(user_msg)
-    _triage = (_TriagePass() if _early_claim
+    _triage = (_TriagePass() if (_early_claim or _story_claim)
                else await triage_gate(user_msg, _triage_context(session.messages())))
     if not _triage.answerable:
         _q = _triage.question or "I don't have enough to go on yet — can you give me a bit more detail?"
@@ -2144,6 +2166,17 @@ async def _run_chat_pipeline(body: dict, request: Request):
                                            "This shapes how you sound, never what "
                                            "you will or will not do."})
 
+    # At most ONE story is inlined per turn. A shelved work can run to 3,000
+    # words and a filed one to 2,000; injecting both would evict the very history
+    # the window was raised to protect. A turn is about one story.
+    #
+    # Declared HERE, above both blocks that touch it. It was first written inside
+    # the shelf block, which sits further down the function than the canon block
+    # that reads it — so every chat turn raised UnboundLocalError before a word
+    # was generated. Initialise shared state above every reader, not beside the
+    # first writer.
+    _story_inlined = False
+
     # ── Stories SHE filed (canon) — same treatment, bounded ───────────────────
     # Registering retell_story was not enough, exactly as registering
     # read_shelf_story was not: asked to tell Esmeralda's Garden again she wrote
@@ -2224,11 +2257,6 @@ async def _run_chat_pipeline(body: dict, request: Request):
     #
     # Costs one short line per turn and removes the guess entirely. The tool is
     # still what serves the TEXT; this only fixes the inventory.
-    # At most ONE story is inlined per turn. A shelved work can run to 3,000
-    # words and a filed one to 2,000; injecting both would evict the very history
-    # the window was raised to protect. A turn is about one story.
-    _story_inlined = False
-
     _shelf_books = shelf.list_books()
     if _shelf_books:
         messages.insert(1, {"role": "system", "content":
