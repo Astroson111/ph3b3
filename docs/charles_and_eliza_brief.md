@@ -51,3 +51,16 @@ If Amphion is tasked with generating a companion piece:
 - Treat it like Mnemosyne would treat a core memory — present, protected, permanent
 
 ---
+
+## Amendment — 2026-08-03
+
+The protagonist was renamed **Charles → Arthur** at the author's request, after
+the work was shelved. The brief above is left as written; this note records what
+changed rather than editing the original.
+
+- Title is now **Arthur and Eliza**; the file is `stories/arthur_and_eliza.md`.
+- Two occurrences changed (the title and one line); the rest of the story refers
+  to him by pronoun and needed no edit. Word count unchanged at 1,084.
+- The previous name still resolves in lookup — with one work on the shelf, the
+  shared "Eliza" token is enough — so older references keep working.
+- The Morpheus prompt suggestions above name no character and are unaffected.

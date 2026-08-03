@@ -1,4 +1,4 @@
-# Charles and Eliza
+# Arthur and Eliza
 ### A Short Story
 *Inspired by true events*
 
@@ -6,7 +6,7 @@
 
 ## Part One — The Scout
 
-The Army gave Charles a motorcycle and told him to ride ahead.
+The Army gave Arthur a motorcycle and told him to ride ahead.
 
 He didn't mind. He'd grown up on a farm in Kentucky where the work was always waiting and nobody thanked you for doing it. Riding ahead of a column of tanks through the hedgerow country of Normandy wasn't so different. You went out. You looked. You came back. Or you didn't.
 

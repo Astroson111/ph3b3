@@ -141,8 +141,8 @@ def read(slug: str) -> dict | None:
 
 # ── Lookup ───────────────────────────────────────────────────────────────────
 # A slug is what the URL wants; it is not what a person says. Someone asking for
-# a work says "Charles and Eliza", or "charles and eliza", or "the charles one" —
-# never "charles_and_eliza". Requiring the filename means the lookup only works
+# a work says "Arthur and Eliza", or "arthur and eliza", or "the arthur one" —
+# never "arthur_and_eliza". Requiring the filename means the lookup only works
 # for people who already know the answer.
 #
 # The rule that matters more than the matching: THERE IS NO BARE MISS. Every
@@ -153,7 +153,7 @@ def read(slug: str) -> dict | None:
 
 def _norm(s: str) -> str:
     """Casefold, drop accents, and flatten every separator to a single space, so
-    'Charles_and_Eliza', 'charles and eliza' and 'CHARLES-AND-ELIZA' are one key."""
+    'Arthur_and_Eliza', 'arthur and eliza' and 'ARTHUR-AND-ELIZA' are one key."""
     norm = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z0-9]+", " ", norm.lower()).strip()
 
@@ -180,14 +180,14 @@ def resolve(query: str) -> dict:
     if not q:
         return {"ok": False, "reason": "empty_query", "candidates": books}
 
-    # 1. Exact on the normalised slug or title — "charles_and_eliza" and
-    #    "Charles and Eliza" both land here.
+    # 1. Exact on the normalised slug or title — "arthur_and_eliza" and
+    #    "Arthur and Eliza" both land here.
     for b in books:
         if q in (_norm(b["slug"]), _norm(b["title"])):
             return {"ok": True, "book": read(b["slug"])}
 
-    # 2. Containment either way, so "charles" finds it and so does the whole
-    #    sentence "read me Charles and Eliza".
+    # 2. Containment either way, so "arthur" finds it and so does the whole
+    #    sentence "read me Arthur and Eliza".
     hits = [b for b in books
             if _norm(b["slug"]) in q or q in _norm(b["slug"])
             or _norm(b["title"]) in q or q in _norm(b["title"])]

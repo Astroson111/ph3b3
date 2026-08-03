@@ -35,7 +35,7 @@ def test_bare_questions_are_dropped(q):
 
 @pytest.mark.parametrize("q", [
     "Which of your saved singers should I use?",
-    "I have these stories: Charles and Eliza. Which did you want?",
+    "I have these stories: Arthur and Eliza. Which did you want?",
     "What sort of sound are you after — style, mood, tempo?",
     "Which folder should I write it to, Pictures or Desktop?",
     "What date range do you want the report to cover?",

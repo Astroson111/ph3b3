@@ -538,7 +538,7 @@ TOOLS = [
     {"type":"function","function":{"name":"anime_random","description":"Random anime recommendation","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"add_story","description":"Save a story told to Ph3b3","parameters":{"type":"object","properties":{"name":{"type":"string"},"story":{"type":"string"}},"required":["name","story"]}}},
     {"type":"function","function":{"name":"recall_stories","description":"Recall stories by topic","parameters":{"type":"object","properties":{"topic":{"type":"string"}}}}},
-    {"type":"function","function":{"name":"read_shelf_story","description":"Read one of the PERMANENT works on Ph3b3's shelf — authored stories that belong to this system, like 'Charles and Eliza'. Use when asked to read, tell, recite or quote one of these by name, or when asked what stories/works she has. Accepts a loose title: case, spaces and underscores do not matter. Omit 'title' to list everything on the shelf. Returns the story text verbatim — quote it exactly, never rewrite or summarize it unless asked.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"Title as the user said it, e.g. 'Charles and Eliza'. Omit to list the shelf."}},"required":[]}}},
+    {"type":"function","function":{"name":"read_shelf_story","description":"Read one of the PERMANENT works on Ph3b3's shelf — authored stories that belong to this system, like 'Arthur and Eliza'. Use when asked to read, tell, recite or quote one of these by name, or when asked what stories/works she has. Accepts a loose title: case, spaces and underscores do not matter. Omit 'title' to list everything on the shelf. Returns the story text verbatim — quote it exactly, never rewrite or summarize it unless asked.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"Title as the user said it, e.g. 'Arthur and Eliza'. Omit to list the shelf."}},"required":[]}}},
     {"type":"function","function":{"name":"add_note","description":"Save a quick note","parameters":{"type":"object","properties":{"content":{"type":"string"},"tag":{"type":"string","default":"general"}},"required":["content"]}}},
     {"type":"function","function":{"name":"read_last_note","description":"Read the most recent note","parameters":{"type":"object","properties":{"tag":{"type":"string"}}}}},
     {"type":"function","function":{"name":"search_notes","description":"Search notes","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}},
@@ -2084,7 +2084,7 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # relied on, do not ask it. A language model cannot reproduce a thousand words
     # verbatim — it compresses, drops a paragraph, smooths a line — and it does so
     # fluently, which means the loss is invisible to anyone who does not already
-    # know the text. Asked to read Charles and Eliza it would return something
+    # know the text. Asked to read Arthur and Eliza it would return something
     # shaped like the story rather than the story.
     #
     # These are authored works that belong to this system. Reading one aloud is
@@ -2113,7 +2113,7 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # to remember it. Asked "what stories do you have?", the model was answering
     # without calling read_shelf_story and inventing titles — it produced "The
     # Mysterious Disappearance of the Green Dragon", which has never existed, and
-    # described Charles and Eliza as a whimsical adventure. A tool the model
+    # described Arthur and Eliza as a whimsical adventure. A tool the model
     # declines to call is not a source of truth, and for THIS asset a confident
     # invention is the worst possible failure: the brief asks that it be handled
     # as a permanent, protected work, and inventing siblings for it is the
@@ -2133,7 +2133,7 @@ async def _run_chat_pipeline(body: dict, request: Request):
         # And when the turn NAMES one, put the actual text in front of her.
         #
         # Telling her not to describe a work from memory did not stop her doing
-        # it: asked "what is Charles and Eliza about?" she produced a flying
+        # it: asked "what is Arthur and Eliza about?" she produced a flying
         # vehicle, ancient wisdom and magic. It is a WWII story about a scout and
         # a nurse. She had not called the tool, and an instruction the model can
         # decline to follow is not a control.
@@ -4793,8 +4793,8 @@ async def shelf_read(slug: str):
     floor change could silently make a permanent work unavailable, which is the
     opposite of what "permanent" is supposed to buy.
 
-    Accepts a loose name as well as an exact slug — "Charles and Eliza" resolves
-    the same as "charles_and_eliza". A miss returns 404 WITH the shelf contents
+    Accepts a loose name as well as an exact slug — "Arthur and Eliza" resolves
+    the same as "arthur_and_eliza". A miss returns 404 WITH the shelf contents
     attached, so a caller is never told "not found" without being told what does
     exist; an ambiguous name returns 300 with what it narrowed to.
     """

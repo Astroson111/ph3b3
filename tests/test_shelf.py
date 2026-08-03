@@ -25,12 +25,12 @@ def test_shelf_dir_is_in_the_repo_not_the_data_dir():
 
 def test_the_first_work_is_present():
     slugs = [b["slug"] for b in shelf.list_books()]
-    assert "charles_and_eliza" in slugs
+    assert "arthur_and_eliza" in slugs
 
 
 def test_metadata_derives_from_the_document():
-    b = shelf.read("charles_and_eliza")
-    assert b["title"] == "Charles and Eliza"
+    b = shelf.read("arthur_and_eliza")
+    assert b["title"] == "Arthur and Eliza"
     assert b["subtitle"] == "A Short Story"
     assert b["words"] > 500
 
@@ -38,8 +38,8 @@ def test_metadata_derives_from_the_document():
 def test_stored_verbatim():
     """Byte-for-byte. No strip, no re-wrap, no normalisation — the read must
     return exactly what is on disk."""
-    on_disk = (ROOT / "stories" / "charles_and_eliza.md").read_text(encoding="utf-8")
-    assert shelf.read("charles_and_eliza")["text"] == on_disk
+    on_disk = (ROOT / "stories" / "arthur_and_eliza.md").read_text(encoding="utf-8")
+    assert shelf.read("arthur_and_eliza")["text"] == on_disk
 
 
 def test_read_only_file_mode_is_local_hardening_only():
@@ -50,7 +50,7 @@ def test_read_only_file_mode_is_local_hardening_only():
 
     The guarantee is the two tests below: no write function, no write route.
     """
-    mode = (ROOT / "stories" / "charles_and_eliza.md").stat().st_mode & 0o222
+    mode = (ROOT / "stories" / "arthur_and_eliza.md").stat().st_mode & 0o222
     if mode:
         pytest.skip("writable here — expected on a fresh clone; the real guard is the absent write path")
     assert True
@@ -93,7 +93,7 @@ def test_canon_cannot_reach_the_shelf():
 # ── Path safety ──────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("bad", [
     "../secrets", "../../etc/passwd", "/etc/passwd", "a/b",
-    "..", ".", "", "Charles_And_Eliza", "charles and eliza", "-lead", "x\x00y",
+    "..", ".", "", "Arthur_And_Eliza", "arthur and eliza", "-lead", "x\x00y",
 ])
 def test_traversal_and_junk_slugs_are_refused(bad):
     assert shelf.read(bad) is None
@@ -105,19 +105,19 @@ def test_unknown_slug_is_none():
 
 # ── Fuzzy lookup: a person says a title, not a filename ──────────────────────
 @pytest.mark.parametrize("q", [
-    "Charles and Eliza", "charles and eliza", "CHARLES AND ELIZA",
-    "charles_and_eliza", "Charles_And_Eliza", "charles-and-eliza",
-    "  charles   and   eliza  ", "Charles and Eliza.", "the Charles and Eliza story",
-    "charles", "eliza", "read me Charles and Eliza",
+    "Arthur and Eliza", "arthur and eliza", "ARTHUR AND ELIZA",
+    "arthur_and_eliza", "Arthur_And_Eliza", "arthur-and-eliza",
+    "  arthur   and   eliza  ", "Arthur and Eliza.", "the Arthur and Eliza story",
+    "arthur", "eliza", "read me Arthur and Eliza",
 ])
 def test_loose_titles_resolve(q):
     r = shelf.resolve(q)
     assert r["ok"], f"{q!r} did not resolve: {r}"
-    assert r["book"]["slug"] == "charles_and_eliza"
+    assert r["book"]["slug"] == "arthur_and_eliza"
 
 
 def test_resolved_book_carries_the_text():
-    assert "motorcycle" in shelf.resolve("Charles and Eliza")["book"]["text"]
+    assert "motorcycle" in shelf.resolve("Arthur and Eliza")["book"]["text"]
 
 
 # ── No bare miss: every failure carries the candidates ───────────────────────
@@ -125,7 +125,7 @@ def test_unknown_query_returns_the_whole_shelf():
     r = shelf.resolve("a story about penguins")
     assert not r["ok"] and r["reason"] == "unknown"
     assert r["candidates"], "a miss returned no candidates — a dead-end lookup"
-    assert any(b["slug"] == "charles_and_eliza" for b in r["candidates"])
+    assert any(b["slug"] == "arthur_and_eliza" for b in r["candidates"])
 
 
 def test_empty_query_returns_the_whole_shelf():
@@ -134,25 +134,25 @@ def test_empty_query_returns_the_whole_shelf():
 
 
 def test_ambiguous_query_lists_what_it_narrowed_to(monkeypatch, tmp_path):
-    (tmp_path / "charles_and_eliza.md").write_text("# Charles and Eliza\n", encoding="utf-8")
-    (tmp_path / "charles_and_mary.md").write_text("# Charles and Mary\n", encoding="utf-8")
+    (tmp_path / "arthur_and_eliza.md").write_text("# Arthur and Eliza\n", encoding="utf-8")
+    (tmp_path / "arthur_and_mary.md").write_text("# Arthur and Mary\n", encoding="utf-8")
     monkeypatch.setattr(shelf, "SHELF_DIR", tmp_path)
-    r = shelf.resolve("charles")
+    r = shelf.resolve("arthur")
     assert not r["ok"] and r["reason"] == "ambiguous"
-    assert {b["slug"] for b in r["candidates"]} == {"charles_and_eliza", "charles_and_mary"}
+    assert {b["slug"] for b in r["candidates"]} == {"arthur_and_eliza", "arthur_and_mary"}
 
 
 def test_a_clear_winner_beats_a_partial_overlap(monkeypatch, tmp_path):
-    (tmp_path / "charles_and_eliza.md").write_text("# Charles and Eliza\n", encoding="utf-8")
-    (tmp_path / "charles_and_mary.md").write_text("# Charles and Mary\n", encoding="utf-8")
+    (tmp_path / "arthur_and_eliza.md").write_text("# Arthur and Eliza\n", encoding="utf-8")
+    (tmp_path / "arthur_and_mary.md").write_text("# Arthur and Mary\n", encoding="utf-8")
     monkeypatch.setattr(shelf, "SHELF_DIR", tmp_path)
     r = shelf.resolve("eliza")
-    assert r["ok"] and r["book"]["slug"] == "charles_and_eliza"
+    assert r["ok"] and r["book"]["slug"] == "arthur_and_eliza"
 
 
 def test_describe_shelf_names_the_works():
     d = shelf.describe_shelf()
-    assert "Charles and Eliza" in d
+    assert "Arthur and Eliza" in d
 
 
 def test_describe_empty_shelf_says_so(monkeypatch, tmp_path):
@@ -204,7 +204,7 @@ def test_inline_cap_is_configured_and_sane():
 
 def test_the_first_work_fits_under_the_inline_cap():
     """If it did not fit, the injection would silently never fire for it."""
-    assert shelf.read("charles_and_eliza")["words"] <= 3000
+    assert shelf.read("arthur_and_eliza")["words"] <= 3000
 
 
 def test_the_tool_never_asks_a_bare_question():
@@ -224,7 +224,7 @@ def test_the_tool_never_asks_a_bare_question():
 def test_for_telling_preserves_every_word():
     """The strongest assertion in this file. Markdown syntax may go; not one word
     may change, move, or disappear."""
-    text = shelf.read("charles_and_eliza")["text"]
+    text = shelf.read("arthur_and_eliza")["text"]
     stripped = re.sub(r"^\s*---\s*$", "", text, flags=re.M)
     stripped = re.sub(r"^\s*#{1,6}\s*", "", stripped, flags=re.M)
     stripped = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", stripped)
@@ -232,8 +232,8 @@ def test_for_telling_preserves_every_word():
 
 
 def test_for_telling_keeps_the_whole_work():
-    told = shelf.for_telling(shelf.read("charles_and_eliza")["text"])
-    for landmark in ["The Army gave Charles a motorcycle", "County Clare",
+    told = shelf.for_telling(shelf.read("arthur_and_eliza")["text"])
+    for landmark in ["The Army gave Arthur a motorcycle", "County Clare",
                      "antiseptic and copper", "He tapped them back out",
                      "Just what they needed at the right time.",
                      "They are buried together."]:
@@ -242,24 +242,24 @@ def test_for_telling_keeps_the_whole_work():
 
 
 def test_for_telling_removes_markdown_syntax():
-    told = shelf.for_telling(shelf.read("charles_and_eliza")["text"])
+    told = shelf.for_telling(shelf.read("arthur_and_eliza")["text"])
     assert "##" not in told and "###" not in told
     assert not any(l.strip() == "---" for l in told.splitlines())
     assert "Part One — The Scout" in told, "heading words were lost with the markers"
 
 
 @pytest.mark.parametrize("m", [
-    "Read me Charles and Eliza", "read charles and eliza",
-    "Tell me the story of Charles and Eliza", "Can you recite Charles and Eliza?",
-    "I want to hear Charles and Eliza", "tell me Charles and Eliza in full",
+    "Read me Arthur and Eliza", "read arthur and eliza",
+    "Tell me the story of Arthur and Eliza", "Can you recite Arthur and Eliza?",
+    "I want to hear Arthur and Eliza", "tell me Arthur and Eliza in full",
 ])
 def test_recital_requests_are_recognised(m):
     assert shelf.wants_recital(m) and shelf.resolve(m)["ok"]
 
 
 @pytest.mark.parametrize("m", [
-    "What is Charles and Eliza about?", "Summarize Charles and Eliza",
-    "Who is Eliza?", "What happens to Charles?", "How long is Charles and Eliza?",
+    "What is Arthur and Eliza about?", "Summarize Arthur and Eliza",
+    "Who is Eliza?", "What happens to Arthur?", "How long is Arthur and Eliza?",
     "What's it about?",
 ])
 def test_questions_are_not_recital_requests(m):
@@ -296,7 +296,7 @@ def test_fenced_marks_the_text_as_data():
 def test_read_does_not_fence():
     """The reader wants the work, not a prompt. Fencing is the caller's choice at
     the point text enters a model, not something baked into every read."""
-    assert shelf.SHELF_OPEN not in shelf.read("charles_and_eliza")["text"]
+    assert shelf.SHELF_OPEN not in shelf.read("arthur_and_eliza")["text"]
 
 
 # ── Degradation ──────────────────────────────────────────────────────────────
