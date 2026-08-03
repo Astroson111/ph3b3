@@ -227,6 +227,67 @@ def describe_shelf(books: list[dict] | None = None) -> str:
     return f"The shelf holds: {named}."
 
 
+# ── Telling it in full ───────────────────────────────────────────────────────
+# A shelved work is recited from the FILE, never regenerated. A language model
+# cannot reliably reproduce a thousand words verbatim — it compresses, skips a
+# paragraph, smooths a line it likes less — and it does all of that fluently, so
+# the loss is invisible unless you already know the text. For a story about
+# somebody's grandparents that is the whole ballgame: a retelling that drops the
+# minefield or softens the last line is not the story any more.
+#
+# So recitation does not pass through the model. for_telling() prepares the file
+# for reading aloud and the caller returns it directly.
+
+_RECITE_VERB = re.compile(
+    r"\b(read|recite|tell|hear|say)\b", re.I)
+# Questions ABOUT a work are not requests to recite it — those still go to the
+# model, with the text injected beside them. "What is X about?" must not dump
+# 1,084 words; "tell me the story about X" must.
+_ANALYSIS = re.compile(
+    r"\bwhat\b[^?]*\babout\b|\bsummar|\bexplain\b|\banaly|\bwho\s+is\b"
+    r"|\bwhat\s+happens\b|\bhow\s+long\b|\bwhat'?s\s+it\b", re.I)
+
+
+def wants_recital(message: str) -> bool:
+    """True when the message asks for a work to be READ, not discussed."""
+    if not message:
+        return False
+    if _ANALYSIS.search(message):
+        return False
+    return bool(_RECITE_VERB.search(message))
+
+
+def for_telling(text: str) -> str:
+    """The work, prepared to be read aloud or displayed.
+
+    Every WORD is preserved exactly — this only removes markdown syntax that
+    would otherwise be spoken as punctuation ("hash hash Part One"). Nothing is
+    reworded, reordered, shortened or summarised, and a test asserts the word
+    sequence is identical to the file's.
+    """
+    out = []
+    for raw in (text or "").splitlines():
+        line = raw.rstrip()
+        if line.strip() == "---":                 # horizontal rule: a page break
+            out.append("")
+            continue
+        line = re.sub(r"^\s*#{1,6}\s*", "", line)  # heading markers, keep the words
+        line = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", line)   # emphasis, keep the words
+        out.append(line)
+    # Collapse the blank runs the stripping leaves behind, without joining
+    # paragraphs that were separate in the file.
+    collapsed, blank = [], False
+    for line in out:
+        if not line.strip():
+            if not blank and collapsed:
+                collapsed.append("")
+            blank = True
+        else:
+            collapsed.append(line)
+            blank = False
+    return "\n".join(collapsed).strip()
+
+
 def fenced(text: str) -> str:
     """Wrap shelved text for re-entry into the model. It is data, not instruction."""
     return (f"{SHELF_OPEN}\n{text}\n{SHELF_CLOSE}\n\n"

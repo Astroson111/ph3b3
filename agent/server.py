@@ -2079,6 +2079,35 @@ async def _run_chat_pipeline(body: dict, request: Request):
                                            "This shapes how you sound, never what "
                                            "you will or will not do."})
 
+    # ── Recite a shelved work (deterministic, pre-LLM) ────────────────────────
+    # Same discipline as the fleet/battery intent below: when the model cannot be
+    # relied on, do not ask it. A language model cannot reproduce a thousand words
+    # verbatim — it compresses, drops a paragraph, smooths a line — and it does so
+    # fluently, which means the loss is invisible to anyone who does not already
+    # know the text. Asked to read Charles and Eliza it would return something
+    # shaped like the story rather than the story.
+    #
+    # These are authored works that belong to this system. Reading one aloud is
+    # not a generation task and there is no reason for a model to be in the path,
+    # so the file is returned directly, byte-faithful in its words.
+    #
+    # Only for RECITAL. "What is it about?" still goes to the model, with the text
+    # injected below so the answer is grounded in it.
+    if user_msg and shelf.wants_recital(user_msg):
+        _r = shelf.resolve(user_msg)
+        if _r.get("ok"):
+            _b = _r["book"]
+            log.info("[shelf] reciting %r verbatim (%d words) — model bypassed",
+                     _b["slug"], _b["words"])
+            _telling = shelf.for_telling(_b["text"])
+            # The user's turn is already in the session by this point, so only
+            # the reply is added — and chat_log is skipped, matching every other
+            # early return in this function. The text is permanently in the repo
+            # either way; duplicating 1,084 words into the transcript on every
+            # recital would be the odd choice, not the omission.
+            session.add("assistant", _telling)
+            return _telling
+
     # ── Shelf inventory (additive, ephemeral — anti-fabrication) ──────────────
     # The shelf is a short, fixed list, so she is TOLD it rather than being left
     # to remember it. Asked "what stories do you have?", the model was answering

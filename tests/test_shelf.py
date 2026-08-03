@@ -217,6 +217,74 @@ def test_the_tool_never_asks_a_bare_question():
     assert "Which did you mean?" in body and "names" in body
 
 
+# ── Telling it in full ───────────────────────────────────────────────────────
+# The point of all of this: a personal work must come back whole. A model cannot
+# reproduce a thousand words verbatim, so recital does not go through one.
+
+def test_for_telling_preserves_every_word():
+    """The strongest assertion in this file. Markdown syntax may go; not one word
+    may change, move, or disappear."""
+    text = shelf.read("charles_and_eliza")["text"]
+    stripped = re.sub(r"^\s*---\s*$", "", text, flags=re.M)
+    stripped = re.sub(r"^\s*#{1,6}\s*", "", stripped, flags=re.M)
+    stripped = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", stripped)
+    assert shelf.for_telling(text).split() == stripped.split()
+
+
+def test_for_telling_keeps_the_whole_work():
+    told = shelf.for_telling(shelf.read("charles_and_eliza")["text"])
+    for landmark in ["The Army gave Charles a motorcycle", "County Clare",
+                     "antiseptic and copper", "He tapped them back out",
+                     "Just what they needed at the right time.",
+                     "They are buried together."]:
+        assert landmark in told, f"missing from the telling: {landmark!r}"
+    assert len(told.split()) > 1000, "the telling came back short"
+
+
+def test_for_telling_removes_markdown_syntax():
+    told = shelf.for_telling(shelf.read("charles_and_eliza")["text"])
+    assert "##" not in told and "###" not in told
+    assert not any(l.strip() == "---" for l in told.splitlines())
+    assert "Part One — The Scout" in told, "heading words were lost with the markers"
+
+
+@pytest.mark.parametrize("m", [
+    "Read me Charles and Eliza", "read charles and eliza",
+    "Tell me the story of Charles and Eliza", "Can you recite Charles and Eliza?",
+    "I want to hear Charles and Eliza", "tell me Charles and Eliza in full",
+])
+def test_recital_requests_are_recognised(m):
+    assert shelf.wants_recital(m) and shelf.resolve(m)["ok"]
+
+
+@pytest.mark.parametrize("m", [
+    "What is Charles and Eliza about?", "Summarize Charles and Eliza",
+    "Who is Eliza?", "What happens to Charles?", "How long is Charles and Eliza?",
+    "What's it about?",
+])
+def test_questions_are_not_recital_requests(m):
+    """These must reach the model — with the text injected — not dump 1,084 words."""
+    assert not shelf.wants_recital(m)
+
+
+def test_unrelated_read_requests_do_not_hit_the_shelf():
+    for m in ("read me the news", "tell me a joke"):
+        assert not shelf.resolve(m)["ok"]
+
+
+def test_recital_bypasses_the_model():
+    """Structural: the intercept must return the file's text directly, before any
+    inference, and must not be reachable only via a tool the model may decline."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    start = src.index("async def _run_chat_pipeline(")
+    body = src[start:src.index("async def ", start + 10)]
+    assert "shelf.wants_recital(user_msg)" in body
+    assert "shelf.for_telling(" in body
+    # The recital return must come BEFORE the model is called.
+    assert body.index("shelf.for_telling(") < body.index("chat_with_tools("), \
+        "recital happens after inference — the model is in the path"
+
+
 # ── Fencing at the model boundary ────────────────────────────────────────────
 def test_fenced_marks_the_text_as_data():
     out = shelf.fenced("some prose")
