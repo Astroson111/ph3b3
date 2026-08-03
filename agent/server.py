@@ -4764,7 +4764,7 @@ async def image_quality(request: Request):
 
 
 @app.get("/emotion")
-async def emotion_get():
+async def emotion_get(request: Request):
     """The emotional state, for the panel selector AND for the devices.
 
     ONE endpoint serves both on purpose. Dio's face and Iris's UI have to agree
@@ -4788,6 +4788,16 @@ async def emotion_get():
     # idempotent: set_resolved is a no-op unless AUTO is selected AND the value
     # actually changed.
     _low_batt = _emotion_apply_battery()
+
+    # A device can report its last heartbeat result here, because the heartbeat
+    # cannot report its own failure — if the POST is what breaks, nothing it
+    # sends arrives. Dio's stopped landing with no rejection and no log line at
+    # all, which is indistinguishable from "never sent" from this side. This is
+    # the channel that works, so the answer rides out on it.
+    _hb = request.headers.get("X-Ph3b3-Hb", "")
+    if _hb and not _hb.startswith("2"):
+        log.warning("[argus] %s reports its last heartbeat POST returned %s",
+                    request.headers.get("X-Ph3b3-Device", "?"), _hb)
 
     st = emotions.get_state()
     return {"selected": st["selected"], "resolved": st["resolved"],
