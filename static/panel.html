@@ -1830,12 +1830,19 @@
             <button type="button" class="amp-preset active" data-secs="60">1 min</button>
             <button type="button" class="amp-preset" data-secs="120">2 min</button>
             <button type="button" class="amp-preset" data-secs="180">3 min</button>
+            <button type="button" class="amp-preset" data-secs="240">4 min</button>
+            <button type="button" class="amp-preset" data-secs="480">8 min</button>
             <button type="button" class="amp-preset" data-secs="custom" data-i18n="amphion.custom">Custom</button>
           </div>
           <!-- step="any": free entry. step="5" made 187 an "invalid" value to the
                browser and nudged the arrows to round numbers; the model takes a
                float and the user is allowed to want 187.5s. -->
-          <input type="number" id="ampSecs" class="ari-url" value="60" min="5" max="240" step="any" style="display:none;margin-top:6px">
+          <input type="number" id="ampSecs" class="ari-url" value="60" min="5" max="1000" step="any" style="display:none;margin-top:6px">
+          <!-- Advisory, never a clamp. Past 240s is inside what the node accepts
+               (hard ceiling 1000s) but has no track record on this install, so the
+               note says "unproven here" rather than inventing a measured quality
+               cliff. It never blocks a render. -->
+          <div id="ampLenNote" style="display:none;margin-top:6px;font-size:.78rem;opacity:.85;border-left:2px solid var(--pink,#e28);padding-left:.5rem"></div>
           <!-- Seconds stays the default unit. Bars is an optional layer for people
                who think in musical time; it converts to an ESTIMATE because bpm is
                requested, never measured. -->
@@ -2768,7 +2775,12 @@ let apInit;
   //      The SERVER still owns dispatch: this block only draws the readout. ====
   window.ampDur = (function(){
     var TIMESIGS = ['2','3','4','6'];   // the node's COMBO options, verbatim
-    var MIN_S = 5, MAX_S = 240;         // mirrors amphion.MIN_DURATION / MAX_DURATION
+    // MAX_S is the model node's own hard ceiling (EmptyAceStep1.5LatentAudio.seconds
+    // max=1000.0), verified against ComfyUI /object_info — not a policy number.
+    // CLEAN_S is advisory only: 240s is the longest length with a track record on
+    // this install. Past it the model still accepts the job; it is unproven here,
+    // which is what the note says. Nothing is blocked.
+    var MIN_S = 5, MAX_S = 1000, CLEAN_S = 240;
     var EPS = 1e-6;
     function beatsPerBar(ts){
       if (ts === null || ts === undefined) return null;
@@ -2808,7 +2820,7 @@ let apInit;
       return {bars: bars, secondsPerBar: spb, beatsPerBar: beatsPerBar(ts),
               wholeBar: whole, phraseClean: phrase, subBar: bars < 1, suggestions: sugg};
     }
-    return {TIMESIGS: TIMESIGS, MIN_S: MIN_S, MAX_S: MAX_S, beatsPerBar: beatsPerBar,
+    return {TIMESIGS: TIMESIGS, MIN_S: MIN_S, MAX_S: MAX_S, CLEAN_S: CLEAN_S, beatsPerBar: beatsPerBar,
             secondsPerBar: secondsPerBar, secondsToBars: secondsToBars, analyse: analyse};
   })();
   // ==== /AMP-DURATION-MATH ====
@@ -3139,7 +3151,21 @@ let apInit;
   // here while the server clamped at 240, so a 300s request came back as a 240s
   // track with nothing said. The node itself would take 1000s — this ceiling is
   // ours, which is exactly why it has to be stated rather than blamed on the model.
-  const GEN_PER_S = 0.36, MAX_SECS = ampDur.MAX_S, MIN_SECS = ampDur.MIN_S;
+  const GEN_PER_S = 0.36, MAX_SECS = ampDur.MAX_S, MIN_SECS = ampDur.MIN_S,
+        CLEAN_SECS = ampDur.CLEAN_S;
+  // Advisory under the length control. Never blocks, never clamps — it states what
+  // has and has not actually been generated at this length on this machine.
+  function ampLenAdvisory(secs){
+    var el = document.getElementById('ampLenNote');
+    if (!el) return;
+    if (!isFinite(secs) || secs <= CLEAN_SECS){ el.style.display='none'; return; }
+    var m = Math.floor(secs/60), r = Math.round(secs%60), eta = Math.round(secs*GEN_PER_S);
+    el.textContent = 'Past ' + CLEAN_SECS + 's the model still accepts the job (ACE-Step takes '
+      + MAX_SECS + 's natively), but nothing this long has been generated here yet, so '
+      + 'coherence over ' + m + 'm' + (r ? r + 's' : '') + ' is unproven. Render takes about '
+      + Math.floor(eta/60) + 'm' + (eta%60) + 's.';
+    el.style.display = 'block';
+  }
   const etaFor = s => Math.max(6, Math.round(s * GEN_PER_S));
   function checkLyrics(secs){
     const lines = $('ampLyrics').value.split('\n').filter(l => l.trim() && !/^\s*\[/.test(l)).length;
@@ -3163,7 +3189,13 @@ let apInit;
     b.classList.add('active');
     if (b.dataset.secs === 'custom'){ $('ampSecs').style.display = 'block'; $('ampSecs').focus(); }
     else { $('ampSecs').style.display = 'none'; $('ampSecs').value = b.dataset.secs; }
-    updateEta(); ampDurationRefresh();
+    // A length preset IS a statement in seconds, so clicking one asserts seconds
+    // mode. Previously the presets were merely dimmed to 45% in bars mode and did
+    // nothing when clicked: submit deletes body.seconds whenever ampUnit is 'bars',
+    // so an 8 min click was silently discarded and the bars box was sent instead.
+    // That is how a 480s request rendered 45.176s = exactly 16 bars at 85bpm.
+    if (window.ampUnit === 'bars') window.ampSetUnit('seconds');
+    updateEta(); ampDurationRefresh(); ampLenAdvisory(parseFloat($('ampSecs').value));
   }));
   $('ampSecs').addEventListener('input', () => {
     // Free entry — parseFloat, not parseInt, and no rounding to the step. The
@@ -3174,7 +3206,7 @@ let apInit;
       $('ampSecs').value = MAX_SECS;
       ampClampNote = 'clamped ' + v + 's → ' + MAX_SECS + 's, the longest track Amphion generates';
     } else ampClampNote = '';
-    updateEta(); ampDurationRefresh();
+    updateEta(); ampDurationRefresh(); ampLenAdvisory(parseFloat($('ampSecs').value));
   });
   $('ampLyrics').addEventListener('input', () => checkLyrics(ampEffectiveSeconds() || 60));
   updateEta();

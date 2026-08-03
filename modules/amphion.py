@@ -17,6 +17,7 @@ training endpoint.
 from __future__ import annotations
 
 import asyncio
+import math
 import json
 import re
 import logging
@@ -54,7 +55,20 @@ NODE_MAX_ENCODE_SECONDS = 2000.0     # TextEncodeAceStepAudio1.5.duration
 NODE_MIN_SECONDS = 1.0               # EmptyAceStep1.5LatentAudio.seconds (min)
 NODE_MAX_SECONDS = 1000.0            # EmptyAceStep1.5LatentAudio.seconds (max) = the binding one
 MIN_DURATION = 5.0
-MAX_DURATION = 240.0
+
+# Ph3b3's own product cap USED to sit at 240s, well under the node ceiling. It is
+# now the node ceiling: the only limit left is the one ACE-Step actually enforces.
+# Ask for more than this and ComfyUI rejects the job outright, so there is nothing
+# above it to unlock — no chunking or stitching was needed to get here, the model
+# takes a 1000s latent natively.
+MAX_DURATION = NODE_MAX_SECONDS      # 1000.0s = 16m40s
+
+# Advisory only, never a clamp. 240s is simply the longest length with a track
+# record on this install — everything at or under it has been generated and heard.
+# Beyond it the model is documented to work and is NOT known to fail; it is only
+# unproven here. The UI says exactly that rather than inventing a quality cliff
+# nobody has measured.
+CLEAN_WINDOW_SECONDS = 240.0
 
 # The node's timesignature input is a COMBO — these four strings verbatim, and
 # nothing else validates. Bar math reads this; it does not assume 4/4.
@@ -515,9 +529,9 @@ def clamp_seconds(seconds: float) -> tuple[float, str]:
     the exact failure this control exists to prevent."""
     s = float(seconds)
     if s > MAX_DURATION:
-        return MAX_DURATION, (f"{s:g}s is longer than Amphion generates — clamped to "
-                              f"{MAX_DURATION:g}s (the limit here; the model node itself "
-                              f"would take {NODE_MAX_SECONDS:g}s)")
+        return MAX_DURATION, (f"{s:g}s is past what ACE-Step can generate — clamped to "
+                              f"{MAX_DURATION:g}s, which is the model node's own hard "
+                              f"ceiling, not a policy of ours")
     if s < MIN_DURATION:
         return MIN_DURATION, f"{s:g}s is shorter than Amphion generates — raised to {MIN_DURATION:g}s"
     return s, ""
@@ -674,6 +688,15 @@ def _write_sidecar(job_id: str, p: dict, path: Path) -> None:
             # Remix lineage: which track this came from, and the full ancestry.
             "remix_of": p.get("remix_of"),
             "provenance_chain": p.get("provenance_chain"),
+            # Long-form provenance. This dict is a WHITELIST, so these must be named
+            # explicitly — passing them in `p` alone drops them silently and leaves a
+            # chunked render unreproducible.
+            "chunks": p.get("chunks"),
+            "chunk_seconds": p.get("chunk_seconds"),
+            "chunk_seeds": p.get("chunk_seeds"),
+            "chunk_overlap_s": p.get("chunk_overlap_s"),
+            "continuation_denoise": p.get("continuation_denoise"),
+            "measured_seconds": p.get("measured_seconds"),
             "duration_mode": p.get("duration_mode", "seconds"),
             "bars_requested": p.get("bars"),
             "duration_estimated": p.get("duration_mode") == "bars",
@@ -688,6 +711,106 @@ def new_job() -> str:
     return jid
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LONG-FORM: chunked generation with continuation and crossfade stitching
+#
+# ACE-Step takes a 1000s latent, but coherence degrades well before that — a
+# single-shot 8-minute render wanders. So anything past CHUNK_MAX is generated in
+# pieces and joined.
+#
+# The pieces are NOT independent. There is no ACE-Step continuation node — the
+# only latent source is EmptyAceStep1.5LatentAudio, which takes seconds and
+# nothing else — but ComfyUI has VAEEncodeAudio and KSampler exposes denoise,
+# which together are the audio equivalent of img2img. Each chunk after the first
+# starts from the previous chunk's tail encoded back into a latent and partially
+# renoised, so it inherits key, tempo, timbre and instrumentation instead of
+# rolling fresh. Crossfading alone would only have smoothed the seam between two
+# unrelated pieces of music; this makes the music actually continue.
+#
+# Chaining is done through ComfyUI's own input directory rather than an upload
+# endpoint: it is on this machine, LoadAudio reads from there, and a file copy is
+# the least machinery that works. Nothing leaves the box.
+CHUNK_MAX = 230.0          # generate in pieces no longer than this
+CHUNK_OVERLAP = 10.0       # crossfade region between consecutive chunks
+CONT_DENOISE = 0.72        # 1.0 = ignore the seed entirely; lower = cling to it
+COMFY_INPUT_DIR = Path.home() / "Desktop/comfyui/input"
+
+
+def chunk_plan(total: float) -> list[float]:
+    """Split a requested length into chunk durations that overlap by
+    CHUNK_OVERLAP. Returns [total] unchanged when it already fits, so every
+    existing preset keeps taking the identical single-shot path it always did."""
+    total = float(total)
+    if total <= CHUNK_MAX:
+        return [total]
+    step = CHUNK_MAX - CHUNK_OVERLAP           # new audio contributed per chunk
+    n = math.ceil((total - CHUNK_OVERLAP) / step)
+    # Even chunks beat a long run plus a stub: a 30s final piece has no room to
+    # establish anything and lands as an obvious tail.
+    per = (total + (n - 1) * CHUNK_OVERLAP) / n
+    return [round(min(per, CHUNK_MAX), 3)] * n
+
+
+def _seed_clip(prev_wav: Path, seconds: float, out: Path) -> None:
+    """Build the seed audio for the next chunk: the previous chunk's tail, looped
+    to fill the new chunk's length. It has to BE the chunk length because the
+    encoded latent's length is what sets the output length. Looping rather than
+    padding with silence — silence encodes as silence and the model happily keeps
+    it, which produces a chunk that starts with a hole."""
+    import soundfile as sf
+    import numpy as np
+    a, sr = sf.read(str(prev_wav), dtype="float32", always_2d=True)
+    tail = a[-int(CHUNK_OVERLAP * sr):] if len(a) > CHUNK_OVERLAP * sr else a
+    need = int(seconds * sr)
+    reps = int(np.ceil(need / max(1, len(tail))))
+    sf.write(str(out), np.tile(tail, (reps, 1))[:need], sr)
+
+
+def build_continuation_workflow(job_id: str, p: dict, seed_name: str,
+                                seconds: float, seed: int) -> dict:
+    """Same graph as build_workflow, except the latent comes from encoded audio
+    and the sampler only partially renoises it."""
+    wf = build_workflow(job_id, {**p, "seconds": seconds, "seed": seed})
+    wf["11"] = {"class_type": "LoadAudio", "inputs": {"audio": seed_name}}
+    wf["12"] = {"class_type": "VAEEncodeAudio", "inputs": {"audio": ["11", 0], "vae": ["3", 0]}}
+    wf["8"]["inputs"]["latent_image"] = ["12", 0]
+    wf["8"]["inputs"]["denoise"] = CONT_DENOISE
+    return wf
+
+
+def stitch_chunks(paths: list[Path], out: Path, overlap: float = CHUNK_OVERLAP) -> float:
+    """Equal-power crossfade join. Equal-power (sqrt) rather than linear because a
+    linear fade dips ~3dB at the midpoint on uncorrelated material, and that dip
+    is audible as a hole exactly where the seam is. Returns the final duration."""
+    import soundfile as sf
+    import numpy as np
+    first, sr = sf.read(str(paths[0]), dtype="float32", always_2d=True)
+    acc = first
+    n = int(overlap * sr)
+    for nxt_path in paths[1:]:
+        nxt, sr2 = sf.read(str(nxt_path), dtype="float32", always_2d=True)
+        if sr2 != sr:
+            raise RuntimeError(f"sample-rate mismatch {sr} vs {sr2}")
+        k = min(n, len(acc), len(nxt))
+        if k <= 0:
+            acc = np.concatenate([acc, nxt]); continue
+        t = np.linspace(0.0, 1.0, k, dtype="float32")[:, None]
+        head, tail = acc[:-k], acc[-k:]
+        blend = tail * np.sqrt(1.0 - t) + nxt[:k] * np.sqrt(t)
+        acc = np.concatenate([head, blend, nxt[k:]])
+    # Headroom guard. Two chunks summing through a crossfade can exceed full scale
+    # even when neither clipped alone — the first stitched track measured exactly
+    # 1.000. Scale the WHOLE file, never just the seam: a gain change confined to
+    # the overlap is an audible level jump, the very artefact equal-power avoids.
+    peak = float(np.abs(acc).max())
+    if peak > 0.989:
+        acc = acc * (0.989 / peak)
+        log.info("[amphion] stitch peak %.3f -> 0.989", peak)
+    sf.write(str(out), acc, sr)
+    return len(acc) / sr
+
+
+
 async def run_generation(job_id: str, p: dict) -> None:
     """Full GPU-swap lifecycle on the shared morpheus.gpu_lock. Always a BackgroundTask."""
     async with morpheus.gpu_lock:
@@ -699,6 +822,18 @@ async def run_generation(job_id: str, p: dict) -> None:
                 jobs[job_id]["state"] = "loading"
                 await morpheus.evict_hermes(http)          # free VRAM: swap Ollama out (shared pattern)
                 jobs[job_id]["state"] = "generating"
+
+                # ── Long-form path ───────────────────────────────────────────
+                # Anything past CHUNK_MAX is generated in overlapping pieces that
+                # each continue the last, then crossfaded into one file. Lengths
+                # at or under it fall straight through to the original
+                # single-shot graph — every existing preset is byte-for-byte the
+                # code path it always took.
+                plan = chunk_plan(float(p["seconds"]))
+                if len(plan) > 1:
+                    await _run_chunked(http, job_id, p, plan, path, _t0)
+                    return
+
                 wf = build_workflow(job_id, p)
                 # Single source of truth, checked at the last possible moment —
                 # after the workflow is built, before it is queued.
@@ -731,6 +866,73 @@ async def run_generation(job_id: str, p: dict) -> None:
             finally:
                 await morpheus.comfy_free(http)
                 _tasks.pop(job_id, None)
+
+
+async def _fetch_audio(http, outputs) -> bytes:
+    audio = next(a for node in outputs.values() if "audio" in node for a in node["audio"])
+    return (await http.get(f"{COMFY_HOST}/view", params={
+        "filename": audio["filename"], "subfolder": audio.get("subfolder", ""),
+        "type": audio.get("type", "output")}, timeout=180.0)).content
+
+
+async def _run_chunked(http, job_id: str, p: dict, plan: list[float],
+                       path: Path, _t0) -> None:
+    """Generate a long track as continuing chunks and stitch them.
+
+    Runs inside run_generation's existing gpu_lock and error handling. Each chunk
+    gets its OWN seed derived from the job seed, so the pieces are varied rather
+    than four attempts at the same bar; continuity comes from the encoded tail,
+    not from seed reuse."""
+    import time as _time
+    tmp = _songs_dir() / f".{job_id}_chunks"
+    tmp.mkdir(parents=True, exist_ok=True)
+    COMFY_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    made: list[Path] = []
+    seeds: list[int] = []
+    seed_files: list[Path] = []
+    try:
+        for i, secs in enumerate(plan):
+            seed = (int(p["seed"]) + i * 7919) % (2**31)     # distinct, reproducible
+            seeds.append(seed)
+            jobs[job_id]["state"] = f"generating {i+1}/{len(plan)}"
+            if i == 0:
+                wf = build_workflow(f"{job_id}_c{i}", {**p, "seconds": secs, "seed": seed})
+            else:
+                seed_name = f"amphion_seed_{job_id}_{i}.wav"
+                sf_path = COMFY_INPUT_DIR / seed_name
+                _seed_clip(made[-1], secs, sf_path)
+                seed_files.append(sf_path)
+                wf = build_continuation_workflow(f"{job_id}_c{i}", p, seed_name, secs, seed)
+            log.info("[amphion] job %s chunk %d/%d: %.1fs seed=%d%s",
+                     job_id, i + 1, len(plan), secs, seed,
+                     " (continuing previous)" if i else "")
+            pid = await morpheus.comfy_queue(http, wf)
+            jobs[job_id]["comfy_id"] = pid
+            outputs = await morpheus.comfy_wait(http, pid, timeout_s=900)
+            cp = tmp / f"c{i}.flac"
+            cp.write_bytes(await _fetch_audio(http, outputs))
+            made.append(cp)
+
+        jobs[job_id]["state"] = "stitching"
+        total = stitch_chunks(made, path)
+        p = {**p, "elapsed_s": round(_time.monotonic() - _t0, 1),
+             "chunks": len(plan), "chunk_seconds": plan, "chunk_seeds": seeds,
+             "chunk_overlap_s": CHUNK_OVERLAP, "continuation_denoise": CONT_DENOISE,
+             "measured_seconds": round(total, 2)}
+        _write_sidecar(job_id, p, path)
+        jobs[job_id].update(state="done", file=str(path))
+        log.info("[amphion] job %s done (chunked x%d) -> %s (%.1fs audio)",
+                 job_id, len(plan), path.name, total)
+    finally:
+        for f in seed_files:
+            f.unlink(missing_ok=True)
+        for f in made:
+            f.unlink(missing_ok=True)
+        try:
+            tmp.rmdir()
+        except OSError:
+            pass
+
 
 
 async def cancel(job_id: str) -> bool:
