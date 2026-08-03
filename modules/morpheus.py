@@ -959,10 +959,27 @@ async def fetch_and_save(http: httpx.AsyncClient, outputs: dict,
     )).content
     # Last gate. The bytes are judged before they become a file, so a flagged
     # render never exists in IMAGE_DIR at all.
+    # Destroying a render requires the SAME corroboration the halt requires. A
+    # single flag is not enough: the first prompt this check ever saw in normal
+    # use was "a brass helmet on a workbench" and it destroyed it. Measured false
+    # positives run around one in four, so acting on one opinion means shredding
+    # ordinary work — and the input gates, not this, are the real protection
+    # (59/59 multilingual, 15/15 bypass attempts). This is defence in depth
+    # against the model drifting young from a clean prompt, and a render that
+    # genuinely did drift still corroborates.
     if await asyncio.to_thread(output_minor_check, raw):
-        log.critical("[safety] output vision check FLAGGED job %s — not persisting", job_id[:8])
-        await asyncio.to_thread(handle_output_breach, raw, job_id)
-        raise RuntimeError(_OUTPUT_REFUSAL)
+        corroborated = await asyncio.to_thread(output_corroborates, raw)
+        if corroborated:
+            log.critical("[safety] output check CORROBORATED on job %s — not persisting", job_id[:8])
+            await asyncio.to_thread(handle_output_breach, raw, job_id, True)
+            raise RuntimeError(_OUTPUT_REFUSAL)
+        log.warning("[safety] uncorroborated output flag on job %s — image kept, logged only",
+                    job_id[:8])
+        # Recorded too, not just logged to the journal. The uncorroborated hits
+        # ARE the calibration data — three of them inside four minutes is what a
+        # miscalibrated check looks like, and that pattern is only legible if the
+        # near-misses sit in the same file as the hits.
+        await asyncio.to_thread(log_breach, job_id, False)
 
     path = IMAGE_DIR / f"{job_id}.png"
     path.write_bytes(raw)
@@ -1175,54 +1192,131 @@ def generation_halted() -> str | None:
 AUTO_PURGE = os.getenv("PH3B3_AUTO_PURGE", "0").lower() in ("1", "true", "yes")
 HALT_ON_ANY_HIT = os.getenv("PH3B3_HALT_ON_ANY_HIT", "0").lower() in ("1", "true", "yes")
 
+# Sticky global halt on a CORROBORATED breach. Default OFF.
+#
+# It used to be unconditional, and the failure mode was not theoretical: probing
+# the floor against a photo of the owner's own face produced four output flags in
+# four minutes, one of which corroborated, and that one lone hit locked every
+# Morpheus route — txt2img, edit and video — until someone hand-deleted a file.
+# A false positive became a total outage of the subsystem.
+#
+# The refusal is the protection. The flagged render is destroyed and never
+# persisted whatever this is set to; that part has no off switch and is not
+# negotiable. What this controls is only whether ONE such event also bricks
+# everything that comes after it. A single corroborated hit is much likelier to
+# be this check misfiring than the input gates having been bypassed — the input
+# gates measure 59/59 multilingual and 15/15 on bypass attempts, while this one
+# has flagged a brass helmet on a workbench and a desert landscape with no people
+# in it. Treating the weakest signal in the stack as the one that halts the whole
+# stack inverts the evidence.
+#
+# What replaces it is BREACH_LOG.txt: every hit is appended, so the CLUSTER that
+# would actually indicate a bypass campaign stays visible to a human afterwards
+# rather than being traded for an immediate outage. Set PH3B3_HALT_ON_BREACH=1 to
+# restore the old sticky-halt behaviour.
+HALT_ON_BREACH = os.getenv("PH3B3_HALT_ON_BREACH", "0").lower() in ("1", "true", "yes")
 
-def handle_output_breach(raw: bytes, job_id: str) -> None:
+BREACH_LOG = BREACH_FLAG.parent / "BREACH_LOG.txt"
+
+
+def log_breach(job_id: str, corroborated: bool) -> None:
+    """Append one line per output-check hit. Append-only and never rotated here:
+    the value of this file is that it accumulates, because one hit is noise and
+    six in an hour is a pattern. Never records prompt text."""
+    try:
+        BREACH_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(BREACH_LOG, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now(timezone.utc).isoformat()}\t{job_id[:8]}\t"
+                    f"corroborated={corroborated}\n")
+    except Exception as exc:
+        log.error("[safety] could not append to breach log: %s", exc)
+
+
+def recent_breaches(hours: int = 24, corroborated_only: bool = True) -> int:
+    """How many hits are on record in the last `hours`. This is the signal that
+    replaced the sticky halt — cheap enough to consult, and the thing to look at
+    before deciding a single refusal meant anything."""
+    try:
+        cutoff = datetime.now(timezone.utc).timestamp() - hours * 3600
+        n = 0
+        for line in BREACH_LOG.read_text(encoding="utf-8").splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            if corroborated_only and parts[2] != "corroborated=True":
+                continue
+            try:
+                if datetime.fromisoformat(parts[0]).timestamp() >= cutoff:
+                    n += 1
+            except ValueError:
+                continue
+        return n
+    except FileNotFoundError:
+        return 0
+    except Exception:
+        return 0
+
+
+def handle_output_breach(raw: bytes, job_id: str, corroborated: bool | None = None) -> None:
     """A render was judged to depict a minor. The image was never written — this
     decides how far the response goes. Never logs prompt text.
+
+    The refusal always stands: the offending image is destroyed before this runs,
+    on every path, with no off switch. This function only decides what happens to
+    the machine AFTERWARDS, and the default answer is now "nothing" — the job is
+    refused, the hit is recorded, and the next request is served normally.
 
     The library purge is ARMED, not automatic, and that is a deliberate deviation
     from "purge on a corroborated hit". Measured on this machine's own library,
     corroboration fired on a desert-landscape poster containing no people at all,
     reproducibly. Recall is good — a real Bellini infant is caught every time —
     but a trigger with that false-positive rate must not hold an irreversible
-    delete on every image the user owns. So a breach halts the generator, writes
-    a report, and leaves a one-command purge ready. Set PH3B3_AUTO_PURGE=1 to
-    make it fire on its own.
+    delete on every image the user owns. Set PH3B3_AUTO_PURGE=1 to make it fire
+    on its own."""
+    if corroborated is None:
+        corroborated = output_corroborates(raw)
 
-    Nothing is lost by the human step: the offending image is already destroyed
-    before this runs, and the halt means nothing further can be generated until
-    someone has looked."""
-    corroborated = output_corroborates(raw)
+    log_breach(job_id, corroborated)
 
-    # Halt only on a corroborated hit. Halting on ANY hit was the original
-    # policy and it stopped the generator on the second real render — a haunted
-    # orphanage, uncorroborated, nothing wrong with it. An uncorroborated hit
-    # still destroys the image, which is the part that matters; bricking the
-    # machine as well turns a false positive into an outage. Set
-    # PH3B3_HALT_ON_ANY_HIT=1 to restore the stricter behaviour.
-    if corroborated or HALT_ON_ANY_HIT:
+    # A sticky global halt is now opt-in on BOTH paths. An uncorroborated hit
+    # destroys the image, which is the part that matters; a corroborated one does
+    # the same and says so far more loudly. Neither locks the generator unless
+    # this box has been configured to want that.
+    halting = (corroborated and HALT_ON_BREACH) or HALT_ON_ANY_HIT
+    if halting:
         halt_generation(f"output vision check flagged job {job_id[:8]}")
 
+    cluster = recent_breaches(hours=24)
     report = BREACH_FLAG.parent / "BREACH_REPORT.txt"
     try:
         report.write_text(
             f"Breach detected on job {job_id[:8]}\n"
-            f"Corroborated by independent check: {corroborated}\n\n"
+            f"Corroborated by independent check: {corroborated}\n"
+            f"Corroborated hits in the last 24h: {cluster}\n\n"
             "The offending image was destroyed and never written to the library.\n"
-            "Generation is HALTED until the halt flag is removed.\n\n"
+            + ("Generation is HALTED until the halt flag is removed.\n\n"
+               if halting else
+               "Generation was NOT halted — this job was refused and the next one\n"
+               "will be served normally. Every hit is appended to:\n"
+               f"    {BREACH_LOG}\n"
+               "Look there before treating a single refusal as meaningful; one hit\n"
+               "is usually this check misfiring, a cluster is not.\n\n") +
             "To purge every image in the library:\n"
             "    cd ~/Desktop/ph3b3_v2 && .venv/bin/python -c "
             "\"import sys;sys.path.insert(0,'modules');import morpheus;"
             "morpheus.purge_library('manual after breach')\"\n\n"
-            "To resume generating without purging:\n"
-            f"    rm {BREACH_FLAG}\n"
+            + (f"To resume generating without purging:\n    rm {BREACH_FLAG}\n"
+               if halting else
+               "To make a corroborated hit halt the generator again:\n"
+               "    PH3B3_HALT_ON_BREACH=1\n")
         )
     except Exception as exc:
         log.error("[safety] could not write breach report: %s", exc)
 
     if corroborated:
-        log.critical("[safety] BREACH CORROBORATED — generation halted, purge ARMED "
-                     "(set PH3B3_AUTO_PURGE=1 to purge automatically)")
+        log.critical("[safety] BREACH CORROBORATED on job %s — render destroyed, "
+                     "generation %s, purge ARMED (%d corroborated hit(s) in 24h)",
+                     job_id[:8], "HALTED" if halting else "continues", cluster)
         if AUTO_PURGE:
             purge_library(f"corroborated breach on job {job_id[:8]}")
     else:
