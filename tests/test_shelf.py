@@ -15,12 +15,26 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "modules"))
 
 import shelf  # noqa: E402
+import json
+
+
+def _canon_tree(root: Path, stories):
+    """A throwaway canon directory. Discovery is manifest-driven, so an .md file
+    on its own is no longer a story — the manifest is what makes it one."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "manifest.json").write_text(json.dumps(
+        {"name": "canon", "version": "1.0.0", "canon": True, "stories": stories}),
+        encoding="utf-8")
+    for s in stories:
+        (root / (s.get("file") or f"{s['slug']}.md")).write_text(
+            f"# {s.get('title', s['slug'])}\n\nBody.\n", encoding="utf-8")
+    return root
 
 
 def test_shelf_dir_is_in_the_repo_not_the_data_dir():
     """A shelved work travels with a checkout and survives a wiped data dir."""
-    assert shelf.SHELF_DIR == ROOT / "stories"
-    assert "ph3b3_data" not in str(shelf.SHELF_DIR)
+    assert shelf.CANON_DIR == ROOT / "stories" / "canon"
+    assert "ph3b3_data" not in str(shelf.CANON_DIR)
 
 
 def test_the_first_work_is_present():
@@ -31,14 +45,13 @@ def test_the_first_work_is_present():
 def test_metadata_derives_from_the_document():
     b = shelf.read("arthur_and_eliza")
     assert b["title"] == "Arthur and Eliza"
-    assert b["subtitle"] == "A Short Story"
     assert b["words"] > 500
 
 
 def test_stored_verbatim():
     """Byte-for-byte. No strip, no re-wrap, no normalisation — the read must
     return exactly what is on disk."""
-    on_disk = (ROOT / "stories" / "arthur_and_eliza.md").read_text(encoding="utf-8")
+    on_disk = (ROOT / "stories" / "canon" / "arthur_and_eliza.md").read_text(encoding="utf-8")
     assert shelf.read("arthur_and_eliza")["text"] == on_disk
 
 
@@ -50,7 +63,7 @@ def test_read_only_file_mode_is_local_hardening_only():
 
     The guarantee is the two tests below: no write function, no write route.
     """
-    mode = (ROOT / "stories" / "arthur_and_eliza.md").stat().st_mode & 0o222
+    mode = (ROOT / "stories" / "canon" / "arthur_and_eliza.md").stat().st_mode & 0o222
     if mode:
         pytest.skip("writable here — expected on a fresh clone; the real guard is the absent write path")
     assert True
@@ -85,9 +98,9 @@ def test_canon_cannot_reach_the_shelf():
     writing somewhere else entirely, or a generated story sharing a title would
     clobber a shelved work."""
     import canon
-    assert canon.CANON_DIR.resolve() != shelf.SHELF_DIR.resolve()
-    assert shelf.SHELF_DIR.resolve() not in canon.CANON_DIR.resolve().parents
-    assert canon.CANON_DIR.resolve() not in shelf.SHELF_DIR.resolve().parents
+    assert canon.CANON_DIR.resolve() != shelf.CANON_DIR.resolve()
+    assert shelf.CANON_DIR.resolve() not in canon.CANON_DIR.resolve().parents
+    assert canon.CANON_DIR.resolve() not in shelf.CANON_DIR.resolve().parents
 
 
 # ── Path safety ──────────────────────────────────────────────────────────────
@@ -134,18 +147,22 @@ def test_empty_query_returns_the_whole_shelf():
 
 
 def test_ambiguous_query_lists_what_it_narrowed_to(monkeypatch, tmp_path):
-    (tmp_path / "arthur_and_eliza.md").write_text("# Arthur and Eliza\n", encoding="utf-8")
-    (tmp_path / "arthur_and_mary.md").write_text("# Arthur and Mary\n", encoding="utf-8")
-    monkeypatch.setattr(shelf, "SHELF_DIR", tmp_path)
+    root = _canon_tree(tmp_path / "canon", [
+        {"slug": "arthur_and_eliza", "title": "Arthur and Eliza"},
+        {"slug": "arthur_and_mary", "title": "Arthur and Mary"}])
+    monkeypatch.setattr(shelf, "CANON_DIR", root)
+    monkeypatch.setattr(shelf, "PACKS_DIR", tmp_path / "packs")
     r = shelf.resolve("arthur")
     assert not r["ok"] and r["reason"] == "ambiguous"
     assert {b["slug"] for b in r["candidates"]} == {"arthur_and_eliza", "arthur_and_mary"}
 
 
 def test_a_clear_winner_beats_a_partial_overlap(monkeypatch, tmp_path):
-    (tmp_path / "arthur_and_eliza.md").write_text("# Arthur and Eliza\n", encoding="utf-8")
-    (tmp_path / "arthur_and_mary.md").write_text("# Arthur and Mary\n", encoding="utf-8")
-    monkeypatch.setattr(shelf, "SHELF_DIR", tmp_path)
+    root = _canon_tree(tmp_path / "canon", [
+        {"slug": "arthur_and_eliza", "title": "Arthur and Eliza"},
+        {"slug": "arthur_and_mary", "title": "Arthur and Mary"}])
+    monkeypatch.setattr(shelf, "CANON_DIR", root)
+    monkeypatch.setattr(shelf, "PACKS_DIR", tmp_path / "packs")
     r = shelf.resolve("eliza")
     assert r["ok"] and r["book"]["slug"] == "arthur_and_eliza"
 
@@ -156,8 +173,9 @@ def test_describe_shelf_names_the_works():
 
 
 def test_describe_empty_shelf_says_so(monkeypatch, tmp_path):
-    monkeypatch.setattr(shelf, "SHELF_DIR", tmp_path)
-    assert "nothing on the shelf" in shelf.describe_shelf().lower()
+    monkeypatch.setattr(shelf, "CANON_DIR", tmp_path / "none")
+    monkeypatch.setattr(shelf, "PACKS_DIR", tmp_path / "nopacks")
+    assert "no stories installed" in shelf.describe_shelf().lower()
 
 
 # ── The shelf is in the scope chat actually searches ─────────────────────────
@@ -338,13 +356,20 @@ def test_read_does_not_fence():
 
 # ── Degradation ──────────────────────────────────────────────────────────────
 def test_missing_shelf_dir_is_empty_not_an_error(monkeypatch, tmp_path):
-    monkeypatch.setattr(shelf, "SHELF_DIR", tmp_path / "nope")
+    monkeypatch.setattr(shelf, "CANON_DIR", tmp_path / "nope")
+    monkeypatch.setattr(shelf, "PACKS_DIR", tmp_path / "nopacks")
     assert shelf.list_books() == []
     assert shelf.read("anything") is None
 
 
-def test_untitled_document_still_lists(monkeypatch, tmp_path):
-    (tmp_path / "some_work.md").write_text("no heading here\n", encoding="utf-8")
-    monkeypatch.setattr(shelf, "SHELF_DIR", tmp_path)
-    b = shelf.list_books()[0]
-    assert b["slug"] == "some_work" and b["title"] == "Some Work"
+def test_a_story_needs_a_manifest_entry_to_exist(monkeypatch, tmp_path):
+    """Replaces the old filename-derived-title test. Discovery is manifest-driven
+    now: an .md file nobody listed is not a story, which is what stops a stray
+    file in a pack directory becoming readable content."""
+    root = tmp_path / "canon"
+    _canon_tree(root, [{"slug": "listed", "title": "Listed"}])
+    (root / "unlisted.md").write_text("# Unlisted\n\nNot in the manifest.\n", encoding="utf-8")
+    monkeypatch.setattr(shelf, "CANON_DIR", root)
+    monkeypatch.setattr(shelf, "PACKS_DIR", tmp_path / "packs")
+    slugs = {b["slug"] for b in shelf.list_books()}
+    assert slugs == {"listed"}

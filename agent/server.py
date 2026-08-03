@@ -2229,9 +2229,20 @@ async def _run_chat_pipeline(body: dict, request: Request):
     #
     # Only for RECITAL. "What is it about?" still goes to the model, with the text
     # injected below so the answer is grounded in it.
+    #
+    # AND ONLY FOR A STORY MARKED verbatim. That is a per-story decision in the
+    # manifest, not a property of the system, because the right answer genuinely
+    # differs: family history and folklore recorded from one teller are told
+    # exactly — her wording IS the artifact — while fiction written to be
+    # performed should be performed, and a living retelling is most of why
+    # anyone would want her to tell it at all.
+    #
+    # A non-verbatim story falls through to the model with its full text
+    # injected below, so she tells THAT story rather than inventing one. The
+    # protection is the same either way; only the delivery differs.
     if user_msg and shelf.wants_recital(user_msg):
         _r = shelf.resolve(user_msg)
-        if _r.get("ok"):
+        if _r.get("ok") and _r["book"].get("verbatim"):
             _b = _r["book"]
             log.info("[shelf] reciting %r verbatim (%d words) — model bypassed",
                      _b["slug"], _b["words"])
@@ -2290,8 +2301,14 @@ async def _run_chat_pipeline(body: dict, request: Request):
             messages.insert(1, {"role": "system", "content":
                 f"The user's message refers to “{_b['title']}”, which is on your "
                 "shelf. Its full and exact text follows. Answer about it ONLY from "
-                "this text — do not recall, infer or embellish, and quote exactly "
-                "when quoting.\n\n" + shelf.fenced(_b["text"])})
+                "this text — never invent a different story and present it as this "
+                "one. "
+                + ("Quote it exactly; this one is told word for word."
+                   if _b.get("verbatim") else
+                   "You may tell it in your own words — perform it rather than "
+                   "recite it — but every event, name and detail must come from "
+                   "the text below.")
+                + "\n\n" + shelf.fenced(_b["text"])})
 
     # ── Live datetime (additive, ephemeral — constructed FRESH every request) ──
     # Full timestamp incl. weekday + TZ abbrev, tz-aware (ZoneInfo, DST-correct).

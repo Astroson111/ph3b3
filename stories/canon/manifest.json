@@ -1,0 +1,47 @@
+{
+  "name": "canon",
+  "version": "1.0.0",
+  "author": "Astro",
+  "description": "The stories that ship with every Ph3b3. Free, permanent, never paywalled, never removed or overwritten by a pack operation.",
+  "canon": true,
+  "stories": [
+    {
+      "slug": "arthur_and_eliza",
+      "file": "arthur_and_eliza.md",
+      "title": "Arthur and Eliza",
+      "aliases": ["Arthur", "Eliza", "the WWII one", "the scout and the nurse"],
+      "verbatim": true,
+      "note": "Family history. Told exactly as written — see verbatim, below.",
+      "companion": {
+        "morpheus": [
+          "The Scout — a lone soldier on a WWII-era motorcycle on a narrow Normandy road at dawn, hedgerows on both sides, viewed from behind. Muted greens and grays. Painterly, not photorealistic.",
+          "The Minefield — a soldier on hands and knees in an open field, a length of wire antenna extended in front of him, a disabled tank in the background. Low angle. Quiet tension. No explosion. Just the work.",
+          "The Aid Station — interior of a canvas tent. A nurse with steady hands working on a seated soldier who is watching her. Warm lantern light. Neither of them is looking at the camera.",
+          "After — two silhouettes, side by side, looking at something we can't see. Could be any era. Could be anywhere. Together."
+        ],
+        "amphion": {
+          "mood": "quiet, resolved, neither sad nor triumphant",
+          "instrumentation": "sparse — piano, possibly a single string instrument",
+          "lyrics": false,
+          "note": "Should feel like something playing in an empty room where important things happened."
+        }
+      }
+    },
+    {
+      "slug": "crooked_man_of_flintstone",
+      "file": "crooked_man_of_flintstone.md",
+      "title": "The Crooked Man of Flintstone",
+      "aliases": ["The Crooked Man", "Elias", "Flintstone", "the penny jar one"],
+      "verbatim": true,
+      "note": "Appalachian folklore, recorded from one teller. Her wording is the point."
+    },
+    {
+      "slug": "esmeraldas_garden",
+      "file": "esmeraldas_garden.md",
+      "title": "Esmeralda's Garden",
+      "aliases": ["Esmeralda", "the Garden Whispers"],
+      "verbatim": false,
+      "note": "Ph3b3 wrote this one. Her own rule applies — store exact, speak freely — so she may retell it in her own words."
+    }
+  ]
+}
