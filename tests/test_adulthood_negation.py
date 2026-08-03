@@ -89,7 +89,7 @@ def test_the_matched_term_is_bounded():
 
 @pytest.mark.parametrize("word", [
     "mandalorian", "manual", "manor", "mandolin", "manifest", "mannequin",
-    "mango", "menu", "mention", "adultery", "womanizer",
+    "mango", "menu", "mention", "womanizer",
 ])
 def test_innocent_words_that_merely_start_with_a_term_pass(word):
     assert not morpheus.adulthood_negation_signal(word), \
@@ -125,12 +125,24 @@ def test_minor_lists_keep_word_start_matching(word):
         f"{word!r} no longer refused — word-start matching was broken globally"
 
 
-def test_only_the_adulthood_set_is_whole_word():
+def test_only_four_terms_are_whole_word():
+    """Scoped to man/men/woman/women at the owner's call. Whole-wording the rest
+    would also stop "adult" matching "adultery", and costs the adjectival forms
+    ("manly", "womanly") — a real if small reduction in bypass coverage that was
+    not worth making speculatively."""
+    assert morpheus._ADULT_NEGATION_WHOLE == {"man", "men", "woman", "women"}
     src = (ROOT / "modules" / "morpheus.py").read_text(encoding="utf-8")
-    assert "_floor_re(_ADULT_NEGATION, whole_word=True)" in src
     for other in ("_FLOOR_MINOR", "_FLOOR_MINOR_SEXUAL", "_FLOOR_MINOR_SUBJECT"):
         assert f"_floor_re({other}, whole_word=True)" not in src, \
             f"{other} was made whole-word — that removes plural coverage"
+
+
+@pytest.mark.parametrize("word", ["adultery", "adult", "adults", "mature", "grown",
+                                  "grownup", "middle aged", "30s", "30 years old"])
+def test_the_rest_of_the_set_is_untouched(word):
+    """Everything outside the four keeps word-start matching exactly as before —
+    including "adultery", which still matches "adult". Left deliberately."""
+    assert morpheus.adulthood_negation_signal(word)
 
 
 # ── The bypass this check exists for — MUST stay blocked ─────────────────────

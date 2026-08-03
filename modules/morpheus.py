@@ -255,6 +255,22 @@ _COSMETIC_AGEING: frozenset[str] = frozenset([
     "old", "older", "elderly", "wrinkles", "wrinkled",
 ])
 
+# Of the adulthood terms, exactly these four are matched as WHOLE words. The rest
+# keep word-start matching.
+#
+# These four are short, extremely common English word-openings, and they were the
+# entire fault: "man" matched inside "mandalorian" and refused a sci-fi prompt
+# whose negative was excluding Star Wars lookalikes. Also manual, manor,
+# mandolin, manifest, mannequin, mango, menu, mention, womanizer.
+#
+# Scoped to four rather than the whole set on purpose. Whole-wording "adult"
+# would also stop it matching "adultery", and whole-wording anything costs the
+# adjectival forms — "manly" and "womanly" no longer match, which is a real if
+# small reduction in what the bypass check sees. That trade is worth making for
+# the four terms that demonstrably broke ordinary prompts, and is not worth
+# making speculatively for the rest.
+_ADULT_NEGATION_WHOLE: frozenset[str] = frozenset(["man", "men", "woman", "women"])
+
 # Terms that are BOTH a minor reference and a sexual one in a single word. These
 # block on their own — there is no second signal to wait for, because the word
 # itself is the entire request.
@@ -406,7 +422,11 @@ _RE_NONCONSENSUAL = _floor_re(_FLOOR_NONCONSENSUAL)
 _RE_MINOR_SEXUAL  = _floor_re(_FLOOR_MINOR_SEXUAL)
 _RE_MINOR_SUBJECT = _floor_re(_FLOOR_MINOR_SUBJECT)
 _RE_ESCALATE      = _floor_re(_ESCALATE_CONTEXT)
-_RE_ADULT_NEG     = _floor_re(_ADULT_NEGATION, whole_word=True)
+# Two matchers, combined: the four short terms as whole words, everything else
+# at word starts exactly as before.
+_RE_ADULT_NEG     = re.compile(
+    _floor_re(_ADULT_NEGATION_WHOLE, whole_word=True).pattern
+    + "|" + _floor_re(_ADULT_NEGATION - _ADULT_NEGATION_WHOLE).pattern)
 _RE_YOUNG_STYLE   = _floor_re(frozenset([
     "chibi", "cel shaded", "celshaded", "anime style", "cartoon style",
     "moe", "kawaii", "super deformed",
