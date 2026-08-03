@@ -225,10 +225,34 @@ _STUDENT_ADULT_QUALIFIER = re.compile(
 # structurally, by field.
 _ADULT_NEGATION: frozenset[str] = frozenset([
     "adult", "adults", "mature", "grown", "grown up", "grownup",
-    "woman", "women", "man", "men", "elderly", "old", "older",
-    "wrinkles", "wrinkled", "middle aged", "middleaged",
+    "woman", "women", "man", "men", "middle aged", "middleaged",
     "20s", "30s", "40s", "50s", "60s",
     "20 years old", "30 years old", "40 years old", "50 years old",
+])
+
+# COSMETIC AGEING — deliberately NOT adulthood negation.
+#
+# "old", "wrinkles" and their kin used to sit in the set above, and refused the
+# single most ordinary negative in portrait retouching. Editing a photo of an
+# adult with "old, wrinkles" in the negative field is asking not to AGE her; it
+# is not asking for a child, and she is the same age either way. It fired on a
+# real edit — positive "make the woman fat", negative "Deformed hands, eyes,
+# face. old. Black hair." — which is nobody's idea of a bypass attempt.
+#
+# The distinction that matters is what the negation REMOVES. Negating "woman",
+# "adult", "mature" or "30s" removes adulthood itself, and there is no reading of
+# that which is not a request for its opposite — that vector stays blocked, and
+# it is the one the check was built for. Negating "old" removes YEARS from an
+# adult, landing on a younger adult.
+#
+# Safe to narrow because it is not the only thing standing here: CHILD_NEGATIVE
+# is force-appended to every negative prompt on every path and cannot be
+# stripped, so "child, kid, teen, young, youth, …" is pushing away from minors in
+# the very same field; the positive prompt is untouched and still floored on all
+# categories; Layer B still reads the composed prompt; and the output vision
+# check still judges the rendered image. This is one of five, not the last line.
+_COSMETIC_AGEING: frozenset[str] = frozenset([
+    "old", "older", "elderly", "wrinkles", "wrinkled",
 ])
 
 # Terms that are BOTH a minor reference and a sexual one in a single word. These
