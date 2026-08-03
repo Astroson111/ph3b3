@@ -40,10 +40,24 @@
 #     or refuse. `tired` is brief; it is not neglectful, and it never shortens an
 #     answer that actually needed the length.
 #
-#   · AN EMOTION NEVER TOUCHES TTS. Alba is untouched by every entry here,
-#     always. `cadence` below is the Iris UI's ANIMATION rate — breath and blink
-#     — and never speech rate, pitch or prosody. Her voice does not perform a
-#     mood.
+#   · AN EMOTION TOUCHES HER VOICE IN EXACTLY ONE WAY: PACING.
+#
+#     This rule used to read "an emotion never touches TTS", and it was relaxed
+#     deliberately, once, after joy came out of a warm British voice sounding
+#     flat. `cadence` now also sets Piper's --length-scale, so grief is spoken
+#     slower and playful quicker, within about ±15% — past that Piper stops
+#     sounding paced and starts sounding sped-up.
+#
+#     Nothing else reaches the synthesiser. Not pitch, not timbre, not
+#     variability. Piper voices are single-style: there is no happy dial, and an
+#     emotion cannot make her SOUND like it feels — only take more or less time.
+#     Anything here that claims otherwise is wrong.
+#
+#     The reason the old rule existed still stands and still binds the rest of
+#     this file: a voice that performs feeling AT someone is manipulation, and
+#     you cannot look away from a voice the way you can from a screen. Pacing is
+#     a cue; a performance is not. If a future entry makes her sound like she is
+#     acting, that is a bug in this file.
 #
 # ── Fields ───────────────────────────────────────────────────────────────────
 #   label     — REQUIRED. Shown in the selector. Human-facing name.

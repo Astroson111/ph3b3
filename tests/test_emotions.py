@@ -320,6 +320,81 @@ def test_tired_exists_in_the_table():
     assert emotions.is_named(emotions.TIRED_ID)
 
 
+# ── Speech pacing — the ONE way an emotion reaches her voice ─────────────────
+def test_no_emotion_leaves_the_voice_alone():
+    """None, not 1.0. The flag is never passed, so the default path is the code
+    path that existed before pacing did."""
+    assert emotions.speech_pace(emotions.NONE) is None
+    assert emotions.speech_pace("no-such-feeling") is None
+
+
+def test_quick_cadence_speaks_faster_and_slow_speaks_slower():
+    """length_scale is INVERSE to cadence — Piper counts duration, not speed."""
+    quick = emotions.speech_pace("playful")     # cadence 1.4
+    slow = emotions.speech_pace("grief")        # cadence 0.6
+    assert quick < 1.0 < slow, f"playful={quick} grief={slow}"
+
+
+def test_neutral_cadence_passes_no_flag():
+    """focused sits at cadence 1.0 — it must not pass a redundant 1.000."""
+    assert emotions.speech_pace("focused") is None
+
+
+@pytest.mark.parametrize("eid", ALL)
+def test_every_pace_stays_inside_the_band(eid):
+    """Past roughly ±15% Piper stops sounding paced and starts sounding
+    sped-up or drunk."""
+    p = emotions.speech_pace(eid)
+    assert p is None or emotions.PACE_MIN <= p <= emotions.PACE_MAX, f"{eid}: {p}"
+
+
+def test_a_hand_edited_cadence_cannot_escape_the_band(tmp_path, monkeypatch):
+    f = tmp_path / "emotions.yaml"
+    f.write_text("emotions:\n  wild:\n    label: Wild\n    iris: {temp: 0, cadence: 99}\n",
+                 encoding="utf-8")
+    monkeypatch.setattr(emotions, "EMOTIONS_PATH", f)
+    p = emotions.speech_pace("wild")
+    assert p is None or emotions.PACE_MIN <= p <= emotions.PACE_MAX
+
+
+def test_pacing_is_the_only_thing_that_reaches_tts():
+    """Not pitch, not timbre, not variability. Piper voices are single-style —
+    there is no happy dial, and nothing may pretend otherwise."""
+    src = (ROOT / "modules" / "tts_module.py").read_text(encoding="utf-8")
+    assert "--length-scale" in src
+    for forbidden in ("--noise-scale", "--noise-w", "--speaker"):
+        assert forbidden not in src, f"{forbidden} reached the synthesiser"
+
+
+def test_tts_module_knows_nothing_about_emotions():
+    """It takes a number. The mapping from a feeling to a float lives in
+    emotions.py, where it tests without a synthesiser."""
+    src = (ROOT / "modules" / "tts_module.py").read_text(encoding="utf-8")
+    # Import, not substring: the docstring legitimately POINTS at emotions.py to
+    # say where the mapping lives, and a test that cannot tell a reference from a
+    # dependency fails on its own documentation.
+    for line in src.splitlines():
+        s = line.strip()
+        assert not (s.startswith("import emotions") or s.startswith("from emotions")), \
+            "tts_module imports emotions — the synthesiser should take a number"
+
+
+def test_the_synthesiser_clamps_whatever_it_is_handed():
+    """Last thing between a number and a subprocess; it should trust a caller no
+    more than firmware trusts a wire."""
+    src = (ROOT / "modules" / "tts_module.py").read_text(encoding="utf-8")
+    i = src.index("--length-scale")
+    assert "max(0.5, min(2.0" in src[i - 200:i + 200]
+
+
+def test_pace_is_fixed_for_a_whole_reply():
+    """Captured at manifest time, not read per chunk — an emotion changing
+    mid-sentence would speed the back half against the front."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    assert '"pace": pace' in src
+    assert "_tts_stream_new(chunks, out_voice, _emotion_pace())" in src
+
+
 # ── Hot-reload ───────────────────────────────────────────────────────────────
 def test_table_edit_is_picked_up(tmp_path, monkeypatch):
     f = tmp_path / "emotions.yaml"
@@ -405,12 +480,24 @@ def test_emotion_composes_before_floor_in_both_routes():
 
 
 # ── Invariants ───────────────────────────────────────────────────────────────
-def test_alba_untouched():
-    """Emotion must never reach TTS. Her voice does not perform a state."""
-    tts_src = (ROOT / "modules" / "tts_module.py").read_text(encoding="utf-8")
-    low = tts_src.lower()
-    assert "emotion" not in low, "emotion vocabulary leaked into the TTS path"
-    assert "cadence" not in low, "cadence is a UI axis and must not reach speech"
+def test_her_voice_is_paced_never_performed():
+    """This test used to assert emotion NEVER reached TTS, and it failed — as it
+    should have — the moment pacing was wired in. The invariant was relaxed
+    deliberately and exactly once, so the test is narrowed to the new line rather
+    than deleted.
+
+    What is allowed: duration. What is not: anything that fakes a feeling she
+    does not have. Piper voices are single-style; pitch and timbre are not
+    controllable and must not be faked from adjacent parameters.
+    """
+    src = (ROOT / "modules" / "tts_module.py").read_text(encoding="utf-8")
+    assert "--length-scale" in src, "pacing is no longer reaching the synthesiser"
+    for forbidden in ("--noise-scale", "--noise-w", "--speaker", "--pitch"):
+        assert forbidden not in src, f"{forbidden} reached the synthesiser"
+    # No emotion NAMES may appear — pacing arrives as a float, not a feeling.
+    low = src.lower()
+    for state in ("grief", "playful", "melancholy", "tender", "anxious"):
+        assert state not in low, f"emotion vocabulary ({state}) leaked into TTS"
 
 
 def test_emotion_is_not_written_to_mnemosyne():

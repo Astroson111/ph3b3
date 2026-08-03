@@ -333,6 +333,44 @@ def battery_reads_tired(fleet: list, threshold: int = TIRED_PCT) -> dict | None:
     return worst
 
 
+# ── Speech pacing ────────────────────────────────────────────────────────────
+# The ONE way an emotion reaches her voice, and it is deliberately the dullest
+# one available.
+#
+# Piper voices are single-style. There is no happy dial: you cannot make Jenny
+# sound joyful, and nothing here pretends otherwise. What Piper exposes is
+# --length-scale, which is pacing, so joy is BRISKER and grief is SLOWER. That is
+# a real cue people read, and it is not an emotional performance.
+#
+# Timbre, pitch and variability are all left alone on purpose. noise-scale is a
+# sampling parameter rather than an expression control — pushed up it wobbles and
+# mispronounces, it does not sound happier.
+#
+# The band is tight because past roughly ±15% Piper stops sounding paced and
+# starts sounding sped-up or drunk. Clamped, so a hand-edited cadence cannot
+# reach the synthesiser as something unspeakable.
+#
+# NOTE: length_scale is INVERSE to cadence. Piper counts duration, not speed —
+# larger means longer means slower.
+
+PACE_SWING = 0.25          # how far a full cadence excursion moves duration
+PACE_MIN, PACE_MAX = 0.85, 1.15
+
+
+def speech_pace(emotion_id: str) -> float | None:
+    """Piper --length-scale for an emotion, or None to leave the voice alone.
+
+    None is not 1.0: it means the flag is never passed, so a device with no
+    emotion set synthesises through exactly the code path it always did.
+    """
+    p = iris_params(emotion_id)          # cadence lives in the iris block
+    if not p:
+        return None
+    scale = 1.0 + (1.0 - p["cadence"]) * PACE_SWING
+    scale = max(PACE_MIN, min(PACE_MAX, scale))
+    return None if abs(scale - 1.0) < 0.01 else round(scale, 3)
+
+
 def announce(emotion_id: str) -> str:
     """Auto's read, stated in her own voice. Short on purpose: it has to be
     objectable at a glance, and a wall of vocabulary is not."""

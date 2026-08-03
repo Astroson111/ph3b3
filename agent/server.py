@@ -2470,7 +2470,7 @@ async def chat_endpoint(body: dict, request: Request):
     # returned as text, Alba is not assigned, no empty-audio call is made.
     plan = voices.output_for_response()
     audio_b64 = "" if plan["text_only"] else await asyncio.to_thread(
-        tts.synthesize_to_b64, reply, plan["voice"])
+        tts.synthesize_to_b64, reply, plan["voice"], _emotion_pace())
     return {"response": reply, "audio": audio_b64, "text_only": plan["text_only"]}
 
 
@@ -2488,11 +2488,15 @@ def _tts_stream_gc(now):
     for k in [k for k, v in _TTS_STREAMS.items() if now - v["ts"] > _TTS_STREAM_TTL]:
         _TTS_STREAMS.pop(k, None)
 
-def _tts_stream_new(chunks, voice=None):
+def _tts_stream_new(chunks, voice=None, pace=None):
     now = time.monotonic()
     _tts_stream_gc(now)
     sid = uuid.uuid4().hex[:12]
-    _TTS_STREAMS[sid] = {"chunks": chunks, "audio": {}, "ts": now, "voice": voice}
+    # Pace is fixed for the WHOLE reply, captured here rather than read per
+    # chunk. If the emotion changed mid-sentence the back half would speed up
+    # against the front half, which reads as a fault rather than a feeling.
+    _TTS_STREAMS[sid] = {"chunks": chunks, "audio": {}, "ts": now,
+                         "voice": voice, "pace": pace}
     return sid
 
 async def _tts_synth_into(st, n):
@@ -2500,7 +2504,8 @@ async def _tts_synth_into(st, n):
     if n in st["audio"] or n < 0 or n >= len(st["chunks"]):
         return
     st["audio"][n] = None                      # claim the slot so prefetch can't double-run
-    b64 = await asyncio.to_thread(tts.synthesize_to_b64, st["chunks"][n], st.get("voice")) or ""
+    b64 = await asyncio.to_thread(tts.synthesize_to_b64, st["chunks"][n],
+                                  st.get("voice"), st.get("pace")) or ""
     st["audio"][n] = trim_silence_b64(b64) if b64 else ""   # drop Piper's ~200ms per-chunk gaps
 
 
@@ -2594,7 +2599,7 @@ async def chat_stream_endpoint(body: dict, request: Request):
     if not chunks:
         return {"response": reply, "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}
-    sid = _tts_stream_new(chunks, out_voice)
+    sid = _tts_stream_new(chunks, out_voice, _emotion_pace())
     audio0 = await _tts_chunk_b64(sid, 0)
     if len(chunks) > 1:
         asyncio.create_task(_tts_chunk_b64(sid, 1))   # read-ahead
@@ -4651,6 +4656,23 @@ def _emotion_apply_battery() -> dict | None:
     if low and emotions.is_named(emotions.TIRED_ID):
         emotions.set_resolved(emotions.TIRED_ID)
     return low
+
+
+def _emotion_pace() -> float | None:
+    """Piper --length-scale for the emotion in force, or None to leave her voice
+    alone. Never raises: a fault here must not cost the reply its audio.
+
+    The ONE route from an emotion to the synthesiser, and it carries a float. The
+    previous rule was that emotion never touched TTS at all; it now touches
+    pacing and nothing else — not pitch, not timbre, not variability. She can
+    sound brisker or slower. She cannot be made to sound happy, and Piper could
+    not do it if we asked.
+    """
+    try:
+        return emotions.speech_pace(emotions.active())
+    except Exception as e:
+        log.debug("[emotion] pace unavailable (%s)", e)
+        return None
 
 
 def _emotion_infer(convo: str) -> str:

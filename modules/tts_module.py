@@ -368,9 +368,20 @@ class TTSModule:
                     pass
                 prod.join(timeout=2)
 
-    def synthesize_to_b64(self, text: str, voice=None) -> str | None:
+    def synthesize_to_b64(self, text: str, voice=None,
+                          length_scale: float | None = None) -> str | None:
         """Run Piper and return base64-encoded WAV, or None if unavailable. `voice`
-        is a registry code (e.g. 'es'); default = the selected primary voice."""
+        is a registry code (e.g. 'es'); default = the selected primary voice.
+
+        `length_scale` is Piper's duration multiplier — larger is SLOWER. None
+        omits the flag entirely, so the default path is byte-identical to before
+        this parameter existed.
+
+        Deliberately a NUMBER rather than an emotion. This module has no idea
+        emotions exist and should not acquire one: the caller decides how fast she
+        speaks, and the mapping from a feeling to a float lives in
+        modules/emotions.py where it can be tested without a synthesiser.
+        """
         if not self._available or not text or not text.strip():
             return None
         if voice is None and _current_text_only():   # declared text-only: no audio
@@ -382,8 +393,14 @@ class TTSModule:
         with self._lock:
             try:
                 # Same fix as _piper_raw: no shell, text via stdin. See the note there.
+                cmd = [PIPER_BIN, "--model", model, "--output-raw"]
+                if length_scale is not None:
+                    # Clamped again here. This module is the last thing between a
+                    # number and a subprocess, and it should not trust a caller
+                    # any more than firmware trusts a wire.
+                    cmd += ["--length-scale", f"{max(0.5, min(2.0, float(length_scale))):.3f}"]
                 proc = subprocess.run(
-                    [PIPER_BIN, "--model", model, "--output-raw"],
+                    cmd,
                     input=tts_text.encode("utf-8"),
                     capture_output=True, timeout=30,
                 )
