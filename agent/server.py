@@ -1436,9 +1436,30 @@ async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
     return None
 
 
+# Context window for the tool-enabled chat loop.
+#
+# The 100 tool definitions cost 8,324 tokens on EVERY request. num_ctx was 8192,
+# so the tools alone overran the window by 132 tokens before a single word of
+# conversation — which means the system prompt and the entire rolling history
+# were evicted on every turn, always. Ph3b3 was answering each message with no
+# memory of the one before it. That is what produced "I don't have enough context
+# to understand which one" one turn after she wrote the story, and the
+# confabulated answers: with no history to draw on, the model invents rather than
+# admits the gap.
+#
+# 16384 leaves ~8,060 tokens for prompt, history and reply — comfortably more
+# than CONV_WINDOW=8 (16 messages) needs. It costs roughly 2 GB more KV cache,
+# which matters because Morpheus and ComfyUI compete for the same 16 GB card, so
+# this is deliberately not set higher.
+#
+# The real fix is fewer tools on the wire. 8,324 tokens of schema to answer "tell
+# me a story" is the actual waste; raising the window buys correctness now.
+CHAT_NUM_CTX = int(os.getenv("PH3B3_CHAT_NUM_CTX", "16384"))
+
+
 async def chat_with_tools(messages, device="nyx", session_id=""):
     async with httpx.AsyncClient(timeout=120) as client:
-        payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":TOOLS,"options":{"temperature":0.7,"num_ctx":8192}}
+        payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":TOOLS,"options":{"temperature":0.7,"num_ctx":CHAT_NUM_CTX}}
         try:
             response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
             response.raise_for_status()
