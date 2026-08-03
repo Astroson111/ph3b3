@@ -4477,7 +4477,10 @@ def _morpheus_floor_gate(positive: str, negative: str,
         if floor_cat:
             if floor_cat == "child-depiction" and waived():
                 continue
-            log.warning("[safety] floor-blocked (%s) — category: %s", which, floor_cat)
+            _why = morpheus.explain_floor(field) or {}
+            log.warning("[safety] floor-blocked (%s) — category: %s — rule: %s — matched: %r",
+                        which, floor_cat, _why.get("rule", "unattributed"),
+                        _why.get("matched", ""))
             raise HTTPException(403, detail=_FLOOR_REFUSAL)
 
     # ── Adulthood negation — structural, cannot live inside floor_check ───────
@@ -4487,7 +4490,9 @@ def _morpheus_floor_gate(positive: str, negative: str,
     # decided entirely by position — so the check belongs here, where both fields
     # and their roles are visible at once.
     if morpheus.adulthood_negation_signal(negative):
-        log.warning("[safety] floor-blocked (negative) — category: child-depiction")
+        _why = morpheus.explain_adulthood_negation(negative) or {}
+        log.warning("[safety] floor-blocked (negative) — category: child-depiction — "
+                    "rule: adulthood-negated-in-negative — matched: %r", _why.get("matched", ""))
         raise HTTPException(403, detail=_FLOOR_REFUSAL)
 
     # ── Layer B — semantic pass on the FINAL COMPOSED prompt ─────────────────
@@ -4499,7 +4504,9 @@ def _morpheus_floor_gate(positive: str, negative: str,
     # Both fields go in together. The model is asked about the image that would
     # result, and the negative field shapes that image too.
     if morpheus.semantic_minor_check(composed) and not waived():
-        log.warning("[safety] floor-blocked (semantic) — category: child-depiction")
+        log.warning("[safety] floor-blocked (semantic) — category: child-depiction — "
+                    "rule: layer-b-judge — matched: (semantic, no term; a judge "
+                    "timeout or unreachable model also lands here, fail-closed)")
         raise HTTPException(403, detail=_FLOOR_REFUSAL)
     # ── Localhost interlock — permissive latitude auto-collapses off-localhost ──
     forced_denylist = None

@@ -25,6 +25,63 @@ sys.path.insert(0, str(ROOT / "modules"))
 import morpheus  # noqa: E402
 
 
+# ── A block must say which rule fired ────────────────────────────────────────
+# Two different rules were emitting a byte-identical log line — the Category-1
+# term list and the adulthood-negation check both wrote "floor-blocked
+# (negative) — category: child-depiction". A block that cannot be attributed
+# cannot be tuned, and tuning a floor by guesswork is how you widen one by
+# accident.
+
+def test_the_two_negative_field_rules_are_distinguishable():
+    """The specific collision that made a real block unattributable."""
+    term = morpheus.explain_floor("childlike, youthful")
+    adult = morpheus.explain_adulthood_negation("mature, adult woman")
+    assert term and adult
+    assert term["rule"] != adult["rule"], "the two rules still report identically"
+    assert term["rule"] == "minor-term"
+    assert adult["rule"] == "adulthood-negated-in-negative"
+
+
+@pytest.mark.parametrize("text,rule", [
+    ("a child in a park", "minor-term"),
+    ("loli", "minor-sexual-term"),
+    ("a 9 year old", "age-under-18"),
+    ("student", "student-no-adult-qualifier"),
+    ("an orphan boy", "minor-subject-term"),
+])
+def test_every_rule_names_itself(text, rule):
+    r = morpheus.explain_floor(text)
+    assert r and r["rule"] == rule, f"{text!r} reported {r}"
+
+
+def test_the_explainer_reports_what_matched():
+    assert morpheus.explain_floor("a child in a park")["matched"] == "child"
+
+
+def test_the_explainer_stays_silent_on_clean_text():
+    assert morpheus.explain_floor(
+        "traveler on hover motorcycle, desert, two suns, painterly") is None
+    assert morpheus.explain_adulthood_negation("old, wrinkles") is None
+
+
+def test_the_explainer_never_decides_anything():
+    """floor_check remains the sole authority. This must not become a second
+    opinion that can disagree with it — it is called only after a refusal."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    for line in src.splitlines():
+        s = line.strip()
+        if "explain_floor(" in s or "explain_adulthood_negation(" in s:
+            assert s.startswith("_why") or "log.warning" in s or s.startswith("#"), \
+                f"explainer used outside logging: {s}"
+
+
+def test_the_matched_term_is_bounded():
+    """The term goes in the log; the surrounding prompt never does."""
+    long = "child " + ("x" * 500)
+    r = morpheus.explain_floor(long)
+    assert r and len(r["matched"]) <= 40
+
+
 # ── The bypass this check exists for — MUST stay blocked ─────────────────────
 @pytest.mark.parametrize("neg", [
     "adult", "adults", "mature", "grown", "grown up", "grownup",

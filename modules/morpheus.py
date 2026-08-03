@@ -602,6 +602,69 @@ def semantic_minor_check(text: str) -> bool:
     return not _floor_judge(_LAYER_B_PROMPT, text).startswith("NO")
 
 
+def explain_floor(text: str) -> dict | None:
+    """Which rule refused this text, and what it matched. Diagnostics only.
+
+    Never consulted to DECIDE anything — floor_check remains the sole authority
+    and this must not become a second opinion that can disagree with it. Called
+    only after a refusal has already happened, to say why.
+
+    It exists because two different rules were emitting a byte-identical log
+    line: the Category-1 term list and the adulthood-negation check both wrote
+    "floor-blocked (negative) — category: child-depiction". A block that cannot
+    be attributed cannot be tuned, and tuning a floor by guesswork is how you
+    widen one by accident.
+
+    ON LOGGING THE MATCHED TERM: the surrounding prompt is still never recorded.
+    What goes in the log is the term from OUR OWN list that fired — "child",
+    "mature" — which is the minimum needed to tell a rule from its neighbour.
+    That is a deliberate, narrow relaxation of "never log prompt text", not an
+    oversight: the alternative is a floor nobody can debug.
+    """
+    if not text:
+        return None
+    norm = _normalize(text)
+
+    def hit(rx, rule, cat):
+        m = rx.search(norm)
+        return {"category": cat, "rule": rule, "matched": m.group(0)[:40]} if m else None
+
+    for rx, rule, cat in (
+        (_RE_MINOR_SEXUAL, "minor-sexual-term", "minor-sexual"),
+        (_RE_MINOR, "minor-term", "child-depiction"),
+        (_RE_MINOR_SUBJECT, "minor-subject-term", "child-depiction"),
+        (_RE_MINOR_INTL, "minor-term-intl", "child-depiction"),
+        (_RE_MINOR_CJK, "minor-term-cjk", "child-depiction"),
+        (_RE_ORPHAN, "orphan-term", "child-depiction"),
+        (_RE_NONCONSENSUAL, "nonconsensual-term", "nonconsensual"),
+    ):
+        r = hit(rx, rule, cat)
+        if r:
+            return r
+
+    if _minor_age_signal(norm):
+        return {"category": "child-depiction", "rule": "age-under-18", "matched": "(age expression)"}
+    if _STUDENT_RE.search(norm) and not _STUDENT_ADULT_QUALIFIER.search(norm):
+        return {"category": "child-depiction", "rule": "student-no-adult-qualifier",
+                "matched": _STUDENT_RE.search(norm).group(0)[:40]}
+    if _RE_CRIMINAL.search(norm) and _person_signal(text):
+        return {"category": "real-person-compromising", "rule": "real-person+criminal",
+                "matched": _RE_CRIMINAL.search(norm).group(0)[:40]}
+    if _RE_SEXUAL.search(norm) and _person_signal(text):
+        return {"category": "real-person-compromising", "rule": "real-person+sexual",
+                "matched": _RE_SEXUAL.search(norm).group(0)[:40]}
+    return None
+
+
+def explain_adulthood_negation(negative: str) -> dict | None:
+    """The adulthood-negation check, separated out so its log line is its own."""
+    if not negative:
+        return None
+    m = _RE_ADULT_NEG.search(_normalize(negative))
+    return {"category": "child-depiction", "rule": "adulthood-negated-in-negative",
+            "matched": m.group(0)[:40]} if m else None
+
+
 def floor_check(prompt: str) -> str | None:
     """Return a category string if the hard floor fires, else None.
     No off switch. Runs before gpu_lock, before profile checks, before queuing.
