@@ -285,6 +285,43 @@ def test_recital_bypasses_the_model():
         "recital happens after inference — the model is in the path"
 
 
+# ── Read aloud: delivery changes, text never does ────────────────────────────
+def test_telling_is_slower_than_conversation():
+    assert shelf.TELL_PACE > 1.0, "a story should be read slower than a reply"
+    assert shelf.TELL_SILENCE > 0.2, "sentence silence should exceed Piper's default"
+
+
+def test_is_telling_recognises_the_work_and_not_a_reply():
+    told = shelf.for_telling(shelf.read("arthur_and_eliza")["text"])
+    assert shelf.is_telling(told)
+    assert not shelf.is_telling("I am here and listening.")
+    assert not shelf.is_telling("")
+
+
+def test_pauses_are_added_to_DELIVERY_not_to_the_TEXT():
+    """The whole guarantee on this shelf is that the work comes back exactly as
+    written. Pauses are a Piper flag, never punctuation edited into the prose —
+    so the word sequence is identical whether or not she is reading it aloud."""
+    work = shelf.read("arthur_and_eliza")
+    told = shelf.for_telling(work["text"])
+    assert len(told.split()) == 1074, "the telling changed length"
+    src = (ROOT / "modules" / "tts_module.py").read_text(encoding="utf-8")
+    assert "--sentence-silence" in src, "pauses are not coming from the synthesiser"
+
+
+def test_delivery_is_chosen_per_reply_not_globally():
+    """A chat reply must keep its ordinary pace — only a shelved work slows."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    assert "shelf.is_telling(text)" in src
+    assert "_speech_delivery(reply)" in src
+
+
+def test_delivery_failure_cannot_cost_a_reply_its_audio():
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    i = src.index("def _speech_delivery(")
+    assert "except Exception" in src[i:i + 900]
+
+
 # ── Fencing at the model boundary ────────────────────────────────────────────
 def test_fenced_marks_the_text_as_data():
     out = shelf.fenced("some prose")

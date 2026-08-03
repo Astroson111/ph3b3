@@ -369,7 +369,8 @@ class TTSModule:
                 prod.join(timeout=2)
 
     def synthesize_to_b64(self, text: str, voice=None,
-                          length_scale: float | None = None) -> str | None:
+                          length_scale: float | None = None,
+                          sentence_silence: float | None = None) -> str | None:
         """Run Piper and return base64-encoded WAV, or None if unavailable. `voice`
         is a registry code (e.g. 'es'); default = the selected primary voice.
 
@@ -399,6 +400,14 @@ class TTSModule:
                     # number and a subprocess, and it should not trust a caller
                     # any more than firmware trusts a wire.
                     cmd += ["--length-scale", f"{max(0.5, min(2.0, float(length_scale))):.3f}"]
+                if sentence_silence is not None:
+                    # Seconds of silence after each sentence. This is the honest
+                    # way to add pauses to a reading: it changes the DELIVERY and
+                    # never the text, so a work stored verbatim is still spoken
+                    # verbatim. Editing pauses into the prose would change what
+                    # the file says.
+                    cmd += ["--sentence-silence",
+                            f"{max(0.0, min(2.0, float(sentence_silence))):.2f}"]
                 proc = subprocess.run(
                     cmd,
                     input=tts_text.encode("utf-8"),

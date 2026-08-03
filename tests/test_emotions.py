@@ -392,7 +392,10 @@ def test_pace_is_fixed_for_a_whole_reply():
     mid-sentence would speed the back half against the front."""
     src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
     assert '"pace": pace' in src
-    assert "_tts_stream_new(chunks, out_voice, _emotion_pace())" in src
+    # Pace now arrives via _speech_delivery, which returns the emotion pace for
+    # an ordinary reply and a slower story pace for a shelved work. Still chosen
+    # ONCE per reply at manifest time, which is what this test is about.
+    assert "_tts_stream_new(chunks, out_voice, *_speech_delivery(reply))" in src
 
 
 # ── Hot-reload ───────────────────────────────────────────────────────────────

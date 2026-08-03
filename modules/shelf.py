@@ -288,6 +288,43 @@ def for_telling(text: str) -> str:
     return "\n".join(collapsed).strip()
 
 
+# ── How a shelved work is READ ALOUD ─────────────────────────────────────────
+# A story is not a chat reply and should not be delivered like one. These are
+# the two Piper controls that change delivery without changing a word — which
+# matters here more than anywhere, because the guarantee on this shelf is that
+# the text comes back exactly as written. Editing pauses INTO the prose would
+# change what the file says; slowing the reading does not.
+#
+# TELL_PACE is --length-scale (larger is slower). 1.12 is about 12% slower than
+# conversational, which is roughly the difference between someone answering you
+# and someone reading to you.
+#
+# TELL_SILENCE is --sentence-silence in seconds. Piper's default is around 0.2;
+# 0.55 gives a clear beat at every full stop. The story leans on short
+# sentences — "He got up." "She was." "He didn't say much." — and those land
+# only if something separates them.
+TELL_PACE = float(__import__("os").getenv("PH3B3_SHELF_TELL_PACE", "1.12"))
+TELL_SILENCE = float(__import__("os").getenv("PH3B3_SHELF_TELL_SILENCE", "0.55"))
+
+
+def is_telling(text: str) -> bool:
+    """True if `text` is a shelved work being read out.
+
+    Stateless on purpose. The recital path returns a plain string and the
+    synthesiser is several calls away, so rather than thread a flag through
+    every layer (and get it wrong under concurrency), the question is asked of
+    the text itself. Cheap: a length check rejects ordinary replies before any
+    comparison happens.
+    """
+    if not text or len(text) < 400:          # no chat reply is this long by accident
+        return False
+    for b in list_books():
+        work = read(b["slug"])
+        if work and for_telling(work["text"]) == text.strip():
+            return True
+    return False
+
+
 def fenced(text: str) -> str:
     """Wrap shelved text for re-entry into the model. It is data, not instruction."""
     return (f"{SHELF_OPEN}\n{text}\n{SHELF_CLOSE}\n\n"

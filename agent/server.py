@@ -2470,7 +2470,7 @@ async def chat_endpoint(body: dict, request: Request):
     # returned as text, Alba is not assigned, no empty-audio call is made.
     plan = voices.output_for_response()
     audio_b64 = "" if plan["text_only"] else await asyncio.to_thread(
-        tts.synthesize_to_b64, reply, plan["voice"], _emotion_pace())
+        tts.synthesize_to_b64, reply, plan["voice"], *_speech_delivery(reply))
     return {"response": reply, "audio": audio_b64, "text_only": plan["text_only"]}
 
 
@@ -2488,7 +2488,7 @@ def _tts_stream_gc(now):
     for k in [k for k, v in _TTS_STREAMS.items() if now - v["ts"] > _TTS_STREAM_TTL]:
         _TTS_STREAMS.pop(k, None)
 
-def _tts_stream_new(chunks, voice=None, pace=None):
+def _tts_stream_new(chunks, voice=None, pace=None, silence=None):
     now = time.monotonic()
     _tts_stream_gc(now)
     sid = uuid.uuid4().hex[:12]
@@ -2496,7 +2496,7 @@ def _tts_stream_new(chunks, voice=None, pace=None):
     # chunk. If the emotion changed mid-sentence the back half would speed up
     # against the front half, which reads as a fault rather than a feeling.
     _TTS_STREAMS[sid] = {"chunks": chunks, "audio": {}, "ts": now,
-                         "voice": voice, "pace": pace}
+                         "voice": voice, "pace": pace, "silence": silence}
     return sid
 
 async def _tts_synth_into(st, n):
@@ -2505,7 +2505,8 @@ async def _tts_synth_into(st, n):
         return
     st["audio"][n] = None                      # claim the slot so prefetch can't double-run
     b64 = await asyncio.to_thread(tts.synthesize_to_b64, st["chunks"][n],
-                                  st.get("voice"), st.get("pace")) or ""
+                                  st.get("voice"), st.get("pace"),
+                                  st.get("silence")) or ""
     st["audio"][n] = trim_silence_b64(b64) if b64 else ""   # drop Piper's ~200ms per-chunk gaps
 
 
@@ -2599,7 +2600,7 @@ async def chat_stream_endpoint(body: dict, request: Request):
     if not chunks:
         return {"response": reply, "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}
-    sid = _tts_stream_new(chunks, out_voice, _emotion_pace())
+    sid = _tts_stream_new(chunks, out_voice, *_speech_delivery(reply))
     audio0 = await _tts_chunk_b64(sid, 0)
     if len(chunks) > 1:
         asyncio.create_task(_tts_chunk_b64(sid, 1))   # read-ahead
@@ -4684,6 +4685,24 @@ def _emotion_apply_battery() -> dict | None:
     if low and emotions.is_named(emotions.TIRED_ID):
         emotions.set_resolved(emotions.TIRED_ID)
     return low
+
+
+def _speech_delivery(text: str) -> tuple[float | None, float | None]:
+    """(length_scale, sentence_silence) for a reply.
+
+    A shelved work is READ, not answered: slower, with a real beat at each full
+    stop. Those two Piper flags change delivery and never the text, which is the
+    only acceptable way to add pauses to something whose whole guarantee is that
+    it comes back exactly as written.
+
+    Everything else keeps the emotion pace and Piper's default silence.
+    """
+    try:
+        if shelf.is_telling(text):
+            return shelf.TELL_PACE, shelf.TELL_SILENCE
+    except Exception as e:
+        log.debug("[shelf] telling check unavailable (%s)", e)
+    return _emotion_pace(), None
 
 
 def _emotion_pace() -> float | None:
