@@ -124,6 +124,7 @@ from anime_module import AnimeModule
 from stories_module import StoriesModule
 import emotions                       # emotional state table (config/emotions.yaml)
 import shelf                          # permanent read-only works (stories/)
+import canon                          # verbatim store for stories SHE wrote
 from notes_module import NotesModule
 from timer_module import TimerModule
 from reminders_module import RemindersModule
@@ -538,6 +539,8 @@ TOOLS = [
     {"type":"function","function":{"name":"anime_random","description":"Random anime recommendation","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"add_story","description":"Save a story told to Ph3b3","parameters":{"type":"object","properties":{"name":{"type":"string"},"story":{"type":"string"}},"required":["name","story"]}}},
     {"type":"function","function":{"name":"recall_stories","description":"Recall stories by topic","parameters":{"type":"object","properties":{"topic":{"type":"string"}}}}},
+    {"type":"function","function":{"name":"file_story","description":"Save a story YOU just wrote or told, word for word, so it can be told again later. Call this right after telling an original story the user liked or asked you to keep. Pass the story's exact text — not a summary. Do NOT use this for the permanent works on the shelf (they are already stored), and do not use it for ordinary conversation.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"A short title for the story"},"text":{"type":"string","description":"The story's full text, exactly as told"}},"required":["title","text"]}}},
+    {"type":"function","function":{"name":"retell_story","description":"Look up a story YOU previously wrote and filed, by loose title — case, spaces and underscores do not matter. Use when asked to tell one of your own stories again, or when asked which stories you have written. Omit 'title' to list them. Returns the original text; you may retell it naturally in your own words unless asked for it exactly. For the permanent authored works like 'Arthur and Eliza', use read_shelf_story instead.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"Title as the user said it. Omit to list what has been filed."}},"required":[]}}},
     {"type":"function","function":{"name":"read_shelf_story","description":"Read one of the PERMANENT works on Ph3b3's shelf — authored stories that belong to this system, like 'Arthur and Eliza'. Use when asked to read, tell, recite or quote one of these by name, or when asked what stories/works she has. Accepts a loose title: case, spaces and underscores do not matter. Omit 'title' to list everything on the shelf. Returns the story text verbatim — quote it exactly, never rewrite or summarize it unless asked.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"Title as the user said it, e.g. 'Arthur and Eliza'. Omit to list the shelf."}},"required":[]}}},
     {"type":"function","function":{"name":"add_note","description":"Save a quick note","parameters":{"type":"object","properties":{"content":{"type":"string"},"tag":{"type":"string","default":"general"}},"required":["content"]}}},
     {"type":"function","function":{"name":"read_last_note","description":"Read the most recent note","parameters":{"type":"object","properties":{"tag":{"type":"string"}}}}},
@@ -787,6 +790,8 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "add_story": result = stories.add_story_from_person(args["name"], args["story"])
         elif name == "recall_stories": result = stories.recall_stories(args.get("topic"))
         elif name == "read_shelf_story": result = _tool_read_shelf_story(args)
+        elif name == "file_story":    result = await asyncio.to_thread(_tool_file_story, args)
+        elif name == "retell_story":  result = _tool_retell_story(args)
         elif name == "add_note": result = notes.add(args["content"], args.get("tag","general"))
         elif name == "read_last_note": result = notes.read_last(args.get("tag"))
         elif name == "search_notes": result = notes.search(args["query"])
@@ -952,6 +957,59 @@ async def execute_tool(name, args, device="nyx", session_id=""):
 # SAME checks the HTTP routes call, and return the refusal as speech rather than
 # raising — she says why, out loud, instead of a 403 vanishing into a tool error.
 _amphion_last_job: str | None = None
+
+
+def _tool_file_story(args: dict) -> str:
+    """File a story she just told, verbatim.
+
+    Runs on a thread because canon.save() pays for a semantic floor pass on
+    write, which is a model call — awaiting it inline would stall the event loop
+    mid-turn.
+
+    The floor's refusal is passed through as canon phrased it, not reworded into
+    something vaguer. If it will not file a story, the honest answer is that it
+    will not file it.
+    """
+    title = (args.get("title") or "").strip()
+    text  = (args.get("text") or "").strip()
+    if not title or not text:
+        return "I need both a title and the story's text to file it."
+    try:
+        r = canon.save(title, text)
+    except Exception as e:
+        log.warning("[canon] save failed: %s", e)
+        return "I couldn't file that one — something went wrong writing it."
+    if not r.get("ok"):
+        return r.get("reason") or "I can't file that one."
+    return (f"Filed “{r['title']}” word for word. "
+            "Ask for it by name any time and I'll have the original.")
+
+
+def _tool_retell_story(args: dict) -> str:
+    """Look up a story she filed. Every failure names what does exist.
+
+    Unlike the shelf, the text comes back WITHOUT an instruction to quote it
+    exactly. canon's whole premise is "store exact, speak freely" — the original
+    is safe on disk, so retelling it in her own words costs nothing. The shelf
+    holds someone else's authored work and is the opposite case.
+    """
+    title = (args.get("title") or "").strip()
+    if not title:
+        return canon.describe() + " Ask for one by name to hear it again."
+
+    r = canon.resolve(title)
+    if r["ok"]:
+        s = r["story"]
+        return (f"“{s['title']}”, filed {s.get('date_saved') or 'earlier'}. "
+                "The original text follows — retell it naturally in your own "
+                "words unless the user asks for it exactly as written:\n\n"
+                + canon.fenced(s["text"]))
+    if r["reason"] == "refused":
+        return r.get("detail") or canon.REFUSAL_READ
+    if r["reason"] == "empty":
+        return "I haven't filed any stories yet."
+    return (f"I don't have a filed story by that name. "
+            + canon.describe(r.get("candidates"), r.get("total")))
 
 
 def _tool_read_shelf_story(args: dict) -> str:

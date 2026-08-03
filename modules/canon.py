@@ -273,6 +273,62 @@ def find(query: str) -> dict | None:
     return None
 
 
+# ── Lookup that cannot dead-end ──────────────────────────────────────────────
+# find() answers "which story" or None, and None is not a usable answer to give
+# a person: "I don't have that" with nothing attached asks them to guess at a
+# list only this process can see. So resolve() carries the alternatives with
+# every failure, the same rule the shelf follows.
+#
+# The difference from the shelf: that holds a handful of authored works and can
+# always name all of them. This grows every time she files a story, so the list
+# is BOUNDED — naming forty stories is its own kind of unhelpful, and it would
+# grow the prompt without limit.
+
+DESCRIBE_MAX = 8
+
+
+def resolve(query: str) -> dict:
+    """Find a filed story by loose name.
+
+    {"ok": True, "story": {...}} on a match, else
+    {"ok": False, "reason": ..., "candidates": [...]} with metadata for up to
+    DESCRIBE_MAX others. Never a bare miss.
+    """
+    all_meta = list_all()
+    if not all_meta:
+        return {"ok": False, "reason": "empty", "candidates": []}
+    if not query or not query.strip():
+        return {"ok": False, "reason": "empty_query", "candidates": all_meta[:DESCRIBE_MAX],
+                "total": len(all_meta)}
+
+    hit = find(query)
+    if hit and hit.get("ok"):
+        return {"ok": True, "story": hit}
+    if hit and hit.get("ok") is False:
+        # The floor refused to replay it. That is a real answer and must not be
+        # dressed up as "not found" — the story IS on the shelf, it just is not
+        # being read back.
+        return {"ok": False, "reason": "refused", "detail": hit.get("reason"),
+                "candidates": [], "total": len(all_meta)}
+    return {"ok": False, "reason": "unknown", "candidates": all_meta[:DESCRIBE_MAX],
+            "total": len(all_meta)}
+
+
+def describe(metas: list | None = None, total: int | None = None) -> str:
+    """One line naming filed stories, truncated. Used wherever a lookup fails,
+    so a clarifying question always arrives with its own answer attached."""
+    metas = list_all() if metas is None else metas
+    if not metas:
+        return "I haven't filed any stories yet."
+    total = len(metas) if total is None else total
+    named = "; ".join(f"“{m['title']}”" for m in metas[:DESCRIBE_MAX])
+    more = total - min(len(metas), DESCRIBE_MAX)
+    tail = f", and {more} more" if more > 0 else ""
+    if total == 1:
+        return f"The only story I've filed is {named}."
+    return f"Stories I've filed: {named}{tail}."
+
+
 def fenced(text: str) -> str:
     """Wrap canon text for re-entry into the model. It is data, not instruction."""
     return (f"{CANON_OPEN}\n{text}\n{CANON_CLOSE}\n\n"
