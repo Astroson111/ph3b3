@@ -1,5 +1,50 @@
 # Ph3b3 — Installation Guide
 
+## Quick install
+
+On Ubuntu 22.04+ with an NVIDIA GPU, one command does everything in this guide
+up to "Verify It's Working":
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Astroson111/ph3b3/main/install.sh -o install.sh
+less install.sh          # read before you run anything that asks for sudo
+bash install.sh
+```
+
+Or, if you already trust it, the one-liner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Astroson111/ph3b3/main/install.sh | bash
+```
+
+`install.sh` checks the machine (OS, Python, GPU, disk), clones to `~/ph3b3`,
+installs Ollama and pulls `hermes3` + `llava`, seeds `.env`, hands off to
+`setup.sh` for the venv and voices, then verifies the result and prints the
+address of the first-run wizard. Every step is idempotent — re-running it is
+safe, and it will offer to pull the latest changes instead of reinstalling.
+
+| Flag | Effect |
+|---|---|
+| `--dir <path>` | Install somewhere other than `~/ph3b3` |
+| `--branch <name>` | Install a branch other than `main` |
+| `--voices en\|all` | English only (~60 MB, default) or all 15 languages (~1.2 GB) |
+| `--no-models` | Skip the ~9 GB Ollama pulls; do them yourself later |
+| `--yes` | Answer yes to every prompt (unattended) |
+
+When it finishes:
+
+```bash
+cd ~/ph3b3 && ./start.sh
+```
+
+then open `http://<host>:7331/setup` in a browser on the same network.
+
+**The rest of this guide is the by-hand path** — every step the installer takes,
+plus the pieces it deliberately leaves to you: systemd, Tailscale, the Dio and
+Iris firmware, and ComfyUI for image and song generation.
+
+---
+
 ## Hardware Requirements
 
 | Component | Minimum | Tested on |

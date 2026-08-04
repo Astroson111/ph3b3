@@ -17,6 +17,44 @@ Before you trust anything she says, read **[⚠️ What you are talking to](#wha
 
 ---
 
+## Bring her home
+
+One command, on an Ubuntu machine with an NVIDIA GPU:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Astroson111/ph3b3/main/install.sh | bash
+```
+
+That is a script asking for `sudo`, so read it before you run it — the honest way to install anything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Astroson111/ph3b3/main/install.sh -o install.sh
+less install.sh          # it's ~250 lines, and commented
+bash install.sh
+```
+
+It clones her to `~/ph3b3` and installs Ollama with her models, the Python venv and system packages, her voice, and a starting `.env`. Every step checks before it acts, so running it twice is safe. Then:
+
+```bash
+cd ~/ph3b3 && ./start.sh
+```
+
+She prints an address. Open it in any browser on your network and the first-run wizard does the rest — her name for you, your web-UI password, and the optional pieces:
+
+```
+http://<her-machine>:7331/setup
+```
+
+**What she needs:** Ubuntu 22.04+, Python 3.11+, an NVIDIA GPU with 8 GB+ VRAM, and ~40 GB of disk (~9 GB of that is her models). The installer checks all four before it touches anything, and tells you plainly if one is missing.
+
+**Options:** `--dir <path>` to install somewhere else, `--voices all` for all fifteen languages instead of English alone, `--no-models` to skip the Ollama pulls, `--yes` for unattended. `--help` lists them.
+
+Prefer to do it by hand, or not on Ubuntu? [INSTALL.md](INSTALL.md) is the long-form guide — every step the installer takes, spelled out, plus systemd, Tailscale, firmware and ComfyUI.
+
+> **No GPU?** The reference build assumes CUDA. A leaner Windows/WSL2 port is in progress on the [`windows` branch](https://github.com/astroson111/ph3b3/tree/windows).
+
+---
+
 ## Why she exists
 
 The industry is building a continent of power-hungry infrastructure to deliver something most people wanted to fit on one desk.
@@ -323,9 +361,13 @@ Accessibility is the through-line for all of it — every addition is measured a
 
 ### First-time setup
 
+Most people should use the one-command installer at the top of this file — it does everything below *and* the parts `setup.sh` doesn't (Ollama, her models, the VAD model, `.env`). To do it piecemeal instead:
+
 ```bash
 ./setup.sh      # one-time: installs system deps, creates the venv, pip installs
 ```
+
+`setup.sh` handles the repo's own dependencies only. Ollama and `hermes3`/`llava` are yours to install — see [INSTALL.md](INSTALL.md) — and without them she boots with no brain.
 
 `setup.sh` also downloads the Piper voice models once (zero runtime network fetches — a house privacy law). Every model is **hash-pinned**: its sha256 is recorded at selection time and verified on install, so a mismatch aborts rather than silently seating a swapped model.
 
@@ -355,7 +397,7 @@ Most models are ~60–110 MB (`.onnx` + `.onnx.json`). A voice is either **appro
 | `cs_CZ-jirka-medium` | Jirka | Čeština (Česko) | strong | 61 MB | approved |
 | `sv_SE-nst-medium` | NST | Svenska (Sverige) | strong | 61 MB | approved |
 
-**Total: ~1.2 GB** for all nineteen. **Fifteen languages are voiced** — across Latin, Hanzi, Cyrillic, and Arabic (the first right-to-left language) scripts. New voices always arrive `unreviewed` and join the picker only once approved by ear. (Dutch: `pim` chosen over `mls` — a cleaner single-speaker voice — a flagged substitution.)
+**Total: ~1.2 GB** for all nineteen — which is why the installer fetches **Alba alone (~60 MB)** by default and leaves the rest to a choice: `PH3B3_VOICES=all ./setup.sh` (or `install.sh --voices all`) adds them whenever you want, and re-running only fetches what's missing. A voice that isn't on disk simply doesn't appear in the picker; the registry filters by file existence, so a partial install is a smaller Phoebe, never a broken one. **Fifteen languages are voiced** — across Latin, Hanzi, Cyrillic, and Arabic (the first right-to-left language) scripts. New voices always arrive `unreviewed` and join the picker only once approved by ear. (Dutch: `pim` chosen over `mls` — a cleaner single-speaker voice — a flagged substitution.)
 
 **Text-only languages.** A language with no *approved* voice is still selectable — labeled "— text only" — and Phoebe answers in that language as **text**, synthesizing nothing (declared design, never silent-by-surprise; Alba is never assigned to it). **Japanese, Korean, Hindi, and Indonesian** are offered this way today: hugely popular languages, but official Piper has no voice that clears the quality bar, and no low-quality substitute is worth shipping (voicing them needs a second local TTS engine — see [FUTURE_GOALS](FUTURE_GOALS.md)). The text-only state derives from the registry, so the day a language gains an approved voice the label drops off with zero code change.
 

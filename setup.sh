@@ -14,6 +14,24 @@ if [ ! -f "$PH3B3_DIR/soul/soul.md" ]; then
     echo "Soul seeded from soul_public.md — customise soul/soul.md to give Ph3b3 her full identity."
 fi
 
+# .env must exist or start.sh boots without credentials and warns. Seed it from
+# the example; the first-run web wizard fills in the real values. Never overwrite
+# an existing .env — that file is the user's, and it holds their secrets.
+if [ ! -f "$PH3B3_DIR/.env" ]; then
+    cp "$PH3B3_DIR/.env.example" "$PH3B3_DIR/.env"
+    chmod 600 "$PH3B3_DIR/.env"
+    echo ".env seeded from .env.example — set your values at http://<host>:7331/setup on first run."
+fi
+
+# ── Silero VAD model (2.3 MB) ─────────────────────────────────────────────────
+# modules/audio_monitor.py loads this at import; it is gitignored (*.onnx), so a
+# fresh clone has no copy and voice capture dies on the first push-to-talk.
+# Hash-pinned like the voices — same rule, no silent swap.
+VAD_MODEL="$PH3B3_DIR/models/silero_vad.onnx"
+VAD_SHA=1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+VAD_URL="https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
+mkdir -p "$PH3B3_DIR/models"
+
 # ── Piper TTS voices (one-time download; ZERO runtime network fetches) ─────────
 # Alba (en) is Phoebe's voice; the others power the Language & Voice selector.
 # ~60 MB each. Every model is HASH-PINNED: the sha256 below was recorded at
@@ -103,6 +121,16 @@ verify() {  # verify <file> <expected-sha256>
     rm -f "$1"; return 1
   fi
 }
+
+# Fetch the VAD model now that verify() exists (variables set above).
+if [ -f "$VAD_MODEL" ] && verify "$VAD_MODEL" "$VAD_SHA"; then
+  echo "Silero VAD model already present (hash ok)"
+else
+  echo "Fetching Silero VAD model (2.3 MB)..."
+  curl -fsSL "$VAD_URL" -o "$VAD_MODEL"
+  verify "$VAD_MODEL" "$VAD_SHA" || { echo "ABORT: silero_vad.onnx"; exit 1; }
+  echo "  ✓ silero_vad.onnx"
+fi
 # Model files the Captain rejected in the review flow (voice_review.json keys are
 # registry codes; map them to model filenames via voices.yaml) — never re-fetched.
 REJECTED_MODELS=""
@@ -120,8 +148,23 @@ PY
 )"
 fi
 
-echo "Fetching Piper voices (~1.2 GB total, one-time, hash-verified) → $VOICE_DIR"
+# Voice tier. 'all' (the default, unchanged) fetches every registry voice;
+# 'en' fetches Alba alone (~60 MB) so a first install is a minute, not an hour.
+# This is purely a download choice, never a code path: modules/voices.py filters
+# the picker by file existence, so an un-fetched voice is simply absent, and
+# re-running with PH3B3_VOICES=all later adds the rest.
+VOICE_TIER="${PH3B3_VOICES:-all}"
+case "$VOICE_TIER" in
+  all) echo "Fetching Piper voices (~1.2 GB total, one-time, hash-verified) → $VOICE_DIR" ;;
+  en)  echo "Fetching Piper voice: Alba only (~60 MB, hash-verified) → $VOICE_DIR"
+       echo "  (PH3B3_VOICES=all ./setup.sh adds the other 14 languages)" ;;
+  *)   echo "PH3B3_VOICES must be 'en' or 'all', got '$VOICE_TIER'"; exit 1 ;;
+esac
+
 for name in "${!VOICES[@]}"; do
+  if [ "$VOICE_TIER" = "en" ] && [ "$name" != "en_GB-alba-medium" ]; then
+    continue
+  fi
   if printf '%s\n' $REJECTED_MODELS | grep -qx "$name"; then
     echo "  $name rejected by review — skipping"; continue
   fi
