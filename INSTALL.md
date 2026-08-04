@@ -312,111 +312,47 @@ curl -u <user>:<pass> https://localhost:7331/ready
 
 ---
 
-## Firmware: Dio (Ph3b3-Chan, M5Stack CoreS3)
+## Firmware: the bodies
 
-Dio runs the **Ph3b3-Chan** firmware. The source lives in `firmware/Ph3b3-Chan/`.
+Ph3b3 is the server. Her two bodies each live in their own repository, because
+each is a separate build with its own toolchain, its own credentials file and
+its own device. Neither works without a Ph3b3 server on the network — they
+record, send, and play back what she says.
 
-> **Flash with Arduino IDE only.** A `platformio.ini` is present in `firmware/`
-> but PlatformIO produces a truncated binary for this board. Do not use
-> `pio run`.
+| Body | Hardware | Repo |
+|---|---|---|
+| **Dio** (Ph3b3-Chan) | M5Stack CoreS3 + Stack-Chan servo base | [Astroson111/Dionysus](https://github.com/Astroson111/Dionysus) |
+| **Iris** | M5StickS3 | [Astroson111/iris](https://github.com/Astroson111/iris) |
 
-### 1. Credentials
-
-```bash
-cp firmware/Ph3b3-Chan/secrets.example.h firmware/Ph3b3-Chan/secrets.h
-```
-
-Edit `secrets.h` and fill in:
-
-| Define | Value |
-|---|---|
-| `SC_PH3B3_USER` | Your `PH3B3_USER` from `.env` |
-| `SC_PH3B3_PASS` | Your `PH3B3_PASSWORD` from `.env` |
-
-### 2. Server hostname
-
-Ph3b3-Chan's server address is hardcoded in two places — edit both before
-flashing to match your Tailscale hostname:
-
-- `firmware/Ph3b3-Chan/TalkApp.h` — `TalkApp::HOST` (around line 876)
-- `firmware/Ph3b3-Chan/Ph3b3-Chan.ino` — the `http.begin(...)` call (line 138)
-
-Replace `ph3b3.<tailnet>.ts.net` with your own `<device>.<tailnet>.ts.net`.
-
-### 3. WiFi
-
-WiFi credentials can be provisioned two ways:
-- **Before flash:** set `SC_WIFI_SSID` and `SC_WIFI_PASS` in `Ph3b3-Chan.ino`
-  (lines 25–26)
-- **After flash:** add networks from Ph3b3's Control Panel Networks tab — Dio
-  pulls them from Ph3b3 automatically on next connect
-
-### 4. Flash
-
-Open `firmware/Ph3b3-Chan/Ph3b3-Chan.ino` in Arduino IDE.
-
-Board: **M5Stack → M5Stack-CoreS3**
-
-Add the M5Stack boards URL in Arduino IDE preferences if not already present:
-```
-https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json
-```
-
-Required libraries (Arduino IDE Library Manager):
-
-| Library | Manager name |
-|---|---|
-| M5Unified | `M5Unified` |
-| ArduinoJson | `ArduinoJson` |
-| StackChan-BSP | `StackChan-BSP` (by M5Stack) |
-
-All other dependencies (`WiFiClientSecure`, `HTTPClient`, `Preferences`, `SD`,
-`WebServer`, `DNSServer`) are bundled with the `m5stack:esp32` core and require
-no separate install.
-
-Flash via Sketch → Upload.
-
----
-
-## Firmware: Iris (M5StickS3)
-
-Iris is a **separate project** — her source lives at `~/Arduino/Iris/` and is
-**not included in this repository**.
-
-### Install arduino-cli (one-time)
+Both flash with one command, after Ph3b3 herself is running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=~/.local/bin sh
-~/.local/bin/arduino-cli config init
-~/.local/bin/arduino-cli config add board_manager.additional_urls \
-    https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json
-~/.local/bin/arduino-cli core update-index
-~/.local/bin/arduino-cli core install m5stack:esp32
-~/.local/bin/arduino-cli lib install M5Unified M5GFX "M5Stack_Avatar" "WiFiManager"
+git clone https://github.com/Astroson111/Dionysus && cd Dionysus
+cp Ph3b3-Chan/secrets.example.h Ph3b3-Chan/secrets.h    # your host, port, user, pass
+./flash.sh
 ```
-
-### Credentials
 
 ```bash
-cp ~/Arduino/Iris/secrets.example.h ~/Arduino/Iris/secrets.h
+git clone https://github.com/Astroson111/iris && cd iris
+cp secrets.example.h secrets.h                          # your host, user, pass
+./flash.sh
 ```
 
-Edit `secrets.h` and fill in:
+Each `flash.sh` installs `arduino-cli`, the M5Stack core and the libraries it
+needs, then builds, verifies and writes. Full setup — hardware, first boot,
+WiFi, power, and the landmines particular to each board — lives in each repo:
+Dionysus's `QUICKSTART.md` and Iris's `README.md`.
 
-| Define | Value |
-|---|---|
-| `PH3B3_AUTH_USER` | Your `PH3B3_USER` from `.env` |
-| `PH3B3_AUTH_PASS` | Your `PH3B3_PASSWORD` from `.env` |
+**Both are ESP32-S3 and both appear as `/dev/ttyACM*`.** Nothing about the port
+tells you which body you have hold of, and the wrong firmware on the wrong board
+is a bricked robot. Both scripts read the MAC and show it to you before writing
+anything; Dio's will also refuse outright once you've listed your units in
+`units.conf`.
 
-### Compile and flash
-
-Put Iris into download mode: hold the side button ~2 seconds until the green
-LED blinks.
-
-```bash
-~/.local/bin/arduino-cli compile --fqbn m5stack:esp32:m5stack_sticks3 ~/Arduino/Iris
-~/.local/bin/arduino-cli upload --fqbn m5stack:esp32:m5stack_sticks3 -p /dev/ttyACM0 ~/Arduino/Iris
-```
+The credentials each body needs are the `PH3B3_USER` and `PH3B3_PASSWORD` from
+this repo's `.env`, plus the host and port she answers on. They are a first-boot
+seed only — the live values move into the device's own flash and are edited from
+its setup portal, so moving her to a new server never means reflashing.
 
 ---
 
