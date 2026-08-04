@@ -199,6 +199,41 @@ async def lifespan(app):
     mnemosyne.init(os.getenv("JAMENDO_CLIENT_ID", ""))
     log.info("Mnemosyne online")
 
+    def _warm_floor_judge():
+        """Load the Layer B judge model before a real prompt needs it.
+
+        Ollama loads models lazily, so after a restart nothing is in VRAM. The
+        first image prompt is the first thing to call the judge, and that call
+        has a 20s timeout — shorter than a cold multi-gigabyte load. It times
+        out, _floor_judge returns "", and every caller is REQUIRED to treat an
+        empty verdict as the unsafe answer. So the first prompt after every
+        restart could be refused, reported as child-depiction / layer-b-judge,
+        with nothing actually wrong with the prompt.
+
+        That is fail-closed behaving exactly as designed; the flaw is that "the
+        model is still loading" and "the model is unreachable" are the same
+        event to that code path. This removes the ambiguity at the only point
+        where it is cheap to remove — before anyone is waiting on an answer.
+
+        Nothing about the floor is weakened here: no timeout is raised, no
+        verdict is assumed, no category is waived. The judge is simply resident
+        by the time it is asked. It also lets the artistic exception function as
+        written, which it cannot do when the judge it depends on never answers.
+
+        Runs on a daemon thread and every failure is swallowed — a warm-up that
+        could delay or break startup would be a worse bug than the one it fixes.
+        """
+        try:
+            t0 = time.time()
+            morpheus.semantic_minor_check("a landscape photograph of a mountain at dawn")
+            log.info("[safety] Layer B judge warm (%s) in %.1fs — first prompt "
+                     "after boot will not fail closed on a cold model",
+                     morpheus._LAYER_B_MODEL, time.time() - t0)
+        except Exception as e:
+            log.warning("[safety] judge warm-up skipped (%s) — the first prompt "
+                        "may still be refused while the model loads", e)
+    threading.Thread(target=_warm_floor_judge, daemon=True).start()
+
     async def _edit_scratch_janitor():
         # Bound edit-mode scratch to the TTL even when no new uploads arrive.
         while True:
