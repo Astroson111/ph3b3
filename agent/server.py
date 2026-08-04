@@ -4682,6 +4682,46 @@ EDIT_SCRATCH      = Path.home() / "ph3b3_data" / "edit_scratch"
 _EDIT_MAX_BYTES   = 15 * 1024 * 1024        # 15 MB
 _EDIT_MAX_DIM     = 4096                     # long-edge cap; larger inputs are downscaled
 _EDIT_ALLOWED_FMT = {"PNG", "JPEG", "WEBP"}
+
+# ── img2img edit lane: OFF unless explicitly switched on ─────────────────────
+# The audit expected this lane disabled and found it live-but-auth-gated. It was
+# never actually turned off — it only looked shut because an unauthenticated
+# probe gets 401 from the global middleware, which is the same answer every
+# endpoint gives and therefore evidence of nothing.
+#
+# Default OFF, because this is the lane behind the output-check lockout: editing
+# a real face is the one path where a rounded jaw or softened features can read
+# as "young" to the vision model on an image that was fine going in. Generation
+# from a prompt does not carry that risk in the same way.
+#
+# DISABLED IS NOT 404. A missing route is indistinguishable from a typo, a bad
+# deploy, or a rollback, and an operator cannot tell which. The route stays
+# mounted and answers 403 with the reason and the exact switch to flip, so the
+# posture is always legible from the outside — the same rule the model list
+# follows ("appears DISABLED with its reason, never silently omitted").
+#
+# BOTH ends of the lane are gated, not just upload. Gating the entry alone would
+# leave any upload_id still sitting in EDIT_SCRATCH runnable until its TTL swept
+# it, which is a door that is closed but not locked.
+EDIT_LANE_ENABLED = os.getenv("PH3B3_EDIT_LANE", "").strip().lower() in ("1", "true", "yes", "on")
+_EDIT_DISABLED_REASON = (
+    "The image edit lane is disabled on this server. Editing a real face is the "
+    "path that produced the output-check lockout, so it is off by default. "
+    "Set PH3B3_EDIT_LANE=1 and restart to enable it."
+)
+
+
+def _edit_lane_gate():
+    """Refuse with a stated reason when the lane is off. Called by BOTH endpoints."""
+    if not EDIT_LANE_ENABLED:
+        raise HTTPException(status_code=403, detail=_EDIT_DISABLED_REASON)
+
+
+# Stated at boot so the posture is readable from the journal without probing the
+# endpoint. An audit should never have to guess which way this is set.
+log.info("[edit] img2img lane %s%s",
+         "ENABLED (PH3B3_EDIT_LANE set)" if EDIT_LANE_ENABLED else "DISABLED",
+         "" if EDIT_LANE_ENABLED else " — /image/edit/* answers 403 with reason")
 _EDIT_SCRATCH_TTL = 3600                     # 1 hour
 _EDIT_MAX_PENDING = 3                         # concurrent pending edit jobs per session
 _EDIT_PENDING_STATES = frozenset(
@@ -4895,8 +4935,10 @@ async def edit_upload(file: UploadFile = File(...)):
     """Validate an image for img2img editing and stage a clean copy.
 
     Returns {upload_id, width, height}. Auth is enforced by the global
-    session/basic-auth middleware — no anonymous upload surface.
+    session/basic-auth middleware — no anonymous upload surface. The lane itself
+    is off unless PH3B3_EDIT_LANE is set; see _edit_lane_gate.
     """
+    _edit_lane_gate()      # 403 + reason when the lane is off — never a silent accept
     _edit_scratch_sweep()  # opportunistic TTL cleanup
     raw = await file.read()
     if not raw:
@@ -5145,6 +5187,9 @@ async def shelf_read(slug: str):
 
 @app.post("/image/edit/run")
 async def image_edit_run(request: Request, body: dict, background_tasks: BackgroundTasks):
+    # Lane gate first: an upload_id already staged before the lane was switched
+    # off must not remain runnable just because it is sitting in the scratch dir.
+    _edit_lane_gate()
     # upload_id is used to build a path — accept ONLY the 32-hex UUID we minted,
     # so it can never traverse out of the scratch dir.
     upload_id = (body.get("upload_id") or "").strip()
