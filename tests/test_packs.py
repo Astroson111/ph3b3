@@ -132,6 +132,87 @@ def test_uninstall_only_removes_the_pack_directory(sandbox, tmp_path):
     assert not (shelf.PACKS_DIR / "ghosts").exists()
 
 
+def test_uninstall_leaves_every_real_derivative_location_untouched(sandbox, tmp_path, monkeypatch):
+    """The promise, tested against the ACTUAL places output lands rather than a
+    stand-in file: Morpheus images, Amphion songs, the canon store of filed
+    retellings, captures, and chat transcripts.
+
+    Every one is planted, hashed, and re-hashed after an uninstall.
+    """
+    import hashlib
+    data = tmp_path / "data"
+    derivs = {
+        "morpheus image": data / "images" / "a1b2.png",
+        "amphion song": data / "songs" / "ballad.wav",
+        "filed retelling": data / "stories" / "canon" / "her-retelling.md",
+        "capture": data / "captures" / "stackchan_2026.txt",
+        "chat transcript": data / "chats" / "session.jsonl",
+        "companion art": data / "images" / "from_the_hollow.png",
+    }
+    for p in derivs.values():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"work made from a story")
+    before = {k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in derivs.items()}
+
+    packs.install(_make_pack(tmp_path / "src"))
+    packs.uninstall("ghosts")
+
+    for k, p in derivs.items():
+        assert p.exists(), f"{k} was REMOVED by an uninstall"
+        assert hashlib.sha256(p.read_bytes()).hexdigest() == before[k], f"{k} was MODIFIED"
+
+
+def test_uninstall_refuses_if_packs_ever_overlap_a_derivative_root(tmp_path, monkeypatch):
+    """Geography is not a guarantee. If a future layout ever puts packs inside
+    the data tree, uninstall must refuse rather than delete somebody's work."""
+    import paths
+    shared = tmp_path / "shared"
+    (shared / "packs" / "ghosts").mkdir(parents=True)
+    monkeypatch.setattr(packs, "PACKS_DIR", shared / "packs")
+    monkeypatch.setattr(packs, "CANON_DIR", shared / "canon")
+    monkeypatch.setattr(paths, "PH3B3_DATA", shared)
+    monkeypatch.setattr(paths, "MORPHEUS_DATA", shared)
+    with pytest.raises(packs.PackError, match="derivative root"):
+        packs.uninstall("ghosts")
+    assert (shared / "packs" / "ghosts").exists(), "it deleted anyway"
+
+
+def test_no_module_targets_a_path_inside_the_stories_tree():
+    """Nothing may put a derivative where a pack operation can remove it. If a
+    future feature starts writing generated output into stories/packs/<name>/,
+    the uninstall promise quietly breaks.
+
+    Checked on RESOLVED PATHS, not on source text: grepping for "stories" near a
+    write matched stories_module.STORIES_FILE, which is a variable NAME whose
+    value is ~/ph3b3_data/stories.json — nowhere near the stories tree. A test
+    that cannot tell a name from a location fails on the wrong thing.
+    """
+    import importlib
+    from pathlib import Path as _P
+    tree = shelf.STORIES_DIR.resolve()
+    offenders = []
+    for f in sorted((ROOT / "modules").glob("*.py")):
+        if f.name in ("packs.py", "shelf.py", "__init__.py"):
+            continue                      # the installer and the reader, by design
+        try:
+            mod = importlib.import_module(f.stem)
+        except Exception:
+            continue                      # a module that will not import cannot write
+        for attr in dir(mod):
+            try:
+                v = getattr(mod, attr)
+            except Exception:
+                continue
+            if isinstance(v, _P):
+                try:
+                    r = v.resolve()
+                except OSError:
+                    continue
+                if r == tree or tree in r.parents:
+                    offenders.append(f"{f.name}.{attr} -> {r}")
+    assert not offenders, "module paths inside the stories tree: " + "; ".join(offenders)
+
+
 def test_every_delete_site_is_inside_the_packs_directory():
     """Crude counting was the wrong proxy — install() legitimately rmtree's its
     own zip scratch dir twice. What matters is that no delete can name a path

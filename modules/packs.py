@@ -245,14 +245,51 @@ def _read_installed_manifest(d: Path) -> dict | None:
         return None
 
 
+def _assert_disjoint_from_derivatives(target: Path) -> None:
+    """Refuse to delete anything that is, or contains, a derivative root.
+
+    The invariant is currently true by geography: packs live in the repo and
+    everything generated lives in PH3B3_DATA and MORPHEUS_DATA, which are
+    different trees. Geography is not a guarantee — someone sets PH3B3_HOME to
+    the data directory, or a future layout puts them under one root, and a
+    delete that was always safe silently stops being safe.
+
+    So it is checked at the moment of deletion, against the actual configured
+    roots, every time. Cheap, and it converts "these happen to be different
+    places" into "this cannot run if they ever stop being".
+    """
+    roots = []
+    try:
+        from paths import PH3B3_DATA, MORPHEUS_DATA
+    except ImportError:                                  # standalone / test import
+        from modules.paths import PH3B3_DATA, MORPHEUS_DATA
+    roots += [Path(PH3B3_DATA), Path(MORPHEUS_DATA)]
+    t = target.resolve()
+    for r in roots:
+        try:
+            r = r.resolve()
+        except OSError:
+            continue
+        if t == r or r in t.parents or t in r.parents:
+            raise PackError(
+                "refusing to delete: the pack directory overlaps a derivative "
+                f"root ({r}). Nothing a user generated may sit under a path a "
+                "pack operation can remove.")
+
+
 def uninstall(name: str) -> dict:
     """Remove an installed pack's directory. Nothing else.
 
     Derivatives are untouched and unreachable from here: images, songs and
-    filed retellings live in PH3B3_DATA, this only removes
+    filed retellings live in PH3B3_DATA and MORPHEUS_DATA, this only removes
     stories/packs/<name>/, and it has no path to anywhere else.
+
+    Removing a pack removes the STORIES. Everything made FROM them — art,
+    songs, retellings she filed — is somebody's work and stays, whether or not
+    the pack that inspired it is still installed.
     """
     dst = _pack_path(name)
+    _assert_disjoint_from_derivatives(dst)
     if not dst.exists():
         raise PackError(f"{name!r} is not installed")
     shutil.rmtree(dst)
