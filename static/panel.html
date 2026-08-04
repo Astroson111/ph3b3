@@ -4878,7 +4878,7 @@ document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
 
   async function refreshGallery() {
     try {
-      const data = await fetch('/image/gallery?n=12').then(r => r.json());
+      const data = await fetch('/image/gallery?n=20').then(r => r.json());
       const imgs = data.images || [];
       if (!imgs.length) {
         galleryEl.innerHTML = '<div class="morph-gal-empty">No generations yet.</div>';
