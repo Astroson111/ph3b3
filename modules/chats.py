@@ -57,6 +57,31 @@ class ChatLog:
             except Exception:
                 pass
 
+    def mark_interrupted(self, session_id: str, device: str, played_ms: int = 0) -> None:
+        """Barge-in: the user stopped playback mid-reply. The full Phoebe reply is
+        already logged (log_turn, above) — this appends a visible marker so the
+        transcript shows the turn was cut off. Model-facing context is corrected
+        separately (the server drops the unspoken reply); this display store keeps
+        the full text for the record. No-op if nothing was logged this run."""
+        secs = max(0, int(played_ms)) / 1000.0
+        note = (f"— interrupted by user after {secs:.1f}s; "
+                "the rest was generated but not spoken —")
+        source = _SOURCE.get((device or "nyx").lower(), "portal")
+        sid = session_id or "default"
+        with self._lock:
+            f = self._files.get(sid)
+            if f is None:          # no turn logged this run → nothing to annotate
+                return
+            # role 'phoebe' so it renders in her lane, not the user's; the extra
+            # fields are metadata the current reader ignores.
+            rec = {"ts": int(time.time()), "role": "phoebe", "source": source,
+                   "text": note, "interrupted": True, "played_ms": int(played_ms)}
+            try:
+                with f.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+
     # ── read (panel) ──
     def _turns(self, f: Path):
         try:
