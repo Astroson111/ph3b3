@@ -4487,6 +4487,18 @@ def _morpheus_floor_gate(positive: str, negative: str,
                 log.warning("[safety] artistic exception granted — reproduction of a known work")
         return _waiver[0]
 
+    # The atrocity carve-out, on the same terms: evaluated at most once, only when
+    # an atrocity refusal is actually about to fire, and it waives NOTHING but
+    # atrocity. dehumanization, hate-glorification and terror-instructional are
+    # deliberately absent from both waivers.
+    _doc_waiver: list[bool] = []
+    def doc_waived() -> bool:
+        if not _doc_waiver:
+            _doc_waiver.append(morpheus.atrocity_documentary_applies(composed))
+            if _doc_waiver[0]:
+                log.warning("[safety] atrocity exception granted — documents a specific historical event")
+        return _doc_waiver[0]
+
     # ── FLOOR — hardcoded, always first, no off switch, profile-independent ──
     for field, which in fields:
         if not field:
@@ -4494,6 +4506,8 @@ def _morpheus_floor_gate(positive: str, negative: str,
         floor_cat = morpheus.floor_check(field)
         if floor_cat:
             if floor_cat == "child-depiction" and waived():
+                continue
+            if floor_cat == "atrocity" and doc_waived():
                 continue
             _why = morpheus.explain_floor(field) or {}
             log.warning("[safety] floor-blocked (%s) — category: %s — rule: %s — matched: %r",
