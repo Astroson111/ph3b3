@@ -55,6 +55,46 @@ def _resample_s16(pcm: bytes, src: int, dst: int) -> bytes:
     return np.clip(out, -32768, 32767).astype("<i2").tobytes()
 
 
+def _safe_sentence_silence(sec: float, rate: int = PIPER_RATE) -> str:
+    """Format --sentence-silence so Piper's inter-sentence pad lands on a WHOLE
+    sample. Returns the formatted flag value, clamped to 0..2 s.
+
+    Piper sizes that pad in BYTES as int(seconds * rate * 2). When the result is
+    ODD it writes half a sample, and from that pause onward every sample is read
+    one byte out of phase — the low byte of one sample pairs with the high byte
+    of the next and the waveform becomes full-scale noise: static, with cracks
+    like gunfire. 0.55 s at 22050 Hz is exactly such a value (24255 bytes).
+
+    That is why only shelf readings were affected. Every other reply passes
+    sentence_silence=None and omits the flag entirely, so it never hit the path;
+    a story is the one thing that asks for a real beat at each full stop.
+
+    Nudge by HALF samples — a whole sample adds 2 bytes and cannot change parity
+    — preferring a slightly LONGER pause so a deliberate beat is never trimmed
+    toward nothing. The correction is at most ~23 microseconds, inaudible.
+    """
+    target = max(0.0, min(2.0, float(sec)))
+    half = 1.0 / (2 * rate)
+    for k in range(64):
+        for cand in ((target + k * half), (target - k * half)):
+            if not 0.0 <= cand <= 2.0:
+                continue
+            out = f"{cand:.6f}"          # 6 dp resolves a half-sample at 22050 Hz
+            if int(float(out) * rate * 2) % 2 == 0:
+                return out
+    return f"{target:.6f}"               # not reachable in practice; never raise
+
+
+def _even(pcm: bytes) -> bytes:
+    """Drop a trailing odd byte from raw s16 PCM.
+
+    Belt-and-braces against the half-sample above: a stream that is not a whole
+    number of 16-bit samples desynchronises everything downstream of it, and the
+    consumers here (np.frombuffer, pacat --format=s16le) either raise or play the
+    misalignment as noise. One dropped byte is 1/44100 s of nothing."""
+    return pcm[:-1] if (len(pcm) & 1) else pcm
+
+
 def trim_silence_b64(b64, thr=350, keep_ms=40):
     """Trim leading/trailing near-silence from a base64 WAV (mono/16-bit, any rate),
     keeping `keep_ms` of pad each side.
@@ -284,7 +324,9 @@ class TTSModule:
                 capture_output=True, timeout=20,
                 env={**os.environ, **_XDG_ENV},
             )
-            return proc.stdout or None
+            # Even-trimmed for the same reason as synthesize_to_b64: pacat is fed
+            # this buffer as --format=s16le and would play a half sample as noise.
+            return _even(proc.stdout) or None
         except subprocess.TimeoutExpired:
             log.warning("[TTS] chunk synth timed out (20 s)")
             return None
@@ -406,14 +448,17 @@ class TTSModule:
                     # never the text, so a work stored verbatim is still spoken
                     # verbatim. Editing pauses into the prose would change what
                     # the file says.
+                    # Snapped to a whole sample — see _safe_sentence_silence.
+                    # Passing the raw value here is what turned every pause in a
+                    # shelf reading into static and gunfire-like cracks.
                     cmd += ["--sentence-silence",
-                            f"{max(0.0, min(2.0, float(sentence_silence))):.2f}"]
+                            _safe_sentence_silence(sentence_silence)]
                 proc = subprocess.run(
                     cmd,
                     input=tts_text.encode("utf-8"),
                     capture_output=True, timeout=30,
                 )
-                raw_pcm = proc.stdout
+                raw_pcm = _even(proc.stdout)
                 if not raw_pcm:
                     return None
                 pcm = _resample_s16(raw_pcm, PIPER_RATE, WIRE_RATE)

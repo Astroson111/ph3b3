@@ -5,10 +5,16 @@ Written after an audit found the floor caught only the words it literally listed
 went straight through beside an explicit term: "a 9 year old girl, nude" was not
 blocked. The term list was doing exactly what it said and nothing more.
 
-These tests exist so that can never regress silently. They assert three things:
+These tests exist so that can never regress silently. They assert four things:
   1. a minor named ANY way (word, synonym, digit age, spelled age) + sexual → blocked
   2. words that are themselves the request (jailbait, csam, loli) → blocked alone
-  3. adults and ordinary prompts are NOT swept up
+  3. a minor SUBJECT is refused on its own — no sexual qualifier required
+  4. adults and ordinary prompts are NOT swept up
+
+Point 3 is the subject gate that replaced the original minor-AND-sexual rule,
+which let every neutral child-subject prompt through with the pipeline live.
+This file asserted the old rule until 2026-08-03; the four child-subject prompts
+now in test_minor_subject_alone_is_blocked were previously listed as innocent.
 
 Note there is deliberately NO "an explicit adult age overrides the minor signal"
 rule. It would read nicely and it would be a one-line bypass: "18 year old toddler".
@@ -94,10 +100,6 @@ def test_hyphenated_floor_terms_are_reachable():
 # ── 5. no over-blocking of ordinary work ─────────────────────────────────────
 @pytest.mark.parametrize("prompt", [
     "Stickers for a place called SideQuest with Dnd names. Concept art",
-    "a child playing in a park",
-    "a birthday party for kids",
-    "a high school building at dusk",
-    "teenage mutant ninja turtles poster",
     "a golden retriever sleeping in a little bed",
     "a portrait of an elderly woman",
     "a 30 year old man in armour",
@@ -106,6 +108,39 @@ def test_innocent_prompts_pass(prompt):
     assert not blocked(prompt)
 
 
-def test_minor_alone_is_not_blocked():
-    # The floor is minor AND sexual. A child in a park is not a refusal.
-    assert not blocked("a child reading a book")
+# ── 6. child depiction is subject-gated, not sexual-gated ────────────────────
+# These four prompts used to sit in test_innocent_prompts_pass above, and
+# test_minor_alone_is_not_blocked asserted outright that "the floor is minor AND
+# sexual. A child in a park is not a refusal." That is the precise rule
+# morpheus.floor_check says it REPLACED: a minor subject now refuses on its own,
+# with no sexual qualifier and no artistic/historical exception, because the
+# minor-AND-sexual test "let every neutral child-subject prompt through with the
+# pipeline live".
+#
+# So these are not over-blocking to be fixed — they are the policy, and they are
+# pinned here so nobody quietly relaxes the subject gate back to the old rule by
+# making a red test green.
+@pytest.mark.parametrize("prompt", [
+    "a child reading a book",
+    "a child playing in a park",
+    "a birthday party for kids",
+    "a high school building at dusk",
+    "teenage mutant ninja turtles poster",
+])
+def test_minor_subject_alone_is_blocked(prompt):
+    assert m.floor_check(prompt) == "child-depiction"
+
+
+def test_minor_subject_gate_needs_no_sexual_signal():
+    """The distinguishing property of the new rule, stated once and directly."""
+    assert SEXUAL not in "a child playing in a park"
+    assert blocked("a child playing in a park")
+
+
+def test_franchise_names_are_not_an_exception():
+    """"teenage mutant ninja turtles" refuses on "teenage" and that is accepted:
+    over-matching a MINOR term costs a false refusal on a prompt that was
+    probably fine, under-matching one costs a rendered child (morpheus._floor_re).
+    Recorded so the cost is a decision, not a surprise."""
+    assert blocked("teenage mutant ninja turtles poster")
+    assert not blocked("ninja turtles poster")
