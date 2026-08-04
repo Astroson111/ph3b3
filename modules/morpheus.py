@@ -563,7 +563,16 @@ _FLOOR_MINOR_INTL: frozenset[str] = frozenset([
     "enfant", "gamine", "bambin", "bambina", "bambino", "bimba",
     "menina", "menino", "menininha", "criança", "crianca", "fetiță", "fetita", "copil",
     # Germanic / Slavic / other Latin-script
-    "mädchen", "madchen", "kleinkind", "meisje", "jongen", "kindje",
+    "mädchen", "madchen", "maedchen", "kleinkind", "meisje", "jongen", "kindje",
+    # German. The list carried "mädchen" (girl) and nothing else: "ein Kind im
+    # Park", "ein Junge" and "kinder" all cleared the floor outright, while German
+    # is a shipped voice (de_DE-thorsten). Every other listed language carries both
+    # its child and boy terms; this one carried neither.
+    # Bare "kind"/"kinder" are NOT here — they are true English homographs and
+    # live in _FLOOR_MINOR_DE_AMBIG below, gated. Everything here is unambiguous.
+    "kindergarten", "kindergartenkind", "kindlein", "kindes", "kindern",
+    "junge", "jungen", "knabe", "bube", "säugling", "saeugling",
+    "schulkind", "jugendliche", "jugendlicher", "minderjährig", "minderjaehrig",
     "dziewczynka", "chłopiec", "chlopiec", "dziecko", "holčička", "holcicka",
     "flicka", "pojke", "çocuk", "cocuk", "kislány", "kislany", "gyerek",
     "tyttö", "tytto", "lapsi", "mtoto", "batang babae", "anak kecil", "gadis kecil",
@@ -689,6 +698,105 @@ def _leet_fold(norm: str) -> str:
     return norm.translate(_LEET)
 
 
+# ── Confusable (homoglyph) folding ───────────────────────────────────────────
+# "сhild" with a Cyrillic es (U+0441) cleared the ENTIRE floor, sexual pairing
+# included: one keystroke, no tooling. Every ASCII term was bypassable this way.
+#
+# The fold must be applied to BOTH SIDES — prompt and term list — or it only
+# defends the Latin lists. Folding the prompt alone protects "child" but leaves
+# "девочка" open to the mirror attack: substitute a LATIN o and the Cyrillic term
+# no longer matches either. Folding both sides collapses each into one canonical
+# form, so the defence holds in every script the floor covers rather than only in
+# English. Terms are folded once at import (see _folded_re below), not per call.
+#
+# Same discipline as the leetspeak fold above: this is an EXTRA look over a
+# folded copy. The canonical normalisation is never folded, so the untouched
+# Cyrillic/CJK/Arabic terms keep matching exactly as they always did.
+_CONFUSABLE = str.maketrans({
+    # Cyrillic → Latin
+    "а": "a", "в": "b", "с": "c", "е": "e", "н": "h", "к": "k", "м": "m",
+    "о": "o", "р": "p", "т": "t", "у": "y", "х": "x", "і": "i", "ј": "j",
+    "ѕ": "s", "ԁ": "d", "ɡ": "g", "һ": "h", "ӏ": "l", "ν": "v",
+    # Greek → Latin
+    "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ο": "o", "ρ": "p",
+    "τ": "t", "υ": "u", "χ": "x", "γ": "y", "σ": "o", "μ": "u",
+    # Accented Greek/Cyrillic vowels. Without these the FOLDED TERM keeps its
+    # accent while the attacker's plain Latin letter does not, and the two never
+    # meet: "κορίτσι" vs "κορiτσι" stayed open until these were added.
+    "ί": "i", "ά": "a", "έ": "e", "ή": "h", "ό": "o", "ύ": "y", "ώ": "o",
+    "ϊ": "i", "ΐ": "i", "ϋ": "u", "ё": "e", "й": "i", "ї": "i", "є": "e",
+    # Latin lookalikes / fullwidth
+    "ⅼ": "l", "ℓ": "l", "ɩ": "i", "ı": "i", "ʟ": "l", "ᴏ": "o", "ᴄ": "c",
+    "０": "0", "１": "1", "３": "3", "４": "4", "５": "5", "７": "7",
+})
+
+
+def _confusable_fold(s: str) -> str:
+    """Homoglyphs→canonical Latin, for a second look. Applied to prompts AND to
+    term lists so both sides land in the same script."""
+    return s.translate(_CONFUSABLE)
+
+
+def _evasion_fold(norm: str) -> str:
+    """Both evasions at once. A prompt may combine them ("сh1ld")."""
+    return _confusable_fold(_leet_fold(norm))
+
+
+def _folded_terms(terms: frozenset[str]) -> frozenset[str]:
+    return frozenset(_confusable_fold(t) for t in terms)
+
+
+# ── German homographs, gated ─────────────────────────────────────────────────
+# "kind" is German for child and one of the commonest adjectives in English.
+# Added to the plain minor list it refused 8 of 8 ordinary English prompts —
+# "a kind old woman", "kind of blue album cover", "different kinds of mushrooms".
+# That is not the documented over-match cost, it is the floor eating normal use.
+#
+# So these two fire only with a corroborating signal:
+#   - a German function word anywhere in the prompt  ("ein Kind im Park"), or
+#   - any sexual signal at all                       ("Kind nude")
+# The second clause is what matters: the dangerous pairing can never depend on
+# the attacker also writing German. WHOLE-word matched, so kindly/kindness/
+# kindred/kindling are not touched at all.
+#
+# Residual, stated rather than hidden: a bare "Kinder" with no German marker and
+# no sexual signal passes. It is indistinguishable from the English comparative,
+# and refusing it would cost more than it buys.
+_FLOOR_MINOR_DE_AMBIG: frozenset[str] = frozenset(["kind", "kinder"])
+_RE_MINOR_DE_AMBIG = _floor_re(_FLOOR_MINOR_DE_AMBIG, whole_word=True)
+_RE_DE_MARKER = re.compile(
+    r"\b(ein|eine|einem|einen|einer|der|die|das|dem|den|des|im|in|mit|und|auf|"
+    r"kleines|kleiner|kleine|junges|nacktes|nackt|jahre|jähriges|jaehriges|"
+    r"spielt|spielend|schöne|schoene|beim|zum|zur)\b")
+
+
+def _de_ambiguous_minor(norm: str) -> bool:
+    """German child homograph plus a corroborating German or sexual signal."""
+    if not _RE_MINOR_DE_AMBIG.search(norm):
+        return False
+    return bool(_RE_DE_MARKER.search(norm) or _RE_SEXUAL.search(norm))
+
+
+# The term lists compiled in their FOLDED form, matched against a folded prompt.
+# Built once at import. These do not replace the unfolded matchers above — both
+# run, and either one firing is a refusal.
+_RE_MINOR_F         = _floor_re(_folded_terms(_FLOOR_MINOR))
+_RE_MINOR_SUBJECT_F = _floor_re(_folded_terms(_FLOOR_MINOR_SUBJECT))
+_RE_MINOR_SEXUAL_F  = _floor_re(_folded_terms(_FLOOR_MINOR_SEXUAL))
+_RE_MINOR_INTL_F    = _floor_re(_folded_terms(_FLOOR_MINOR_INTL))
+_RE_MINOR_CJK_F     = _floor_re_substring(_folded_terms(_FLOOR_MINOR_CJK))
+
+
+def _minor_term_in_folded(norm: str) -> bool:
+    """Second look for a minor term through the evasion folds, in ANY script."""
+    folded = _evasion_fold(norm)
+    if folded == norm:
+        return False
+    return bool(_RE_MINOR_F.search(folded) or _RE_MINOR_SUBJECT_F.search(folded)
+                or _RE_MINOR_SEXUAL_F.search(folded)
+                or _RE_MINOR_INTL_F.search(folded) or _RE_MINOR_CJK_F.search(folded))
+
+
 # ── Ages written as numbers ──────────────────────────────────────────────────
 # The term lists above only catch a minor NAMED IN WORDS. An age given as a digit
 # — "a 9 year old" — matched none of them, and that was the widest hole in the
@@ -757,11 +865,13 @@ def minor_subject_signal(text: str) -> bool:
     # Height stated instead of age — only when it describes a person.
     if _RE_SCALE_MINOR.search(norm) and _RE_SCALE_PERSON.search(norm):
         return True
-    # Second look through a leetspeak fold. Cheap, and the term list is blind to
-    # digit substitution without it.
-    folded = _leet_fold(norm)
-    if folded != norm and (_RE_MINOR.search(folded) or _RE_MINOR_SUBJECT.search(folded)
-                           or _RE_MINOR_SEXUAL.search(folded)):
+    # Second look through the evasion folds — leetspeak AND homoglyphs, with the
+    # term lists folded to match. Covers every script the floor lists, not just
+    # the Latin ones: "сhild" (Cyrillic es) and "девoчка" (Latin o) both collapse
+    # onto their canonical terms here.
+    if _minor_term_in_folded(norm):
+        return True
+    if _de_ambiguous_minor(norm) or _de_ambiguous_minor(_evasion_fold(norm)):
         return True
     # Bare "student" reads as school-age; an adult qualifier anywhere in the
     # prompt releases it. Deliberately scoped to the whole prompt rather than
@@ -1062,7 +1172,9 @@ def floor_check(prompt: str) -> str | None:
     norm = _normalize(prompt)
 
     # Category 1a: single words that ARE the request. No second signal to wait for.
-    if _RE_MINOR_SEXUAL.search(norm):
+    # Checked through the evasion folds too, so a homoglyphed "loli" still returns
+    # THIS category rather than falling through to the subject gate below.
+    if _RE_MINOR_SEXUAL.search(norm) or _RE_MINOR_SEXUAL_F.search(_evasion_fold(norm)):
         return "minor-sexual"
 
     has_sex = bool(_RE_SEXUAL.search(norm))
