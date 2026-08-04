@@ -3551,8 +3551,11 @@ def _setup_html(errors: list[str] | None = None) -> str:
   <form method="post" action="/setup" autocomplete="off">
     <div class="field">
       <label for="username">Your username</label>
+      <!-- Same mobile autocapitalise trap as the login form: a username created
+           on a phone would otherwise be silently capitalised at setup time. -->
       <input id="username" name="username" type="text" required minlength="2" maxlength="64"
-             placeholder="e.g. your first name" autocomplete="username">
+             placeholder="e.g. your first name" autocomplete="username"
+             autocapitalize="none" autocorrect="off" spellcheck="false">
     </div>
     <div class="field">
       <label for="password">Choose a password</label>
@@ -3660,7 +3663,14 @@ def _login_html(error: bool = False) -> str:
     </div>
     <form method="post" action="/login" autocomplete="on">
       <label for="user">Username</label>
+      <!-- autocapitalize/autocorrect off: mobile keyboards capitalise the first
+           letter of a type="text" field by default, which silently turned a
+           lowercase username into a capitalised one. The comparison is
+           case-sensitive (secrets.compare_digest), so the phone got a 401 that
+           looked to the user like the PASSWORD being rejected. Desktop was
+           unaffected, which is why this only ever showed up on mobile. -->
       <input id="user" name="user" type="text" autocomplete="username"
+             autocapitalize="none" autocorrect="off" spellcheck="false"
              autofocus required>
       <label for="pass">Password</label>
       <input id="pass" name="pass" type="password" autocomplete="current-password" required>
