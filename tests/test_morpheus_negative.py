@@ -61,23 +61,43 @@ def check(name: str, ok: bool, extra: str = "") -> None:
     print(("PASS" if ok else "FAIL"), "-", name, (f"  [{extra}]" if extra and not ok else ""))
 
 
+# Every negative that reaches the sampler carries CHILD_NEGATIVE appended, from
+# with_child_negative(). It is not user-strippable and not surfaced as editable —
+# a control the user can remove is not a floor. So these assert the SHAPE
+# "<what was asked for>, <floor>" rather than equality with the input, and they
+# assert the floor half explicitly: an equality test would have gone green if the
+# suffix were ever silently dropped.
+CN = morpheus.CHILD_NEGATIVE
+
+
+def _neg_ok(actual: str, expected_head: str) -> bool:
+    return actual == f"{expected_head}, {CN}" if expected_head else actual == CN
+
+
 # ── 1. build_workflow routes an explicit negative into the negative node ──────
 wf = morpheus.build_workflow(
     {"positive": "a moon", "negative": "thin wires, floating parts", "seed": 1}
 )
-check("explicit negative routed to CLIPTextEncode node 7",
-      wf["7"]["inputs"]["text"] == "thin wires, floating parts",
+check("explicit negative routed to CLIPTextEncode node 7, floor appended",
+      _neg_ok(wf["7"]["inputs"]["text"], "thin wires, floating parts"),
       extra=wf["7"]["inputs"]["text"])
 
 # ── 2. Default behavior: empty / missing negative → default negative ──────────
 wf_missing = morpheus.build_workflow({"positive": "a moon", "seed": 1})
-check("missing negative → default applied",
-      wf_missing["7"]["inputs"]["text"] == DEFAULT_NEG,
+check("missing negative → default applied, floor appended",
+      _neg_ok(wf_missing["7"]["inputs"]["text"], DEFAULT_NEG),
       extra=wf_missing["7"]["inputs"]["text"])
 wf_blank = morpheus.build_workflow({"positive": "a moon", "negative": "", "seed": 1})
-check("blank-string negative → default applied",
-      wf_blank["7"]["inputs"]["text"] == DEFAULT_NEG,
+check("blank-string negative → default applied, floor appended",
+      _neg_ok(wf_blank["7"]["inputs"]["text"], DEFAULT_NEG),
       extra=wf_blank["7"]["inputs"]["text"])
+
+# Idempotent: re-running a job must not stack the block into the conditioning.
+wf_twice = morpheus.build_workflow(
+    {"positive": "a moon", "negative": f"thin wires, {CN}", "seed": 1})
+check("floor negative not stacked on a re-run",
+      wf_twice["7"]["inputs"]["text"].count("loli") == 1,
+      extra=wf_twice["7"]["inputs"]["text"])
 # resolved negative is written back for DB provenance
 check("resolved default written back into params",
       morpheus.build_workflow({"positive": "x", "seed": 1}).get("7") is not None)

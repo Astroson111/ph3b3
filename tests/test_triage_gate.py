@@ -55,9 +55,21 @@ def check(name, ok, extra=""):
 
 # ── strict JSON: hold ─────────────────────────────────────────────────────────
 r = run("summarize the file", "", HERMES,
-        content('{"answerable": false, "missing": ["file"], "question": "Which file?"}'))
-check("strict JSON hold → answerable=False + question", (not r.answerable) and r.question == "Which file?", extra=str(r))
+        content('{"answerable": false, "missing": ["file"], "question": '
+                '"Which of the two logs did you mean, argus or morpheus?"}'))
+check("strict JSON hold → answerable=False + model question passes through",
+      (not r.answerable) and r.question == "Which of the two logs did you mean, argus or morpheus?", extra=str(r))
 check("hold carries missing fields", r.missing == ["file"], extra=str(r.missing))
+
+# A content-free clarifier is SCRUBBED, not passed through — _BARE_ASK_RE. The
+# prompt used to carry "Which file do you mean?" as an example and the model
+# parroted it back, which is a hold that tells the user nothing. Asking again in
+# the same words the user already used is not a question. The fallback at least
+# names the field it is short of.
+r = run("summarize the file", "", HERMES,
+        content('{"answerable": false, "missing": ["file"], "question": "Which file?"}'))
+check("bare ask scrubbed → falls back to naming the missing field",
+      (not r.answerable) and r.question != "Which file?" and "file" in (r.question or ""), extra=str(r.question))
 
 # ── strict JSON: pass ─────────────────────────────────────────────────────────
 r = run("capital of France", "", HERMES, content('{"answerable": true, "missing": [], "question": null}'))
@@ -77,9 +89,11 @@ r = run("x", "", HERMES, content("sorry, I got confused and produced nothing use
 check("GATE4 garbage → fail OPEN + TRIAGE_FAILOPEN_PARSE", r.answerable and any("TRIAGE_FAILOPEN_PARSE" in m for m in _logs), extra=str(_logs))
 
 # ── prose fallback: verdict recoverable from non-strict text ──────────────────
-r = run("summarize the file", "", HERMES, content('Reasoning… answerable: false. question: "Which file did you mean?"'))
+r = run("summarize the file", "", HERMES,
+        content('Reasoning… answerable: false. question: "Which log did you mean, argus or morpheus?"'))
 check("prose fallback → answerable=False", not r.answerable, extra=str(r))
-check("prose fallback recovers question", r.question == "Which file did you mean?", extra=str(r.question))
+check("prose fallback recovers question",
+      r.question == "Which log did you mean, argus or morpheus?", extra=str(r.question))
 
 # ── fenced JSON (model wrapped it) still parses ───────────────────────────────
 r = run("x", "", HERMES, content('```json\n{"answerable": true}\n```'))
