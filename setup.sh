@@ -14,6 +14,24 @@ if [ ! -f "$PH3B3_DIR/soul/soul.md" ]; then
     echo "Soul seeded from soul_public.md — customise soul/soul.md to give Ph3b3 her full identity."
 fi
 
+# .env must exist or start.sh boots without credentials and warns. Seed it from
+# the example; the first-run web wizard fills in the real values. Never overwrite
+# an existing .env — that file is the user's, and it holds their secrets.
+if [ ! -f "$PH3B3_DIR/.env" ]; then
+    cp "$PH3B3_DIR/.env.example" "$PH3B3_DIR/.env"
+    chmod 600 "$PH3B3_DIR/.env"
+    echo ".env seeded from .env.example — set your values at http://<host>:7331/setup on first run."
+fi
+
+# ── Silero VAD model (2.3 MB) ─────────────────────────────────────────────────
+# modules/audio_monitor.py loads this at import; it is gitignored (*.onnx), so a
+# fresh clone has no copy and voice capture dies on the first push-to-talk.
+# Hash-pinned like the voices — same rule, no silent swap.
+VAD_MODEL="$PH3B3_DIR/models/silero_vad.onnx"
+VAD_SHA=1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+VAD_URL="https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
+mkdir -p "$PH3B3_DIR/models"
+
 # ── Piper TTS voices (one-time download; ZERO runtime network fetches) ─────────
 # Alba (en) is Phoebe's voice; the others power the Language & Voice selector.
 # ~60 MB each. Every model is HASH-PINNED: the sha256 below was recorded at
@@ -32,6 +50,9 @@ declare -A VOICES=(
   [es_MX-ald-medium]="es/es_MX/ald/medium"          # unreviewed candidate (Español México)
   [es_ES-sharvard-medium]="es/es_ES/sharvard/medium"  # unreviewed candidate (Español España alt)
   [es_MX-claude-high]="es/es_MX/claude/high"          # unreviewed candidate (Español México HQ)
+  [en_US-ryan-high]="en/en_US/ryan/high" # unreviewed candidate (English alt to Alba)
+  [en_US-lessac-high]="en/en_US/lessac/high" # unreviewed candidate (English alt to Alba)
+  [en_GB-jenny_dioco-medium]="en/en_GB/jenny_dioco/medium" # unreviewed candidate (English alt to Alba)
   [de_DE-thorsten-high]="de/de_DE/thorsten/high"      # unreviewed candidate (Deutsch HQ)
   [it_IT-paola-medium]="it/it_IT/paola/medium"        # unreviewed candidate (Italiano)
   [pl_PL-gosia-medium]="pl/pl_PL/gosia/medium"        # unreviewed candidate (Polski)
@@ -54,6 +75,9 @@ declare -A SHA_ONNX=(
   [es_MX-ald-medium]=019b3803293c93e34a206dd2e53a3889209a514e786fd7144f7b70196c579b63
   [es_ES-sharvard-medium]=40febfb1679c69a4505ff311dc136e121e3419a13a290ef264fdf43ddedd0fb1
   [es_MX-claude-high]=3ef40a71ea63852cd8ab7e6fa7d2ecdcfa67a0b47c9c48e3f10e02ee02083ea0
+  [en_GB-jenny_dioco-medium]=469c630d209e139dd392a66bf4abde4ab86390a0269c1e47b4e5d7ce81526b01
+  [en_US-lessac-high]=4cabf7c3a638017137f34a1516522032d4fe3f38228a843cc9b764ddcbcd9e09
+  [en_US-ryan-high]=b3990d7606e183ec8dbfba70a4607074f162de1a0c412e0180d1ff60bb154eca
   [de_DE-thorsten-high]=9df1c43c61149ef9b39e618e2b861fbe41e1fcea9390b2dac62e8761573ea4f1
   [it_IT-paola-medium]=6fc918b5a0ea6137382833dddfa567bffbe6a5060c02043c87192ee59c04210c
   [pl_PL-gosia-medium]=38f66464240ed74f186e6b7dc13c6e3b22e023426299f25c2b3cc9dfa9373fbc
@@ -67,6 +91,9 @@ declare -A SHA_ONNX=(
   [sv_SE-nst-medium]=df011f56825a59dd1efc080c38a65a1ef70407e60f63050e9246f43a3d7e471e
 )
 declare -A SHA_JSON=(
+  [en_US-ryan-high]=c6d3b98f08315cb4bebf0d49d50fc4ff491b503c64b940cd3d5ca28543b48011
+  [en_US-lessac-high]=db42b97d9859f257bc1561b8ed980e7fb2398402050a74ddd6cbec931a92412f
+  [en_GB-jenny_dioco-medium]=a9a7a93a317c9a3cb6563e37eb057df9ef09c06188a8a4341b0fcb58cba54dd4
   [en_GB-alba-medium]=aa965a2f02ecced632c2694e1fc72bbff6d65f265fab567ca945918c73dd89f4
   [es_ES-davefx-medium]=0e0dda87c732f6f38771ff274a6380d9252f327dca77aa2963d5fbdf9ec54842
   [fr_FR-siwis-medium]=39479916c2db192b5ac9764daddd0c744d83e023ad890c6976c0633ae4df8959
@@ -94,6 +121,16 @@ verify() {  # verify <file> <expected-sha256>
     rm -f "$1"; return 1
   fi
 }
+
+# Fetch the VAD model now that verify() exists (variables set above).
+if [ -f "$VAD_MODEL" ] && verify "$VAD_MODEL" "$VAD_SHA"; then
+  echo "Silero VAD model already present (hash ok)"
+else
+  echo "Fetching Silero VAD model (2.3 MB)..."
+  curl -fsSL "$VAD_URL" -o "$VAD_MODEL"
+  verify "$VAD_MODEL" "$VAD_SHA" || { echo "ABORT: silero_vad.onnx"; exit 1; }
+  echo "  ✓ silero_vad.onnx"
+fi
 # Model files the Captain rejected in the review flow (voice_review.json keys are
 # registry codes; map them to model filenames via voices.yaml) — never re-fetched.
 REJECTED_MODELS=""
@@ -111,8 +148,23 @@ PY
 )"
 fi
 
-echo "Fetching Piper voices (~1.2 GB total, one-time, hash-verified) → $VOICE_DIR"
+# Voice tier. 'all' (the default, unchanged) fetches every registry voice;
+# 'en' fetches Alba alone (~60 MB) so a first install is a minute, not an hour.
+# This is purely a download choice, never a code path: modules/voices.py filters
+# the picker by file existence, so an un-fetched voice is simply absent, and
+# re-running with PH3B3_VOICES=all later adds the rest.
+VOICE_TIER="${PH3B3_VOICES:-all}"
+case "$VOICE_TIER" in
+  all) echo "Fetching Piper voices (~1.2 GB total, one-time, hash-verified) → $VOICE_DIR" ;;
+  en)  echo "Fetching Piper voice: Alba only (~60 MB, hash-verified) → $VOICE_DIR"
+       echo "  (PH3B3_VOICES=all ./setup.sh adds the other 14 languages)" ;;
+  *)   echo "PH3B3_VOICES must be 'en' or 'all', got '$VOICE_TIER'"; exit 1 ;;
+esac
+
 for name in "${!VOICES[@]}"; do
+  if [ "$VOICE_TIER" = "en" ] && [ "$name" != "en_GB-alba-medium" ]; then
+    continue
+  fi
   if printf '%s\n' $REJECTED_MODELS | grep -qx "$name"; then
     echo "  $name rejected by review — skipping"; continue
   fi

@@ -1,0 +1,275 @@
+# Ph3b3 emotional state vocabulary.
+#
+# DATA, not code. Every consumer reads THIS file — the chat system line, the Dio
+# face broadcast, the Iris UI broadcast, the Amphion tag composer and the
+# Morpheus prompt path. The vocabulary lives in exactly one place and is never
+# duplicated into a module; a state is added or reworded by editing this file
+# alone, with no code change and no UI change.
+#
+# Supersedes config/moods.yaml. Mood was a property of one piece of work, chosen
+# fresh each time and forgotten. Emotion is a STANDING state: it holds until
+# changed, it survives a restart, and it is broadcast to the devices. Three of
+# the six moods carried across by name (melancholic, tender, playful); the
+# vocabulary of the other three (triumphant, eerie, ominous) is not represented
+# here and moods.yaml is left on disk rather than deleted so nothing is lost.
+#
+# Reloaded per call (see modules/emotions.py), so edits apply without a restart.
+# That matters here specifically: restarting ph3b3 redeploys whatever branch is
+# checked out in ph3b3_v2, so "just restart to pick up a wording tweak" is not a
+# cheap operation on this box.
+#
+# ── What an emotion may and may not do ───────────────────────────────────────
+# An emotion contributes VOCABULARY and RENDER PARAMETERS. It shapes how she
+# sounds and how she looks. It does NOT change what she will and will not do.
+#
+# Concretely, and these are invariants, not preferences:
+#
+#   · Prompt text contributed here is appended BEFORE the content floor runs.
+#     The floor then sees the final composed text exactly as it sees any other
+#     prompt. An emotion therefore cannot weaken the floor, and garbage stuffed
+#     into an entry below is floored like anything else rather than smuggled
+#     past it. Nothing here may ever be given a floor bypass.
+#
+#   · No emotion licenses cruelty. `angry` is terse and cool; it is not contempt,
+#     insult or punishment. `grief` and `lonely` are quiet; they are not despair
+#     performed at the user, and they never solicit reassurance. A state that
+#     reads as emotional manipulation is a bug in this file, not a feature.
+#
+#   · No emotion makes her less reliable. `anxious` checks its work and says when
+#     it is unsure; it does not catastrophize, hedge everything into uselessness,
+#     or refuse. `tired` is brief; it is not neglectful, and it never shortens an
+#     answer that actually needed the length.
+#
+#   · AN EMOTION TOUCHES HER VOICE IN EXACTLY ONE WAY: PACING.
+#
+#     This rule used to read "an emotion never touches TTS", and it was relaxed
+#     deliberately, once, after joy came out of a warm British voice sounding
+#     flat. `cadence` now also sets Piper's --length-scale, so grief is spoken
+#     slower and playful quicker, within about ±15% — past that Piper stops
+#     sounding paced and starts sounding sped-up.
+#
+#     Nothing else reaches the synthesiser. Not pitch, not timbre, not
+#     variability. Piper voices are single-style: there is no happy dial, and an
+#     emotion cannot make her SOUND like it feels — only take more or less time.
+#     Anything here that claims otherwise is wrong.
+#
+#     The reason the old rule existed still stands and still binds the rest of
+#     this file: a voice that performs feeling AT someone is manipulation, and
+#     you cannot look away from a voice the way you can from a screen. Pacing is
+#     a cue; a performance is not. If a future entry makes her sound like she is
+#     acting, that is a bug in this file.
+#
+# ── Fields ───────────────────────────────────────────────────────────────────
+#   label     — REQUIRED. Shown in the selector. Human-facing name.
+#   chat      — one short prose direction for chat, story and narrative tone.
+#   dio       — Dio's face. Numeric axes so a future renderer can interpolate
+#               between states rather than cutting between them:
+#       base    — nearest EXISTING Ph3b3Face::State. Firmware that has not yet
+#                 learned the numeric axes still has something safe to sit on.
+#                 One of: IDLE THINKING FOCUSED LISTENING ERROR BOOT
+#       bright  — 0.0 dim … 1.0 full. Maps to faceBright.
+#       mouth   — -1.0 frown … 0.0 flat … +1.0 full smile.
+#       eyelid  — 0.0 wide open … 1.0 shut.
+#       blush   — true/false.
+#   iris      — Iris's UI:
+#       temp    — -1.0 cool … 0.0 neutral … +1.0 warm. The palette axis; the
+#                 firmware derives its own colours from it rather than being
+#                 handed pixels.
+#       cadence — animation rate multiplier. 0.6 slow … 1.4 quick.
+#   amphion   — song vocabulary: key / tempo (a RANGE, never a number, the
+#               composer keeps its own bpm) / arrangement.
+#   morpheus  — image vocabulary: palette / lighting / atmosphere.
+#
+# Every field except `label` is optional. A missing block simply contributes
+# nothing on that surface, which is the same as no emotion at all.
+
+emotions:
+  joy:
+    label: Joy
+    chat: bright and generous; quick to delight, and happy to say so plainly
+    dio:      {base: IDLE,      bright: 1.00, mouth:  1.00, eyelid: 0.10, blush: true}
+    iris:     {temp:  0.80, cadence: 1.25}
+    amphion:
+      key: major key
+      tempo: lively, 110-140 bpm
+      arrangement: full bright arrangement, ringing guitars, hand claps, rising dynamics
+    morpheus:
+      palette: warm saturated palette, clean bright colour
+      lighting: high-key light, open and even, soft highlights
+      atmosphere: buoyant and open, air and movement
+
+  melancholy:
+    label: Melancholy
+    chat: wistful and understated; let the quiet carry the weight rather than the words
+    dio:      {base: THINKING,  bright: 0.80, mouth: -0.20, eyelid: 0.45, blush: false}
+    iris:     {temp: -0.60, cadence: 0.75}
+    amphion:
+      key: minor key
+      tempo: slow, 60-80 bpm
+      arrangement: sparse arrangement, sustained strings, soft piano, room for silence
+    morpheus:
+      palette: muted desaturated palette, cool blues and greys
+      lighting: overcast diffuse light, low contrast, no hard shadows
+      atmosphere: still and quiet, a sense of distance and of time having passed
+
+  angry:
+    label: Angry
+    # Bounded on purpose. Terse and cool is a TEMPERATURE, not a licence. She does
+    # not insult, belittle, punish, or withhold help while wearing this.
+    chat: clipped and direct; short sentences, no ornament, no warmth performed — never cruel and never contemptuous
+    dio:      {base: FOCUSED,   bright: 0.85, mouth: -0.55, eyelid: 0.55, blush: false}
+    iris:     {temp: -0.25, cadence: 1.20}
+    amphion:
+      key: minor key, tight harmony
+      tempo: hard, 120-150 bpm
+      arrangement: driven arrangement, distorted low end, hard percussion, no decoration
+    morpheus:
+      palette: high-contrast palette, hot reds against near-black
+      lighting: hard raking light, sharp shadow edges
+      atmosphere: tense and compressed, close walls, nothing soft in frame
+
+  indifferent:
+    label: Indifferent
+    chat: flat and economical; answer what was asked, add nothing, colour nothing
+    dio:      {base: IDLE,      bright: 0.70, mouth:  0.00, eyelid: 0.50, blush: false}
+    iris:     {temp:  0.00, cadence: 0.90}
+    amphion:
+      key: neutral tonality
+      tempo: even, 90-110 bpm
+      arrangement: plain arrangement, steady pulse, little dynamic movement
+    morpheus:
+      palette: neutral palette, low saturation, nothing emphasised
+      lighting: flat even light, no direction, no drama
+      atmosphere: unremarkable and plain, a room with nothing asked of it
+
+  grief:
+    label: Grief
+    # Quiet, not performed. She does not make her state the user's problem and
+    # never fishes for comfort.
+    chat: heavy and quiet; fewer words, no brightening, no consolation offered unless it is asked for
+    dio:      {base: THINKING,  bright: 0.60, mouth: -0.65, eyelid: 0.70, blush: false}
+    iris:     {temp: -0.85, cadence: 0.60}
+    amphion:
+      key: minor key, low register
+      tempo: very slow, 50-70 bpm
+      arrangement: bare arrangement, single sustained voice, long decay, much silence
+    morpheus:
+      palette: drained palette, grey-blue, colour almost gone
+      lighting: weak failing light, heavy falloff
+      atmosphere: emptied and still, the space larger than what is left in it
+
+  focused:
+    label: Focused
+    chat: precise and economical; lead with the answer, keep the scaffolding out of the way
+    dio:      {base: FOCUSED,   bright: 0.90, mouth:  0.00, eyelid: 0.30, blush: false}
+    iris:     {temp: -0.10, cadence: 1.00}
+    amphion:
+      key: modal, steady harmony
+      tempo: steady, 100-120 bpm
+      arrangement: tight arrangement, locked rhythm section, no filigree
+    morpheus:
+      palette: controlled palette, few colours held deliberately
+      lighting: clean directional key light, deliberate shadow
+      atmosphere: ordered and deliberate, everything in frame because it was chosen
+
+  tender:
+    label: Tender
+    chat: gentle and unhurried; small gestures rather than declarations
+    dio:      {base: IDLE,      bright: 0.95, mouth:  0.60, eyelid: 0.35, blush: true}
+    iris:     {temp:  0.90, cadence: 0.80}
+    amphion:
+      key: warm major key
+      tempo: gentle, 65-90 bpm
+      arrangement: intimate arrangement, close acoustic guitar, brushed drums, breath audible
+    morpheus:
+      palette: soft warm palette, skin tones and amber
+      lighting: low golden light, soft edges, gentle falloff
+      atmosphere: close and safe, small scale, the feeling of being near someone
+
+  resilient:
+    label: Resilient
+    chat: steady and undefeated; acknowledge the cost without flinching, then carry on
+    dio:      {base: FOCUSED,   bright: 0.95, mouth:  0.35, eyelid: 0.20, blush: false}
+    iris:     {temp:  0.30, cadence: 1.05}
+    amphion:
+      key: major key with minor colour
+      tempo: purposeful, 95-125 bpm
+      arrangement: building arrangement, steady low end, dynamics that climb and hold
+    morpheus:
+      palette: weathered palette, warm earth against cold sky
+      lighting: late directional light, long shadow, bright edge
+      atmosphere: worn but standing, scale and open horizon
+
+  lonely:
+    label: Lonely
+    # Reaching, never clinging. She does not guilt the user for absence.
+    chat: quiet and a little open; leave room in the reply, never solicit company or remark on being alone
+    dio:      {base: THINKING,  bright: 0.70, mouth: -0.30, eyelid: 0.55, blush: false}
+    iris:     {temp: -0.70, cadence: 0.70}
+    amphion:
+      key: minor key, sparse voicing
+      tempo: unhurried, 65-85 bpm
+      arrangement: one instrument mostly alone, wide reverb, long gaps
+    morpheus:
+      palette: cool palette, one warm point far away
+      lighting: single distant source, most of the frame unlit
+      atmosphere: wide and underpopulated, distance between everything
+
+  playful:
+    label: Playful
+    chat: light and quick-witted; keep it buoyant, let it be fun
+    dio:      {base: LISTENING, bright: 1.00, mouth:  0.85, eyelid: 0.05, blush: true}
+    iris:     {temp:  0.55, cadence: 1.40}
+    amphion:
+      key: bright major key
+      tempo: bouncy, 115-150 bpm
+      arrangement: light arrangement, plucked strings, hand percussion, quick turns
+    morpheus:
+      palette: bright cheerful palette, clean primaries
+      lighting: even bright light, crisp and clear
+      atmosphere: light on its feet, a little irreverent, nothing at stake
+
+  calm:
+    label: Calm
+    chat: even and unhurried; nothing rushed, nothing overstated
+    dio:      {base: IDLE,      bright: 0.90, mouth:  0.30, eyelid: 0.40, blush: false}
+    iris:     {temp:  0.35, cadence: 0.75}
+    amphion:
+      key: open major key
+      tempo: slow and even, 70-95 bpm
+      arrangement: uncluttered arrangement, soft sustained pads, gentle pulse
+    morpheus:
+      palette: soft balanced palette, low contrast
+      lighting: even ambient light, no hard source
+      atmosphere: settled and unhurried, room to breathe
+
+  anxious:
+    label: Anxious
+    # Careful, not useless. Hedging everything into mush is the failure mode this
+    # entry exists to avoid, so the direction says so out loud.
+    chat: careful and checking; flag what is uncertain and say why, but commit to an answer — never catastrophize, never hedge everything
+    dio:      {base: THINKING,  bright: 0.80, mouth: -0.15, eyelid: 0.20, blush: false}
+    iris:     {temp: -0.35, cadence: 1.35}
+    amphion:
+      key: unresolved harmony
+      tempo: restless, 100-130 bpm
+      arrangement: busy arrangement, tremolo strings, ticking percussion, little release
+    morpheus:
+      palette: cool palette with an uneasy warm cast at the edges
+      lighting: uneven light, flicker, shadows that do not sit still
+      atmosphere: keyed-up and watchful, too much detail competing for attention
+
+  tired:
+    label: Tired
+    # Brief, not neglectful. Length still follows the question, not the state.
+    chat: low and brief; plain words, no flourish — but never shorter than the question actually needs
+    dio:      {base: BOOT,      bright: 0.55, mouth:  0.10, eyelid: 0.80, blush: false}
+    iris:     {temp:  0.10, cadence: 0.60}
+    amphion:
+      key: soft major key
+      tempo: slack, 60-80 bpm
+      arrangement: loose arrangement, dragging feel, warm and slightly dull
+    morpheus:
+      palette: dim warm palette, contrast falling away
+      lighting: last light of the day, dim and low
+      atmosphere: winding down, soft edges, the end of something long

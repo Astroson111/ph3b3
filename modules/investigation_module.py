@@ -1,11 +1,18 @@
 import json
 import logging
 import re
-from datetime import datetime
+import threading
+from datetime import datetime, timedelta
 from pathlib import Path
 
 log = logging.getLogger("ph3b3.investigation")
 INVEST_DIR = Path.home() / "ph3b3_data" / "investigations"
+
+# How far outside an investigation's own window a device recording may fall and
+# still be counted as part of it. The operator says "start the investigation" at
+# a slightly different moment than Dio starts recording, and neither clock is the
+# authority on the other.
+LINK_GRACE = timedelta(minutes=5)
 
 # Match cemetery / burial-ground synonyms across common languages.
 # Word-boundary anchors used throughout; accented and plain-ASCII forms both covered.
@@ -37,6 +44,10 @@ class InvestigationModule:
         INVEST_DIR.mkdir(parents=True, exist_ok=True)
         self._active = None
         self._cemetery_tribute_fired = False  # reset on each new session
+        # The device-sync endpoint links bundles from a worker thread while the
+        # conversation thread may be logging an EVP into the same record.
+        # Reentrant because the link path calls _save() while already holding it.
+        self._lock = threading.RLock()
         log.info("Investigation module ready.")
 
     def is_active(self) -> bool:
@@ -66,6 +77,7 @@ class InvestigationModule:
             "anomalies": [],
             "notes": [],
             "weather": None,
+            "device_sessions": [],   # Dio/Pan bundles that recorded during this hunt
         }
         self._cemetery_tribute_fired = False
         self._save()
@@ -143,15 +155,29 @@ class InvestigationModule:
             return "No active investigation."
         elapsed = datetime.now() - datetime.fromisoformat(self._active["started"])
         mins = int(elapsed.total_seconds() // 60)
-        return (
-            f"Location: {self._active['location']}\n"
-            f"Session: {self._active['session_id']}\n"
-            f"Elapsed: {mins} minutes\n"
-            f"Events: {len(self._active['events'])}\n"
-            f"EVP timestamps: {len(self._active['evp_timestamps'])}\n"
-            f"EMF readings: {len(self._active['emf_readings'])}\n"
-            f"Anomalies: {len(self._active['anomalies'])}"
-        )
+        devices = self._active.get("device_sessions") or []
+        lines = [
+            f"Location: {self._active['location']}",
+            f"Session: {self._active['session_id']}",
+            f"Elapsed: {mins} minutes",
+            f"Events: {len(self._active['events'])}",
+            f"EVP timestamps: {len(self._active['evp_timestamps'])}",
+            f"EMF readings: {len(self._active['emf_readings'])}",
+            f"Anomalies: {len(self._active['anomalies'])}",
+        ]
+        # Bundles only appear once Dio syncs, which is usually after the hunt —
+        # so "none yet" here means not uploaded, not nothing recorded.
+        if devices:
+            for d in devices:
+                c = d.get("counts") or {}
+                lines.append(
+                    f"Device {d.get('device','?')} [{d.get('mode','?')}]: "
+                    f"{c.get('audio',0)} audio, {c.get('photo',0)} photos, "
+                    f"{c.get('env',0)} env readings"
+                )
+        else:
+            lines.append("Device evidence: none synced yet")
+        return "\n".join(lines)
 
     def end(self):
         if not self._active:
@@ -200,13 +226,124 @@ class InvestigationModule:
         ]
         for e in s["emf_readings"]:
             lines.append(f"  [{e['time'][11:19]}] {e['reading']} — {e.get('location','')}")
+
+        devices = s.get("device_sessions") or []
+        lines += [
+            f"",
+            f"DEVICE EVIDENCE ({len(devices)})",
+            f"---------------",
+        ]
+        if devices:
+            for d in devices:
+                c = d.get("counts") or {}
+                lines.append(
+                    f"  {d.get('session_id')} — {d.get('device','?')} "
+                    f"[{d.get('mode','?')}], {c.get('audio',0)} audio / "
+                    f"{c.get('photo',0)} photos / {c.get('env',0)} env"
+                )
+                lines.append(f"    {d.get('path','')}")
+        else:
+            # Said plainly: a report generated at end() normally predates the
+            # sync, so an empty section here is about upload, not about capture.
+            lines.append("  None synced at the time of this report.")
         return "\n".join(lines)
 
+    # ── Device evidence ──────────────────────────────────────────────────────
+    # An investigation is the human record — where you were, what you noticed,
+    # what the EMF meter said. A device session is what Dio actually captured
+    # while you were noticing it. They are recorded independently, on separate
+    # clocks, and joined here after the fact by time.
+
+    def find_session_for(self, when, grace=LINK_GRACE):
+        """Which investigation was running at `when` (naive local datetime)?
+
+        A closed record owns [started, ended] with a few minutes' grace either
+        side. A record with no `ended` counts ONLY while it is the one open in
+        this process: a session left unclosed before a restart is stale, not
+        ongoing, and must not silently swallow every recording made since. There
+        is such a record on disk from 2026-07-16, which is exactly why this rule
+        exists. Returns a session_id, or None — never a guess.
+        """
+        if when is None:
+            return None
+        with self._lock:
+            active_id = self._active["session_id"] if self._active else None
+            for path in sorted(INVEST_DIR.glob("*.json")):
+                try:
+                    data = self.get_session(path.stem) or {}
+                    started = data.get("started")
+                    if not started:
+                        continue
+                    start = datetime.fromisoformat(started)
+                    ended = data.get("ended")
+                    if ended:
+                        end = datetime.fromisoformat(ended)
+                    elif data.get("session_id") == active_id:
+                        end = datetime.now()       # genuinely still running
+                    else:
+                        continue                   # stale open record — not a candidate
+                    if start - grace <= when <= end + grace:
+                        return data["session_id"]
+                except (ValueError, OSError, json.JSONDecodeError):
+                    continue
+        return None
+
+    def get_session(self, session_id):
+        """The record as it stands. Reads from memory when it is the open one,
+        so a caller never sees a file the live session is about to overwrite."""
+        with self._lock:
+            if self._active and self._active["session_id"] == session_id:
+                return self._active
+            path = INVEST_DIR / f"{session_id}.json"
+            if not path.exists():
+                return None
+            try:
+                return json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                return None
+
+    def attach_device_session(self, session_id, entry):
+        """Cross-link a synced device bundle onto an investigation.
+
+        Idempotent by entry["session_id"], so re-syncing a bundle updates the
+        link in place instead of piling up duplicates. If the target is the
+        investigation currently open, the in-memory copy is what gets mutated —
+        writing its file directly would be undone by the next _save().
+        """
+        with self._lock:
+            live = self._active is not None and self._active["session_id"] == session_id
+            record = self._active if live else self.get_session(session_id)
+            if record is None:
+                return False
+
+            sessions = record.setdefault("device_sessions", [])
+            for i, existing in enumerate(sessions):
+                if existing.get("session_id") == entry.get("session_id"):
+                    sessions[i] = entry
+                    break
+            else:
+                sessions.append(entry)
+            sessions.sort(key=lambda e: e.get("started_at") or "")
+
+            if live:
+                self._save()
+            else:
+                path = INVEST_DIR / f"{session_id}.json"
+                tmp = path.with_suffix(".json.part")
+                tmp.write_text(json.dumps(record, indent=2))
+                tmp.replace(path)
+            log.info("[investigation] %s ← device session %s",
+                     session_id, entry.get("session_id"))
+            return True
+
     def _save(self):
-        if not self._active:
-            return
-        path = INVEST_DIR / f"{self._active['session_id']}.json"
-        path.write_text(json.dumps(self._active, indent=2))
+        with self._lock:
+            if not self._active:
+                return
+            path = INVEST_DIR / f"{self._active['session_id']}.json"
+            tmp = path.with_suffix(".json.part")
+            tmp.write_text(json.dumps(self._active, indent=2))
+            tmp.replace(path)   # never leave a half-written record behind
 
     def list_sessions(self):
         files = sorted(INVEST_DIR.glob("*.json"), reverse=True)

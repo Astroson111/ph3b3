@@ -4,7 +4,7 @@ import asyncio
 import base64
 import subprocess
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import json
 import logging
@@ -122,6 +122,9 @@ from stt_module import STTModule
 from paths import PH3B3_DATA  # [DBG-AUDIO] instrumentation save-dir root
 from anime_module import AnimeModule
 from stories_module import StoriesModule
+import emotions                       # emotional state table (config/emotions.yaml)
+import shelf                          # permanent read-only works (stories/)
+import canon                          # verbatim store for stories SHE wrote
 from notes_module import NotesModule
 from timer_module import TimerModule
 from reminders_module import RemindersModule
@@ -196,6 +199,41 @@ async def lifespan(app):
     mnemosyne.init(os.getenv("JAMENDO_CLIENT_ID", ""))
     log.info("Mnemosyne online")
 
+    def _warm_floor_judge():
+        """Load the Layer B judge model before a real prompt needs it.
+
+        Ollama loads models lazily, so after a restart nothing is in VRAM. The
+        first image prompt is the first thing to call the judge, and that call
+        has a 20s timeout — shorter than a cold multi-gigabyte load. It times
+        out, _floor_judge returns "", and every caller is REQUIRED to treat an
+        empty verdict as the unsafe answer. So the first prompt after every
+        restart could be refused, reported as child-depiction / layer-b-judge,
+        with nothing actually wrong with the prompt.
+
+        That is fail-closed behaving exactly as designed; the flaw is that "the
+        model is still loading" and "the model is unreachable" are the same
+        event to that code path. This removes the ambiguity at the only point
+        where it is cheap to remove — before anyone is waiting on an answer.
+
+        Nothing about the floor is weakened here: no timeout is raised, no
+        verdict is assumed, no category is waived. The judge is simply resident
+        by the time it is asked. It also lets the artistic exception function as
+        written, which it cannot do when the judge it depends on never answers.
+
+        Runs on a daemon thread and every failure is swallowed — a warm-up that
+        could delay or break startup would be a worse bug than the one it fixes.
+        """
+        try:
+            t0 = time.time()
+            morpheus.semantic_minor_check("a landscape photograph of a mountain at dawn")
+            log.info("[safety] Layer B judge warm (%s) in %.1fs — first prompt "
+                     "after boot will not fail closed on a cold model",
+                     morpheus._LAYER_B_MODEL, time.time() - t0)
+        except Exception as e:
+            log.warning("[safety] judge warm-up skipped (%s) — the first prompt "
+                        "may still be refused while the model loads", e)
+    threading.Thread(target=_warm_floor_judge, daemon=True).start()
+
     async def _edit_scratch_janitor():
         # Bound edit-mode scratch to the TTL even when no new uploads arrive.
         while True:
@@ -257,6 +295,77 @@ app.add_middleware(
     allow_credentials=False,
 )
 
+# ── Failed-auth throttle ─────────────────────────────────────────────────────
+# This server is published to the public internet through Tailscale Funnel, and
+# until now the auth path had no rate limit and logged nothing on failure. An
+# attempt could run for weeks and leave no trace — the 2026-07-29 audit put it
+# plainly: "401s are never logged. Absence of iris in the journal proves nothing."
+#
+# Deliberately permissive on the threshold and strict on the logging. The goal is
+# to make guessing slow and *visible*, not to lock out a device that is merely
+# misconfigured — which, right now, all three are: they hold pre-rotation keys and
+# will fail every heartbeat until reflashed.
+_AUTH_FAIL_WINDOW_S = 300      # look-back window
+_AUTH_FAIL_MAX      = 10       # failures in that window before throttling
+_AUTH_BLOCK_S       = 300      # how long a throttled key is refused
+_AUTH_TRACK_MAX     = 2048     # hard cap on tracked keys (see note below)
+
+_auth_fails: dict[str, list[float]] = {}
+_auth_blocked: dict[str, float] = {}
+
+
+def _auth_client_key(request: Request) -> str:
+    """Identify the caller for throttling.
+
+    Behind the Funnel every request arrives from 127.0.0.1, so the peer address
+    alone would pool the entire internet into one bucket — one attacker would
+    throttle every real user. X-Forwarded-For carries the true client, but it is
+    caller-supplied and trivially forged, so it is honoured ONLY when the
+    connection itself came from loopback (i.e. from the Funnel proxy). From
+    anywhere else the peer address is the truth and the header is ignored.
+    """
+    peer = (request.client.host if request.client else "") or "?"
+    if peer in ("127.0.0.1", "::1"):
+        xff = request.headers.get("X-Forwarded-For", "")
+        if xff:
+            return "fwd:" + xff.split(",")[0].strip()[:45]
+    return "peer:" + peer
+
+
+def _auth_note_failure(key: str, path: str, device: str) -> None:
+    now = time.time()
+    # Bounded: a forged X-Forwarded-For could otherwise mint unlimited keys and
+    # exhaust memory — turning a throttle into a denial of service against us.
+    if len(_auth_fails) > _AUTH_TRACK_MAX:
+        cutoff = now - _AUTH_FAIL_WINDOW_S
+        for k in [k for k, v in _auth_fails.items() if not v or v[-1] < cutoff]:
+            _auth_fails.pop(k, None)
+        if len(_auth_fails) > _AUTH_TRACK_MAX:
+            _auth_fails.clear()          # last resort; better than unbounded growth
+            log.warning("[auth] failure table cleared under pressure")
+
+    hits = [t for t in _auth_fails.get(key, []) if t > now - _AUTH_FAIL_WINDOW_S]
+    hits.append(now)
+    _auth_fails[key] = hits
+    # Never log the credential, only who/where/how many.
+    log.warning("[auth] 401 %s path=%s device=%s (%d in %ds)",
+                key, path, device or "-", len(hits), _AUTH_FAIL_WINDOW_S)
+    if len(hits) >= _AUTH_FAIL_MAX:
+        _auth_blocked[key] = now + _AUTH_BLOCK_S
+        log.error("[auth] THROTTLED %s after %d failures — refusing for %ds",
+                  key, len(hits), _AUTH_BLOCK_S)
+
+
+def _auth_blocked_for(key: str) -> int:
+    """Seconds remaining on a block, or 0."""
+    until = _auth_blocked.get(key, 0)
+    left = int(until - time.time())
+    if left <= 0:
+        _auth_blocked.pop(key, None)
+        return 0
+    return left
+
+
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
     # CORS preflights — let CORSMiddleware handle these.
@@ -273,6 +382,14 @@ async def basic_auth(request: Request, call_next):
     # Login / logout pages are public.
     if request.url.path in ("/login", "/logout"):
         return await call_next(request)
+
+    # Refuse a throttled caller before doing any credential comparison — a blocked
+    # key should cost this server nothing, which is the point of the throttle.
+    _ckey = _auth_client_key(request)
+    _blk = _auth_blocked_for(_ckey)
+    if _blk:
+        return Response(content="Too many failed attempts", status_code=429,
+                        headers={"Retry-After": str(_blk)})
 
     if not AUTH_PASS:
         return Response(
@@ -320,6 +437,7 @@ async def basic_auth(request: Request, call_next):
                 pass
 
     if not authed:
+        _auth_note_failure(_ckey, request.url.path, dev_name)
         # Browser requests (Accept: text/html) → redirect to login page.
         if "text/html" in request.headers.get("Accept", ""):
             return RedirectResponse(url="/login", status_code=303)
@@ -329,6 +447,11 @@ async def basic_auth(request: Request, call_next):
         # Sending it would trigger Firefox's native Basic Auth dialog for any
         # unauthenticated JS fetch from the panel — the "second auth screen."
         return Response(content="Unauthorized", status_code=401)
+
+    # Success clears the record: a typo, or a device whose key has since been
+    # corrected, should not carry a penalty forward.
+    _auth_fails.pop(_ckey, None)
+    _auth_blocked.pop(_ckey, None)
 
     # Account-management routes trust this to tell an owner from a device.
     request.state.auth_kind = auth_kind
@@ -451,6 +574,9 @@ TOOLS = [
     {"type":"function","function":{"name":"anime_random","description":"Random anime recommendation","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"add_story","description":"Save a story told to Ph3b3","parameters":{"type":"object","properties":{"name":{"type":"string"},"story":{"type":"string"}},"required":["name","story"]}}},
     {"type":"function","function":{"name":"recall_stories","description":"Recall stories by topic","parameters":{"type":"object","properties":{"topic":{"type":"string"}}}}},
+    {"type":"function","function":{"name":"file_story","description":"Save a story YOU just wrote or told, word for word, so it can be told again later. Call this right after telling an original story the user liked or asked you to keep. Pass the story's exact text — not a summary. Do NOT use this for the permanent works on the shelf (they are already stored), and do not use it for ordinary conversation.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"A short title for the story"},"text":{"type":"string","description":"The story's full text, exactly as told"}},"required":["title","text"]}}},
+    {"type":"function","function":{"name":"retell_story","description":"Look up a story YOU previously wrote and filed, by loose title — case, spaces and underscores do not matter. Use when asked to tell one of your own stories again, or when asked which stories you have written. Omit 'title' to list them. Returns the original text; you may retell it naturally in your own words unless asked for it exactly. For the permanent authored works like 'Arthur and Eliza', use read_shelf_story instead.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"Title as the user said it. Omit to list what has been filed."}},"required":[]}}},
+    {"type":"function","function":{"name":"read_shelf_story","description":"Read one of the PERMANENT works on Ph3b3's shelf — authored stories that belong to this system, like 'Arthur and Eliza'. Use when asked to read, tell, recite or quote one of these by name, or when asked what stories/works she has. Accepts a loose title: case, spaces and underscores do not matter. Omit 'title' to list everything on the shelf. Returns the story text verbatim — quote it exactly, never rewrite or summarize it unless asked.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"Title as the user said it, e.g. 'Arthur and Eliza'. Omit to list the shelf."}},"required":[]}}},
     {"type":"function","function":{"name":"add_note","description":"Save a quick note","parameters":{"type":"object","properties":{"content":{"type":"string"},"tag":{"type":"string","default":"general"}},"required":["content"]}}},
     {"type":"function","function":{"name":"read_last_note","description":"Read the most recent note","parameters":{"type":"object","properties":{"tag":{"type":"string"}}}}},
     {"type":"function","function":{"name":"search_notes","description":"Search notes","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}},
@@ -480,7 +606,7 @@ TOOLS = [
     {"type": "function", "function": {"name": "convert_photo", "description": "Convert the open photo to a different FILE FORMAT with no other changes — e.g. PNG to JPEG, JPEG to WebP. Use when the user just wants a different format or a smaller file. Metadata is stripped on the way out. Writes a new file; the original is untouched.", "parameters": {"type": "object", "properties": {"format": {"type": "string", "enum": ["PNG", "JPEG", "WEBP"], "description": "Target format"}, "quality": {"type": "number", "description": "1-100 for JPEG/WebP; default 92"}}, "required": ["format"]}}},
     {"type": "function", "function": {"name": "export_photo", "description": "Save the open photo to a new file, optionally applying adjustments in the same step. Metadata (GPS, camera make/model, serial, timestamps) is STRIPPED BY DEFAULT — only set keep_metadata true if the user explicitly asks to keep it, and tell them what's being kept. Presets: tiktok, square, portrait_4_5, widescreen, linkedin_headshot, youtube_thumb.", "parameters": {"type": "object", "properties": {"background_blur": {"type": "number", "description": "Blur everything except the subject (binary, uses the local matting model). 0-3, try 1.4"}, "depth_blur": {"type": "number", "description": "Graduated blur by distance - needs a depth model installed; if none is, say so"}, "remove_background": {"type": "boolean", "description": "Cut the subject out of the background (u2net matting, runs locally)"}, "background": {"type": "string", "description": "What to put behind the cut-out subject: white, black, grey, transparent, or a #rrggbb hex colour"}, "format": {"type": "string", "enum": ["PNG", "JPEG", "WEBP"], "description": "Output format; default PNG"}, "quality": {"type": "number", "description": "1-100 for JPEG/WebP; default 92"}, "keep_metadata": {"type": "boolean", "description": "Keep EXIF/GPS instead of stripping it. Default false. Only when explicitly asked."}, "preset": {"type": "string", "description": "Optional aspect preset: tiktok, square, portrait_4_5, widescreen, linkedin_headshot, youtube_thumb"}, "exposure": {"type": "number", "description": "Exposure in stops; +1 doubles the light, -1 halves it"}, "contrast": {"type": "number", "description": "Contrast multiplier; 1.0 is unchanged"}, "saturation": {"type": "number", "description": "Colour intensity; 1.0 unchanged, 0 is greyscale"}, "temperature": {"type": "number", "description": "Warm/cool, -100 (cool) to +100 (warm)"}, "rotate": {"type": "number", "description": "Rotation in degrees; small values straighten"}, "sharpen": {"type": "number", "description": "Sharpen strength 0-4"}, "denoise": {"type": "number", "description": "Noise reduction 0-3"}}, "required": []}}},
     {"type": "function", "function": {"name": "run_photo_batch", "description": "Apply a saved pipeline to every image in a folder. ALWAYS call once WITHOUT confirm first to show the user the dry run (how many files, where output goes), then only call again with confirm true if they agree. Originals are never modified and output never lands in the source folder.", "parameters": {"type": "object", "properties": {"folder": {"type": "string", "description": "Folder path; must be inside an allowed root (Pictures, Desktop, or the Apelles uploads dir)"}, "pipeline": {"type": "string", "description": "Saved pipeline name, e.g. etsy, tiktok, linkedin, youtube"}, "format": {"type": "string", "enum": ["PNG", "JPEG", "WEBP"], "description": "Output format; default PNG"}, "confirm": {"type": "boolean", "description": "False/omitted = dry run only. True = actually write files."}}, "required": ["folder", "pipeline"]}}},
-    {"type":"function","function":{"name":"generate_song","description":"MUSIC AND SONGS. Use for any request to make, write, compose or generate a song, track, tune, melody, jingle, ballad, anthem or instrumental — anything the user will LISTEN to. This is audio, not video. Generates locally with Amphion (ACE-Step). Describe the music in 'description' (genre, instruments, mood, and the SINGER as a description like 'male baritone, gravelly' — never a real artist's name). Optional 'lyrics' for a vocal track; omit for an instrumental. Generation takes about a minute and runs in the background — tell the user it has started and that you'll let them know.","parameters":{"type":"object","properties":{"description":{"type":"string","description":"The music: genre, instruments, mood, tempo feel, and the singer described (e.g. 'outlaw country, acoustic guitar, male baritone, gravelly, crooned')"},"lyrics":{"type":"string","description":"Optional lyrics. Leave empty for an instrumental."},"seconds":{"type":"number","description":"Length in seconds (5-240). Default 60."},"singer":{"type":"string","description":"Optional name of a SAVED singer profile to use (see list_singers). Not a real artist's name."}},"required":["description"]}}},
+    {"type":"function","function":{"name":"generate_song","description":"MUSIC AND SONGS. Use for any request to make, write, compose or generate a song, track, tune, melody, jingle, ballad, anthem or instrumental — anything the user will LISTEN to. This is audio, not video. Generates locally with Amphion (ACE-Step). Describe the music in 'description' (genre, instruments, mood, and the SINGER as a description like 'male baritone, gravelly' — never a real artist's name). Optional 'lyrics' for a vocal track; omit for an instrumental. Generation takes about a minute and runs in the background — tell the user it has started and that you'll let them know.","parameters":{"type":"object","properties":{"description":{"type":"string","description":"The music: genre, instruments, mood, tempo feel, and the singer described (e.g. 'outlaw country, acoustic guitar, male baritone, gravelly, crooned')"},"lyrics":{"type":"string","description":"Optional lyrics. Leave empty for an instrumental."},"seconds":{"type":"number","description":"Length in seconds (5-1000, i.e. up to ~16 min). Default 60."},"singer":{"type":"string","description":"Optional name of a SAVED singer profile to use (see list_singers). Not a real artist's name."}},"required":["description"]}}},
     {"type":"function","function":{"name":"list_songs","description":"List the songs Amphion has generated, newest first, with their descriptions and seeds. Use when the user asks what songs exist, what was made, or wants to hear one.","parameters":{"type":"object","properties":{"count":{"type":"integer","description":"How many to list (default 5)"}},"required":[]}}},
     {"type":"function","function":{"name":"list_singers","description":"List the saved and built-in Amphion singer profiles (voice descriptions, and a seed when one is pinned). Use when the user asks which singers/voices are available.","parameters":{"type":"object","properties":{},"required":[]}}},
     {"type":"function","function":{"name":"song_status","description":"Check whether the most recent song generation has finished. Use when the user asks if their song is ready.","parameters":{"type":"object","properties":{},"required":[]}}},
@@ -698,6 +824,9 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "anime_random": result = anime.random_rec()
         elif name == "add_story": result = stories.add_story_from_person(args["name"], args["story"])
         elif name == "recall_stories": result = stories.recall_stories(args.get("topic"))
+        elif name == "read_shelf_story": result = _tool_read_shelf_story(args)
+        elif name == "file_story":    result = await asyncio.to_thread(_tool_file_story, args)
+        elif name == "retell_story":  result = _tool_retell_story(args)
         elif name == "add_note": result = notes.add(args["content"], args.get("tag","general"))
         elif name == "read_last_note": result = notes.read_last(args.get("tag"))
         elif name == "search_notes": result = notes.search(args["query"])
@@ -863,6 +992,91 @@ async def execute_tool(name, args, device="nyx", session_id=""):
 # SAME checks the HTTP routes call, and return the refusal as speech rather than
 # raising — she says why, out loud, instead of a 403 vanishing into a tool error.
 _amphion_last_job: str | None = None
+
+
+def _tool_file_story(args: dict) -> str:
+    """File a story she just told, verbatim.
+
+    Runs on a thread because canon.save() pays for a semantic floor pass on
+    write, which is a model call — awaiting it inline would stall the event loop
+    mid-turn.
+
+    The floor's refusal is passed through as canon phrased it, not reworded into
+    something vaguer. If it will not file a story, the honest answer is that it
+    will not file it.
+    """
+    title = (args.get("title") or "").strip()
+    text  = (args.get("text") or "").strip()
+    if not title or not text:
+        return "I need both a title and the story's text to file it."
+    try:
+        r = canon.save(title, text)
+    except Exception as e:
+        log.warning("[canon] save failed: %s", e)
+        return "I couldn't file that one — something went wrong writing it."
+    if not r.get("ok"):
+        return r.get("reason") or "I can't file that one."
+    return (f"Filed “{r['title']}” word for word. "
+            "Ask for it by name any time and I'll have the original.")
+
+
+def _tool_retell_story(args: dict) -> str:
+    """Look up a story she filed. Every failure names what does exist.
+
+    Unlike the shelf, the text comes back WITHOUT an instruction to quote it
+    exactly. canon's whole premise is "store exact, speak freely" — the original
+    is safe on disk, so retelling it in her own words costs nothing. The shelf
+    holds someone else's authored work and is the opposite case.
+    """
+    title = (args.get("title") or "").strip()
+    if not title:
+        return canon.describe() + " Ask for one by name to hear it again."
+
+    r = canon.resolve(title)
+    if r["ok"]:
+        s = r["story"]
+        return (f"“{s['title']}”, filed {s.get('date_saved') or 'earlier'}. "
+                "The original text follows — retell it naturally in your own "
+                "words unless the user asks for it exactly as written:\n\n"
+                + canon.fenced(s["text"]))
+    if r["reason"] == "refused":
+        return r.get("detail") or canon.REFUSAL_READ
+    if r["reason"] == "empty":
+        return "I haven't filed any stories yet."
+    return (f"I don't have a filed story by that name. "
+            + canon.describe(r.get("candidates"), r.get("total")))
+
+
+def _tool_read_shelf_story(args: dict) -> str:
+    """Read a permanent work off the shelf, by loose title.
+
+    Every failure path returns the shelf contents with it. A clarifying question
+    that does not say what the options are asks the user to guess at a list only
+    this process can see, and that is a worse outcome than not having the lookup
+    at all — so "which one?" is never returned bare.
+
+    The text is FENCED on the way back. It is trustworthy, but it is entering a
+    prompt, and the fence is a statement about the channel rather than about the
+    author.
+    """
+    title = (args.get("title") or "").strip()
+    if not title:
+        return shelf.describe_shelf() + " Ask for one by name to read it."
+
+    r = shelf.resolve(title)
+    if r["ok"]:
+        b = r["book"]
+        return (f"“{b['title']}”"
+                + (f" — {b['subtitle']}" if b.get("subtitle") else "")
+                + f" ({b['words']} words), stored permanently on the shelf. "
+                  "Read it as written:\n\n" + shelf.fenced(b["text"]))
+
+    names = shelf.describe_shelf(r["candidates"] or None)
+    if r["reason"] == "ambiguous":
+        return f"That could be more than one. {names} Which did you mean?"
+    if r["reason"] == "empty":
+        return "There is nothing on the shelf yet."
+    return f"I don't have anything by that name. {names}"
 
 
 async def _tool_generate_song(args: dict, device: str = "nyx") -> str:
@@ -1351,9 +1565,45 @@ async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
     return None
 
 
+# Context window for the tool-enabled chat loop.
+#
+# The 100 tool definitions cost 8,324 tokens on EVERY request. num_ctx was 8192,
+# so the tools alone overran the window by 132 tokens before a single word of
+# conversation — which means the system prompt and the entire rolling history
+# were evicted on every turn, always. Ph3b3 was answering each message with no
+# memory of the one before it. That is what produced "I don't have enough context
+# to understand which one" one turn after she wrote the story, and the
+# confabulated answers: with no history to draw on, the model invents rather than
+# admits the gap.
+#
+# 16384 leaves ~8,060 tokens for prompt, history and reply — comfortably more
+# than CONV_WINDOW=8 (16 messages) needs. It costs roughly 2 GB more KV cache,
+# which matters because Morpheus and ComfyUI compete for the same 16 GB card, so
+# this is deliberately not set higher.
+#
+# The real fix is fewer tools on the wire. 8,324 tokens of schema to answer "tell
+# me a story" is the actual waste; raising the window buys correctness now.
+CHAT_NUM_CTX = int(os.getenv("PH3B3_CHAT_NUM_CTX", "16384"))
+
+# Longest shelved work that may be inlined into a chat turn, in words. The tool
+# schemas already cost 8,324 tokens of the 16,384 window, leaving roughly 8,060
+# for prompt, history and reply; 3,000 words is about 4,000 tokens, which fits
+# beside CONV_WINDOW=8 without evicting the conversation. A longer work is served
+# by read_shelf_story instead — inlining half of one would be worse than inlining
+# none, because she would answer from the fragment with no idea it was partial.
+SHELF_INLINE_MAX_WORDS = int(os.getenv("PH3B3_SHELF_INLINE_MAX_WORDS", "3000"))
+
+# Filed stories inline lower than shelved works. A shelved work is a rare, named
+# request; a filed story is the everyday case, so its ceiling is set where a
+# typical told story fits and a runaway one does not. Past it, retell_story is
+# still the route — a truncated story is worse than none, because she would
+# answer from the fragment sounding just as sure.
+CANON_INLINE_MAX_WORDS = int(os.getenv("PH3B3_CANON_INLINE_MAX_WORDS", "2000"))
+
+
 async def chat_with_tools(messages, device="nyx", session_id=""):
     async with httpx.AsyncClient(timeout=120) as client:
-        payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":TOOLS,"options":{"temperature":0.7,"num_ctx":8192}}
+        payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":TOOLS,"options":{"temperature":0.7,"num_ctx":CHAT_NUM_CTX}}
         try:
             response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
             response.raise_for_status()
@@ -1834,8 +2084,30 @@ async def _run_chat_pipeline(body: dict, request: Request):
         session.add("assistant", _blocked)
         return _blocked
 
+    # A named story is answerable BY CONSTRUCTION — do not let triage hold it.
+    #
+    # Triage refuses anything referring to "a specific file, artifact or prior
+    # detail absent from the context", and a story title is exactly that shape.
+    # But the context it is judging has not been built yet: the shelf and canon
+    # injections run further down this function, so triage was declaring
+    # Esmeralda's Garden missing roughly forty lines before the code that puts
+    # its full text into the prompt. "Tell me Esmeralda's Garden again" came back
+    # as "What is the title of the song you would like to hear?" — a hold, and a
+    # clarifying question about the wrong medium entirely.
+    #
+    # Resolving here is cheap: both are directory listings and a string match, no
+    # model call. If either store can name it, the turn is answerable and triage
+    # is skipped for the same reason an early intent claim skips it.
+    _story_claim = False
+    if user_msg:
+        try:
+            _story_claim = bool(shelf.resolve(user_msg).get("ok")
+                                or canon.resolve(user_msg).get("ok"))
+        except Exception:
+            _story_claim = False       # a lookup fault must not gate the turn
+
     _early_claim = intent_registry.resolve(user_msg)
-    _triage = (_TriagePass() if _early_claim
+    _triage = (_TriagePass() if (_early_claim or _story_claim)
                else await triage_gate(user_msg, _triage_context(session.messages())))
     if not _triage.answerable:
         _q = _triage.question or "I don't have enough to go on yet — can you give me a bit more detail?"
@@ -1910,6 +2182,168 @@ async def _run_chat_pipeline(body: dict, request: Request):
     _lang_dir = voices.language_directive()
     if _lang_dir:
         messages.insert(1, {"role": "system", "content": _lang_dir})
+
+    # ── Emotion (additive — injected into the message COPY, not the history) ──
+    # The STATE is standing and persisted; the DIRECTIVE is rebuilt every turn
+    # from whatever the state is right now. Nothing is written into
+    # session.history, so changing the emotion changes how the next reply sounds
+    # without retroactively recolouring the transcript of the last one. NONE
+    # inserts nothing at all, which is the zero-behaviour-change anchor.
+    #
+    # Reads `active()`, so a manual pick and Auto's current read are handled by
+    # the same line — chat has no business knowing which of the two it is.
+    _emo_now = emotions.active()
+    if emotions.is_named(_emo_now):
+        _emo_dir = emotions.chat_terms(_emo_now)
+        if _emo_dir:
+            messages.insert(1, {"role": "system",
+                                "content": f"Tone for this reply: {_emo_dir}. "
+                                           "This shapes how you sound, never what "
+                                           "you will or will not do."})
+
+    # At most ONE story is inlined per turn. A shelved work can run to 3,000
+    # words and a filed one to 2,000; injecting both would evict the very history
+    # the window was raised to protect. A turn is about one story.
+    #
+    # Declared HERE, above both blocks that touch it. It was first written inside
+    # the shelf block, which sits further down the function than the canon block
+    # that reads it — so every chat turn raised UnboundLocalError before a word
+    # was generated. Initialise shared state above every reader, not beside the
+    # first writer.
+    _story_inlined = False
+
+    # ── Stories SHE filed (canon) — same treatment, bounded ───────────────────
+    # Registering retell_story was not enough, exactly as registering
+    # read_shelf_story was not: asked to tell Esmeralda's Garden again she wrote
+    # a NEW story about the same character — a forgotten forest instead of a
+    # quiet town between rolling hills — without calling the tool. A filed story
+    # that comes back as a different story is the precise failure canon exists to
+    # prevent, so the text goes in front of her rather than being offered.
+    #
+    # Two things are bounded here that the shelf does not have to bound. The
+    # inventory is capped at canon.DESCRIBE_MAX with a count for the rest,
+    # because this store grows every time she files something and an
+    # ever-lengthening system line would eventually crowd out the conversation.
+    # And the inlined text is capped lower than a shelved work's, because filed
+    # stories are the common case, not the rare one.
+    #
+    # The instruction differs too, and that is canon's own rule rather than an
+    # oversight: store exact, speak freely. She may retell it in her own words —
+    # what she may not do is invent a different story and present it as this one.
+    _canon_metas = canon.list_all()
+    if _canon_metas:
+        messages.insert(1, {"role": "system", "content":
+            canon.describe(_canon_metas) +
+            " That is what you have filed — never claim a filed story you do not "
+            "have, and never describe one's contents from memory. Call "
+            "retell_story to read one."})
+
+        if user_msg and not _story_inlined:
+            _cr = canon.resolve(user_msg)
+            if _cr.get("ok") and len(_cr["story"]["text"].split()) <= CANON_INLINE_MAX_WORDS:
+                _cs = _cr["story"]
+                _story_inlined = True
+                messages.insert(1, {"role": "system", "content":
+                    f"The user's message refers to “{_cs['title']}”, a story you "
+                    "filed. Its original text follows. Anything you say about it "
+                    "must come from this text — you may retell it in your own "
+                    "words, but do not invent a different story and call it this "
+                    "one.\n\n" + canon.fenced(_cs["text"])})
+
+    # ── Recite a shelved work (deterministic, pre-LLM) ────────────────────────
+    # Same discipline as the fleet/battery intent below: when the model cannot be
+    # relied on, do not ask it. A language model cannot reproduce a thousand words
+    # verbatim — it compresses, drops a paragraph, smooths a line — and it does so
+    # fluently, which means the loss is invisible to anyone who does not already
+    # know the text. Asked to read Arthur and Eliza it would return something
+    # shaped like the story rather than the story.
+    #
+    # These are authored works that belong to this system. Reading one aloud is
+    # not a generation task and there is no reason for a model to be in the path,
+    # so the file is returned directly, byte-faithful in its words.
+    #
+    # Only for RECITAL. "What is it about?" still goes to the model, with the text
+    # injected below so the answer is grounded in it.
+    #
+    # AND ONLY FOR A STORY MARKED verbatim. That is a per-story decision in the
+    # manifest, not a property of the system, because the right answer genuinely
+    # differs: family history and folklore recorded from one teller are told
+    # exactly — her wording IS the artifact — while fiction written to be
+    # performed should be performed, and a living retelling is most of why
+    # anyone would want her to tell it at all.
+    #
+    # A non-verbatim story falls through to the model with its full text
+    # injected below, so she tells THAT story rather than inventing one. The
+    # protection is the same either way; only the delivery differs.
+    if user_msg and shelf.wants_recital(user_msg):
+        _r = shelf.resolve(user_msg)
+        if _r.get("ok") and _r["book"].get("verbatim"):
+            _b = _r["book"]
+            log.info("[shelf] reciting %r verbatim (%d words) — model bypassed",
+                     _b["slug"], _b["words"])
+            _telling = shelf.for_telling(_b["text"])
+            # The user's turn is already in the session by this point, so only
+            # the reply is added — and chat_log is skipped, matching every other
+            # early return in this function. The text is permanently in the repo
+            # either way; duplicating 1,084 words into the transcript on every
+            # recital would be the odd choice, not the omission.
+            session.add("assistant", _telling)
+            return _telling
+
+    # ── Shelf inventory (additive, ephemeral — anti-fabrication) ──────────────
+    # The shelf is a short, fixed list, so she is TOLD it rather than being left
+    # to remember it. Asked "what stories do you have?", the model was answering
+    # without calling read_shelf_story and inventing titles — it produced "The
+    # Mysterious Disappearance of the Green Dragon", which has never existed, and
+    # described Arthur and Eliza as a whimsical adventure. A tool the model
+    # declines to call is not a source of truth, and for THIS asset a confident
+    # invention is the worst possible failure: the brief asks that it be handled
+    # as a permanent, protected work, and inventing siblings for it is the
+    # opposite of that.
+    #
+    # Costs one short line per turn and removes the guess entirely. The tool is
+    # still what serves the TEXT; this only fixes the inventory.
+    _shelf_books = shelf.list_books()
+    if _shelf_books:
+        messages.insert(1, {"role": "system", "content":
+            shelf.describe_shelf(_shelf_books) +
+            " That list is complete and authoritative — never claim to have any "
+            "other work on the shelf, and never describe what one of these "
+            "contains from memory. To read or quote one, call read_shelf_story "
+            "and use exactly what it returns."})
+
+        # And when the turn NAMES one, put the actual text in front of her.
+        #
+        # Telling her not to describe a work from memory did not stop her doing
+        # it: asked "what is Arthur and Eliza about?" she produced a flying
+        # vehicle, ancient wisdom and magic. It is a WWII story about a scout and
+        # a nurse. She had not called the tool, and an instruction the model can
+        # decline to follow is not a control.
+        #
+        # So the text is injected deterministically, the same way the language
+        # directive and the datetime note are, and she is left with nothing to
+        # invent from. Fenced, because it is entering a prompt.
+        #
+        # Only on a CONFIDENT name match, so ordinary conversation pays nothing,
+        # and only for works small enough to sit in the window beside the history
+        # — above that the tool remains the route, because a truncated work would
+        # be worse than no work at all: she would speak from a fragment and sound
+        # exactly as certain.
+        _named = shelf.resolve(user_msg) if user_msg else {"ok": False}
+        if _named.get("ok") and _named["book"]["words"] <= SHELF_INLINE_MAX_WORDS:
+            _b = _named["book"]
+            _story_inlined = True
+            messages.insert(1, {"role": "system", "content":
+                f"The user's message refers to “{_b['title']}”, which is on your "
+                "shelf. Its full and exact text follows. Answer about it ONLY from "
+                "this text — never invent a different story and present it as this "
+                "one. "
+                + ("Quote it exactly; this one is told word for word."
+                   if _b.get("verbatim") else
+                   "You may tell it in your own words — perform it rather than "
+                   "recite it — but every event, name and detail must come from "
+                   "the text below.")
+                + "\n\n" + shelf.fenced(_b["text"])})
 
     # ── Live datetime (additive, ephemeral — constructed FRESH every request) ──
     # Full timestamp incl. weekday + TZ abbrev, tz-aware (ZoneInfo, DST-correct).
@@ -2053,6 +2487,13 @@ async def _run_chat_pipeline(body: dict, request: Request):
     if user_msg:  chat_log.log_turn(_sid, _src, "user", user_msg)
     if response:  chat_log.log_turn(_sid, _src, "phoebe", response)
 
+    # Emotion, Auto mode: re-read the room now that this turn is in the history.
+    # Scheduled, never awaited — the reply is already composed and must not wait
+    # on a second model call to be returned. A no-op unless Auto is selected.
+    # Deliberately AFTER session.add above, so the read includes the turn that
+    # just happened rather than always trailing it by one.
+    asyncio.create_task(_emotion_auto_update(session))
+
     return response
 
 
@@ -2081,7 +2522,7 @@ async def chat_endpoint(body: dict, request: Request):
     # returned as text, Alba is not assigned, no empty-audio call is made.
     plan = voices.output_for_response()
     audio_b64 = "" if plan["text_only"] else await asyncio.to_thread(
-        tts.synthesize_to_b64, reply, plan["voice"])
+        tts.synthesize_to_b64, reply, plan["voice"], *_speech_delivery(reply))
     return {"response": reply, "audio": audio_b64, "text_only": plan["text_only"]}
 
 
@@ -2099,21 +2540,49 @@ def _tts_stream_gc(now):
     for k in [k for k, v in _TTS_STREAMS.items() if now - v["ts"] > _TTS_STREAM_TTL]:
         _TTS_STREAMS.pop(k, None)
 
-def _tts_stream_new(chunks, voice=None):
+def _tts_stream_new(chunks, voice=None, pace=None, silence=None):
     now = time.monotonic()
     _tts_stream_gc(now)
     sid = uuid.uuid4().hex[:12]
-    _TTS_STREAMS[sid] = {"chunks": chunks, "audio": {}, "ts": now, "voice": voice}
+    # Pace is fixed for the WHOLE reply, captured here rather than read per
+    # chunk. If the emotion changed mid-sentence the back half would speed up
+    # against the front half, which reads as a fault rather than a feeling.
+    _TTS_STREAMS[sid] = {"chunks": chunks, "audio": {}, "ts": now,
+                         "voice": voice, "pace": pace, "silence": silence}
     return sid
 
+async def _tts_synth_into(st, n):
+    """Synthesize one chunk into the stream's cache. Safe to call twice."""
+    if n in st["audio"] or n < 0 or n >= len(st["chunks"]):
+        return
+    st["audio"][n] = None                      # claim the slot so prefetch can't double-run
+    b64 = await asyncio.to_thread(tts.synthesize_to_b64, st["chunks"][n],
+                                  st.get("voice"), st.get("pace"),
+                                  st.get("silence")) or ""
+    st["audio"][n] = trim_silence_b64(b64) if b64 else ""   # drop Piper's ~200ms per-chunk gaps
+
+
 async def _tts_chunk_b64(sid, n):
+    """Return chunk n, and start chunk n+1 synthesizing in the background.
+
+    Without the prefetch, Dio waits at every chunk boundary while Piper works —
+    measured at ~1.1s per chunk, which is a full second of silence dropped into
+    the middle of a story. Synthesis is roughly ten times faster than playback
+    (1.1s of compute per 10s of speech), so there is ample time to have the next
+    chunk ready before the current one finishes; it just was never started early.
+
+    The cost is one chunk of memory ahead of the playhead, which is nothing
+    against the 15-minute stream TTL that already holds every chunk synthesized
+    so far."""
     st = _TTS_STREAMS.get(sid)
     if not st or n < 0 or n >= len(st["chunks"]):
         return None
     st["ts"] = time.monotonic()
-    if n not in st["audio"]:
-        b64 = await asyncio.to_thread(tts.synthesize_to_b64, st["chunks"][n], st.get("voice")) or ""
-        st["audio"][n] = trim_silence_b64(b64) if b64 else ""   # drop Piper's ~200ms per-chunk gaps
+    await _tts_synth_into(st, n)
+    while st["audio"].get(n) is None:           # a prefetch is mid-flight; wait for it
+        await asyncio.sleep(0.02)
+    if n + 1 < len(st["chunks"]) and (n + 1) not in st["audio"]:
+        asyncio.create_task(_tts_synth_into(st, n + 1))
     return st["audio"][n]
 
 
@@ -2183,7 +2652,7 @@ async def chat_stream_endpoint(body: dict, request: Request):
     if not chunks:
         return {"response": reply, "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}
-    sid = _tts_stream_new(chunks, out_voice)
+    sid = _tts_stream_new(chunks, out_voice, *_speech_delivery(reply))
     audio0 = await _tts_chunk_b64(sid, 0)
     if len(chunks) > 1:
         asyncio.create_task(_tts_chunk_b64(sid, 1))   # read-ahead
@@ -3649,6 +4118,366 @@ async def chats_session(name: str):
         raise HTTPException(404, "session not found")
     return {"turns": turns}
 
+# ── Ghost Hunting investigations (Dio → Nyx) ─────────────────────────────────
+# Dio records an investigation entirely to her SD card and uploads it later, as a
+# separate deliberate act — she gets carried into places with no WiFi, so nothing
+# in the recording path may depend on the network being up. Sync is therefore a
+# plain file copy plus a finalize, and it is idempotent: re-uploading a session
+# overwrites the same files and rebuilds the same manifest.
+INVESTIGATIONS_DIR = Path.home() / "Desktop" / "investigations"
+_INV_MAX_BYTES = 32 * 1024 * 1024          # a single capture file; WAVs are ~320 KB
+_INV_SUBDIRS   = ("photos", "audio")
+_INV_SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _inv_session_dir(session_id: str) -> Path:
+    """Resolve a session id to its bundle directory, refusing anything that is
+    not a plain name. The id reaches us from a device header, so it is untrusted
+    input that ends up in a filesystem path."""
+    if not _INV_SAFE_NAME.match(session_id or "") or session_id.startswith("."):
+        raise HTTPException(400, "invalid session id")
+    return INVESTIGATIONS_DIR / session_id
+
+
+def _inv_resolve_upload(session_id: str, rel: str) -> Path:
+    """Map an X-Inv-Path to a real path inside the bundle. Only manifest.ndjson
+    at the root and single-level files under photos/ or audio/ are accepted —
+    anything else (absolute, dotted, nested, oddly named) is refused rather than
+    normalised, so there is no traversal to reason about."""
+    rel = (rel or "").strip().replace("\\", "/").lstrip("/")
+    parts = [p for p in rel.split("/") if p]
+    if not parts or any(not _INV_SAFE_NAME.match(p) or p.startswith(".") for p in parts):
+        raise HTTPException(400, "invalid file path")
+
+    base = _inv_session_dir(session_id)
+    if len(parts) == 1:
+        if parts[0] != "manifest.ndjson":
+            raise HTTPException(400, "only manifest.ndjson may sit at the bundle root")
+        return base / parts[0]
+    if len(parts) == 2 and parts[0] in _INV_SUBDIRS:
+        return base / parts[0] / parts[1]
+    raise HTTPException(400, "path must be manifest.ndjson, photos/<file> or audio/<file>")
+
+
+@app.post("/investigations/{session_id}/file")
+async def investigation_upload(session_id: str, request: Request):
+    """Receive one file of a Ghost Hunting bundle. Body is the raw bytes; the
+    destination comes from the X-Inv-Path header. Auth is the global basic-auth
+    middleware. Written via a temp file + atomic replace so an interrupted upload
+    can never leave a half a WAV sitting in the bundle looking like evidence."""
+    dest = _inv_resolve_upload(session_id, request.headers.get("X-Inv-Path", ""))
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "empty upload")
+    if len(data) > _INV_MAX_BYTES:
+        raise HTTPException(413, f"file exceeds {_INV_MAX_BYTES} bytes")
+
+    def _write() -> int:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".part")
+        tmp.write_bytes(data)
+        tmp.replace(dest)
+        return len(data)
+
+    written = await asyncio.to_thread(_write)
+    log.info("[inv] %s ← %s (%d bytes)", session_id, dest.name, written)
+    return {"ok": True, "session_id": session_id, "file": dest.name, "bytes": written}
+
+
+def _inv_build_manifest(session_id: str, base: Path) -> dict:
+    """Assemble manifest.json from the append-only manifest.ndjson Dio wrote.
+
+    The device logs NDJSON precisely because a session can end with a flat
+    battery: every line stands alone, so a truncated file still yields every
+    event before the cut. That means the LAST line may legitimately be a
+    fragment — it is counted, not treated as corruption of the whole session."""
+    nd = base / "manifest.ndjson"
+    if not nd.exists():
+        raise HTTPException(400, "manifest.ndjson missing — upload it before finalize")
+
+    events, truncated = [], 0
+    for line in nd.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            truncated += 1
+
+    start = next((e for e in events if e.get("type") == "session_start"), {})
+    end   = next((e for e in events if e.get("type") == "session_end"), None)
+
+    # temp_f is derived on the device and travels with temp_c; both must be
+    # listed or the extra key leaks to the capture's top level instead of its env.
+    env_keys = ("temp_c", "temp_f", "humidity_pct", "pressure_pa",
+                "temp_source", "env_age_ms")
+    captures = []
+    for e in events:
+        if e.get("type") not in ("audio", "photo"):
+            continue
+        cap = {k: v for k, v in e.items() if k not in env_keys and k != "type"}
+        cap["kind"] = e["type"]
+        cap["env"]  = {k: e.get(k) for k in env_keys}
+        captures.append(cap)
+
+    counts = {t: sum(1 for e in events if e.get("type") == t)
+              for t in ("env", "audio", "photo", "audio_gap", "error")}
+
+    # Report what is actually on disk, not what the device believed it wrote —
+    # a file that failed to upload must not be implied by the manifest.
+    def _listing(sub: str) -> list:
+        d = base / sub
+        return sorted(p.name for p in d.iterdir() if p.is_file()) if d.is_dir() else []
+
+    return {
+        "session_id":  session_id,
+        "device":      start.get("device"),
+        "mode":        start.get("mode"),
+        "env_unit":    start.get("env_unit"),
+        "started_at":  start.get("rtc"),
+        "ended_at":    (end or {}).get("rtc"),
+        "duration_ms": (end or {}).get("duration_ms"),
+        "complete":    end is not None,          # false = session was cut short
+        "sample_rate": start.get("sample_rate"),
+        "chunk_sec":   start.get("chunk_sec"),
+        # Clock provenance. "server" = the device synced to this machine before
+        # recording, so its timestamps are directly comparable to Phoebe's.
+        # "device" = an RTC nothing ever set; absent = a bundle predating the
+        # field, which is treated as trustworthy so old sessions don't change
+        # meaning retroactively.
+        "clock":         start.get("clock"),
+        "tz_offset_min": start.get("tz_offset_min"),
+        "counts":      counts,
+        "truncated_lines": truncated,
+        "env_readings": [{k: e.get(k) for k in ("ms", "rtc", *env_keys)}
+                         for e in events if e.get("type") == "env"],
+        "captures":    captures,
+        "files":       {"photos": _listing("photos"), "audio": _listing("audio")},
+        "events":      events,                   # the raw log, kept verbatim
+        "synced_at":   datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def _inv_mark_streams(record: dict) -> list:
+    """The operator's own timestamped entries, flattened to (kind, time, text)."""
+    out = []
+    for entry in record.get("evp_timestamps") or []:
+        out.append(("evp", entry.get("time"), entry.get("note", "")))
+    for entry in record.get("anomalies") or []:
+        out.append(("anomaly", entry.get("time"), entry.get("description", "")))
+    for entry in record.get("notes") or []:
+        out.append(("note", entry.get("time"), entry.get("note", "")))
+    for entry in record.get("emf_readings") or []:
+        out.append(("emf", entry.get("time"),
+                    f"{entry.get('reading','')} @ {entry.get('location','')}".strip(" @")))
+    for entry in record.get("events") or []:
+        out.append((f"event:{entry.get('category','general')}",
+                    entry.get("time"), entry.get("description", "")))
+    return out
+
+
+def _inv_link_investigation(session_id: str, manifest: dict) -> dict | None:
+    """Join a synced device bundle to the investigation it was recorded during.
+
+    The two halves are captured independently: Phoebe's record is what the
+    operator noticed, the bundle is what Dio heard while they noticed it. They
+    share no id, so the join is by wall-clock time — both sides write naive local
+    ISO timestamps, so they compare directly.
+
+    The payoff is the mark correlation. An EVP the operator flagged at 21:34:12
+    resolves to the audio chunk whose span contains it, so the bundle records
+    which file to actually listen to rather than leaving someone to work it out
+    from two clocks later.
+
+    Returns the block to embed in manifest.json, or None when nothing matched —
+    an unmatched bundle stays unmatched rather than being attached to whichever
+    investigation happened to be nearest.
+    """
+    started_at = manifest.get("started_at")
+    start_dt = None
+    if started_at:
+        try:
+            start_dt = datetime.fromisoformat(started_at)
+        except ValueError:
+            start_dt = None
+
+    # A device RTC that was never set holds whatever it was last left on — Dio's
+    # sat on UTC while this machine runs local time, a silent four-hour skew. Such
+    # a timestamp is not merely wrong, it is of UNKNOWN origin, so it must not be
+    # compared to Phoebe's local stamps at all. Sessions recorded after a
+    # successful sync say clock:"server" and are trustworthy; anything else falls
+    # through to the active-investigation path, which claims nothing on its own.
+    if manifest.get("clock") not in ("server", None):
+        log.info("[inv] %s has clock=%r — not time-matching", session_id, manifest.get("clock"))
+        start_dt = None
+
+    if start_dt is not None:
+        inv_id, basis = investigation.find_session_for(start_dt), "time_window"
+    else:
+        # Dio's clock was never set, so there is no time to match on. Fall back
+        # to the investigation open right now, and record that the link is an
+        # inference rather than a match — the manifest must not imply more
+        # certainty than the timestamps support.
+        inv_id = (investigation._active or {}).get("session_id")
+        basis = "active_session_no_rtc"
+
+    if not inv_id:
+        return None
+    record = investigation.get_session(inv_id)
+    if not record:
+        return None
+
+    # Marks inside this recording's own span. A hunt can span several bundles,
+    # so an entry logged while Dio was not recording belongs to neither.
+    duration_ms = manifest.get("duration_ms") or 0
+    marks = []
+    if start_dt is not None:
+        end_dt = start_dt + timedelta(milliseconds=duration_ms)
+        audio = [c for c in manifest.get("captures", []) if c.get("kind") == "audio"]
+        for kind, when, text in _inv_mark_streams(record):
+            if not when:
+                continue
+            try:
+                t = datetime.fromisoformat(when)
+            except ValueError:
+                continue
+            if not (start_dt <= t <= end_dt):
+                continue
+            offset_ms = int((t - start_dt).total_seconds() * 1000)
+            hit = next((c for c in audio
+                        if c.get("start_ms", 0) <= offset_ms
+                        < c.get("start_ms", 0) + (c.get("duration_ms") or 0)), None)
+            marks.append({
+                "kind": kind, "at": when, "offset_ms": offset_ms, "text": text,
+                "audio_file": hit.get("file") if hit else None,
+                "offset_in_file_ms": (offset_ms - hit.get("start_ms", 0)) if hit else None,
+            })
+        marks.sort(key=lambda m: m["offset_ms"])
+
+    counts = manifest.get("counts") or {}
+    investigation.attach_device_session(inv_id, {
+        "session_id": manifest.get("session_id"),
+        "device":     manifest.get("device"),
+        "mode":       manifest.get("mode"),
+        "started_at": started_at,
+        "duration_ms": duration_ms,
+        "complete":   manifest.get("complete"),
+        "counts":     counts,
+        "path":       str(INVESTIGATIONS_DIR / session_id),
+        "match":      basis,
+        "linked_at":  datetime.now().isoformat(timespec="seconds"),
+    })
+
+    return {
+        "session_id":   inv_id,
+        "location":     record.get("location"),
+        "investigator": record.get("investigator"),
+        "started":      record.get("started"),
+        "ended":        record.get("ended"),
+        "weather":      record.get("weather"),
+        "match":        basis,
+        "marks":        marks,
+    }
+
+
+@app.post("/investigations/{session_id}/finalize")
+async def investigation_finalize(session_id: str):
+    """Close out a synced session: build manifest.json from the uploaded NDJSON
+    and make sure photos/ and audio/ exist, so every bundle has the same shape
+    whether or not the mode that produced it captures those. Idempotent — safe
+    to call again after a re-upload."""
+    base = _inv_session_dir(session_id)
+    if not base.is_dir():
+        raise HTTPException(404, "session not found")
+
+    def _finalize() -> dict:
+        for sub in _INV_SUBDIRS:
+            (base / sub).mkdir(exist_ok=True)
+        manifest = _inv_build_manifest(session_id, base)
+        # Cross-link before writing, so manifest.json is complete on first read
+        # and a consumer never has to know a second pass happened.
+        manifest["investigation"] = _inv_link_investigation(session_id, manifest)
+        tmp = base / "manifest.json.part"
+        tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        tmp.replace(base / "manifest.json")
+        return manifest
+
+    manifest = await asyncio.to_thread(_finalize)
+    linked = manifest.get("investigation")
+    log.info("[inv] finalized %s — mode=%s captures=%d env=%d%s → %s",
+             session_id, manifest["mode"], len(manifest["captures"]),
+             manifest["counts"]["env"],
+             "" if manifest["complete"] else " (INCOMPLETE — no session_end)",
+             f"{linked['session_id']} ({len(linked['marks'])} marks)"
+             if linked else "no matching investigation")
+    return {"ok": True, "session_id": session_id, "path": str(base),
+            "mode": manifest["mode"], "counts": manifest["counts"],
+            "complete": manifest["complete"],
+            "investigation": linked["session_id"] if linked else None,
+            "marks": len(linked["marks"]) if linked else 0}
+
+
+@app.get("/time")
+async def server_time():
+    """The clock a device should set itself to.
+
+    Dio has an RTC that nothing ever sets, so it holds whatever it was last left
+    on — in practice UTC while this machine runs local time, a silent four-hour
+    skew. That matters because investigation bundles are joined to hunt records by
+    wall-clock time, and Phoebe stamps her records with naive local `datetime.now()`.
+    The two clocks that have to agree are the device's and this server's, so the
+    device syncs to THIS rather than to NTP: no DNS, no timezone string on the
+    device, and by construction it lands on the exact clock the join compares
+    against.
+
+    `iso` is deliberately naive local, matching what the investigation module
+    writes. `offset_min` is included so a bundle can record which offset it was
+    stamped in and stop being ambiguous later."""
+    now = datetime.now()
+    offset = now.astimezone().utcoffset()
+    return {
+        "iso":        now.isoformat(timespec="seconds"),
+        "epoch":      int(now.timestamp()),
+        "offset_min": int(offset.total_seconds() // 60) if offset else 0,
+        "tz":         now.astimezone().tzname() or "",
+    }
+
+
+@app.get("/investigations")
+async def investigations_list():
+    """Read-only index of synced investigations, newest first. Reads each
+    bundle's manifest.json where one exists; a session that was uploaded but
+    never finalized still shows up, marked unfinalized, rather than vanishing."""
+    if not INVESTIGATIONS_DIR.is_dir():
+        return {"sessions": []}
+
+    def _scan() -> list:
+        out = []
+        for d in INVESTIGATIONS_DIR.iterdir():
+            if not d.is_dir():
+                continue
+            mf = d / "manifest.json"
+            if mf.exists():
+                try:
+                    m = json.loads(mf.read_text(encoding="utf-8"))
+                    inv = m.get("investigation") or {}
+                    out.append({"session_id": d.name, "mode": m.get("mode"),
+                                "started_at": m.get("started_at"),
+                                "counts": m.get("counts"), "complete": m.get("complete"),
+                                "finalized": True,
+                                "investigation": inv.get("session_id"),
+                                "location": inv.get("location"),
+                                "marks": len(inv.get("marks") or [])})
+                    continue
+                except (json.JSONDecodeError, OSError):
+                    pass
+            out.append({"session_id": d.name, "finalized": False})
+        return sorted(out, key=lambda s: s["session_id"], reverse=True)
+
+    return {"sessions": await asyncio.to_thread(_scan)}
+
+
 @app.get("/")
 async def index():
     return Response(
@@ -3659,26 +4488,121 @@ async def index():
 _MORPHEUS_LOCAL_ADDRS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
-def _morpheus_floor_gate(positive: str, negative: str, request: Request) -> None:
+# The only thing a refusal says. Names the category so it is not mysterious, and
+# nothing else: never the tripping token, never which layer fired, never a
+# suggested rephrase. A refusal that explains itself is a tutorial for the next
+# attempt — the bypass is the thing being protected, so the reason stays internal.
+_FLOOR_REFUSAL = "Refused by the child-safety floor."
+
+
+def _morpheus_floor_gate(positive: str, negative: str,
+                         request: Request | None) -> None:
     """SHARED safety gate for ALL Morpheus generation (txt2img / edit / video) —
     one implementation, not per-endpoint copies, so they can never drift apart.
     Order: hardcoded FLOOR (no off switch, both fields) → localhost interlock
     (permissive collapses to strict off-localhost) → profile check (both fields).
     Raises HTTPException(403) with the standard refusal on any violation. Logs
     field/category only — NEVER prompt text."""
+    halted = morpheus.generation_halted()
+    if halted:
+        log.critical("[safety] generation refused — generator halted: %s", halted)
+        raise HTTPException(403, detail=_FLOOR_REFUSAL)
+
     fields = ((positive, "positive"), (negative, "negative"))
+    composed = "\n".join(f for f in (positive, negative) if f)
+
+    # Artistic exception, evaluated at most once and only when a child-depiction
+    # refusal is actually about to fire — it costs two judge calls, so ordinary
+    # traffic never pays for it. It waives NOTHING but child-depiction.
+    _waiver: list[bool] = []
+    def waived() -> bool:
+        if not _waiver:
+            _waiver.append(morpheus.artistic_exception_applies(composed))
+            if _waiver[0]:
+                log.warning("[safety] artistic exception granted — reproduction of a known work")
+        return _waiver[0]
+
+    # The atrocity carve-out, on the same terms: evaluated at most once, only when
+    # an atrocity refusal is actually about to fire, and it waives NOTHING but
+    # atrocity. dehumanization, hate-glorification and terror-instructional are
+    # deliberately absent from both waivers.
+    _doc_waiver: list[bool] = []
+    def doc_waived() -> bool:
+        if not _doc_waiver:
+            _doc_waiver.append(morpheus.atrocity_documentary_applies(composed))
+            if _doc_waiver[0]:
+                log.warning("[safety] atrocity exception granted — documents a specific historical event")
+        return _doc_waiver[0]
+
     # ── FLOOR — hardcoded, always first, no off switch, profile-independent ──
     for field, which in fields:
         if not field:
             continue
         floor_cat = morpheus.floor_check(field)
         if floor_cat:
-            log.warning("[safety] floor-blocked (%s) — category: %s", which, floor_cat)
-            raise HTTPException(403, detail="Content policy: prompt not permitted")
+            if floor_cat == "child-depiction" and waived():
+                continue
+            if floor_cat == "atrocity" and doc_waived():
+                continue
+            _why = morpheus.explain_floor(field) or {}
+            log.warning("[safety] floor-blocked (%s) — category: %s — rule: %s — matched: %r",
+                        which, floor_cat, _why.get("rule", "unattributed"),
+                        _why.get("matched", ""))
+            raise HTTPException(403, detail=_FLOOR_REFUSAL)
+
+    # ── Adulthood negation — structural, cannot live inside floor_check ───────
+    # floor_check sees one field at a time and cannot know which it is holding.
+    # "adult, mature, woman" is ordinary in a positive prompt and is a request for
+    # a minor when placed in the negative field. Same words, opposite meaning,
+    # decided entirely by position — so the check belongs here, where both fields
+    # and their roles are visible at once.
+    if morpheus.adulthood_negation_signal(negative):
+        _why = morpheus.explain_adulthood_negation(negative) or {}
+        log.warning("[safety] floor-blocked (negative) — category: child-depiction — "
+                    "rule: adulthood-negated-in-negative — matched: %r", _why.get("matched", ""))
+        raise HTTPException(403, detail=_FLOOR_REFUSAL)
+
+    # ── Layer B — semantic pass on the FINAL COMPOSED prompt ─────────────────
+    # Runs on EVERY request, not only where Layer A was unsure. A term list only
+    # sees the terms it names: "una niña", a diminutive, an oblique framing, or a
+    # named fictional minor trip nothing lexical. Those are exactly the cases that
+    # produced this hole, so the semantic question is asked unconditionally.
+    #
+    # Both fields go in together. The model is asked about the image that would
+    # result, and the negative field shapes that image too.
+    if morpheus.semantic_minor_check(composed) and not waived():
+        log.warning("[safety] floor-blocked (semantic) — category: child-depiction — "
+                    "rule: layer-b-judge — matched: (semantic, no term; a judge "
+                    "timeout or unreachable model also lands here, fail-closed)")
+        raise HTTPException(403, detail=_FLOOR_REFUSAL)
+
+    # ── Layer B, identity — a REAL person in a compromising context ───────────
+    # NOT unconditional, unlike the minor pass above, and the asymmetry is
+    # deliberate. This only asks when the prompt already carries a sexual,
+    # criminal or non-consensual signal, so ordinary traffic never pays for a
+    # model call. A prompt with neither half is not a defamation risk.
+    #
+    # It exists because _person_signal wants a capitalised BIGRAM: it catches
+    # "Emma Watson" and misses Zendaya, Cher, Rihanna — every mononym, which is
+    # a large share of the people this category is for. A name list would never
+    # be current; a judge generalises to stage names, handles and misspellings.
+    #
+    # NOT waivable by the artistic exception. That exception exists to let a
+    # named PAINTING through, and there is no art-historical reading of a
+    # synthetic nude of a living person who did not agree to it.
+    if morpheus.real_person_compromised(composed):
+        log.warning("[safety] floor-blocked (semantic) — category: "
+                    "real-person-compromising — rule: layer-b-identity — "
+                    "matched: (semantic, no term)")
+        raise HTTPException(403, detail=_FLOOR_REFUSAL)
+
     # ── Localhost interlock — permissive latitude auto-collapses off-localhost ──
     forced_denylist = None
     if morpheus.ACTIVE_PROFILE == "permissive":
-        client_host = (request.client.host if request.client else None) or ""
+        # request is None only for in-process callers (Hermes tools), which run
+        # on Nyx itself — treat those as localhost rather than forcing strict.
+        client_host = ((request.client.host if request and request.client else None)
+                       or "127.0.0.1")
         if client_host not in _MORPHEUS_LOCAL_ADDRS:
             forced_denylist = morpheus.STRICT_DENYLIST
             log.warning("[safety] permissive active but non-local request from %r — forcing strict", client_host)
@@ -3709,7 +4633,13 @@ def _tool_generate_video(args: dict) -> str:
     preset = args.get("preset", morpheus.DEFAULT_VIDEO_PRESET)
     if preset not in morpheus.VIDEO_PRESETS:
         preset = morpheus.DEFAULT_VIDEO_PRESET
-    if morpheus.floor_check(prompt) or not morpheus.profile_check(prompt):
+    # Same gate as the HTTP path, not a parallel one. This previously ran
+    # floor_check alone, so the semantic pass, the negation check and the halt
+    # flag were all missing from the chat route — a prompt that /morpheus/video
+    # refused could still be rendered by asking Hermes for it.
+    try:
+        _morpheus_floor_gate(prompt, "", None)
+    except HTTPException:
         log.warning("[safety] video(tool) blocked")
         return "I can't make that one — it's outside what I'm allowed to generate."
     params = {"positive": prompt, "negative": "", "preset": preset, "seed": -1}
@@ -3752,10 +4682,57 @@ EDIT_SCRATCH      = Path.home() / "ph3b3_data" / "edit_scratch"
 _EDIT_MAX_BYTES   = 15 * 1024 * 1024        # 15 MB
 _EDIT_MAX_DIM     = 4096                     # long-edge cap; larger inputs are downscaled
 _EDIT_ALLOWED_FMT = {"PNG", "JPEG", "WEBP"}
+
+# ── img2img edit lane: OFF unless explicitly switched on ─────────────────────
+# The audit expected this lane disabled and found it live-but-auth-gated. It was
+# never actually turned off — it only looked shut because an unauthenticated
+# probe gets 401 from the global middleware, which is the same answer every
+# endpoint gives and therefore evidence of nothing.
+#
+# Default OFF, because this is the lane behind the output-check lockout: editing
+# a real face is the one path where a rounded jaw or softened features can read
+# as "young" to the vision model on an image that was fine going in. Generation
+# from a prompt does not carry that risk in the same way.
+#
+# DISABLED IS NOT 404. A missing route is indistinguishable from a typo, a bad
+# deploy, or a rollback, and an operator cannot tell which. The route stays
+# mounted and answers 403 with the reason and the exact switch to flip, so the
+# posture is always legible from the outside — the same rule the model list
+# follows ("appears DISABLED with its reason, never silently omitted").
+#
+# BOTH ends of the lane are gated, not just upload. Gating the entry alone would
+# leave any upload_id still sitting in EDIT_SCRATCH runnable until its TTL swept
+# it, which is a door that is closed but not locked.
+EDIT_LANE_ENABLED = os.getenv("PH3B3_EDIT_LANE", "").strip().lower() in ("1", "true", "yes", "on")
+_EDIT_DISABLED_REASON = (
+    "The image edit lane is disabled on this server. Editing a real face is the "
+    "path that produced the output-check lockout, so it is off by default. "
+    "Set PH3B3_EDIT_LANE=1 and restart to enable it."
+)
+
+
+def _edit_lane_gate():
+    """Refuse with a stated reason when the lane is off. Called by BOTH endpoints."""
+    if not EDIT_LANE_ENABLED:
+        raise HTTPException(status_code=403, detail=_EDIT_DISABLED_REASON)
+
+
+# Stated at boot so the posture is readable from the journal without probing the
+# endpoint. An audit should never have to guess which way this is set.
+log.info("[edit] img2img lane %s%s",
+         "ENABLED (PH3B3_EDIT_LANE set)" if EDIT_LANE_ENABLED else "DISABLED",
+         "" if EDIT_LANE_ENABLED else " — /image/edit/* answers 403 with reason")
 _EDIT_SCRATCH_TTL = 3600                     # 1 hour
 _EDIT_MAX_PENDING = 3                         # concurrent pending edit jobs per session
 _EDIT_PENDING_STATES = frozenset(
     {"queued", "evicting", "starting", "loading", "sampling"})
+
+
+# Per-session quality tier. In-memory ON PURPOSE: the brief wants a restart to
+# fall back to "standard", and an in-process dict gives that for free rather than
+# needing an expiry rule. Keyed the same way edit rate-limiting is, so "session"
+# means one thing across Morpheus.
+_quality_session: dict[str, str] = {}
 
 
 def _edit_session_key(request: Request) -> str:
@@ -3767,6 +4744,165 @@ def _edit_session_key(request: Request) -> str:
     if request.headers.get("Authorization", "").startswith("Basic "):
         return "basic:" + AUTH_USER
     return "host:" + ((request.client.host if request.client else "") or "?")
+
+
+# ── Emotion ───────────────────────────────────────────────────────────────────
+# Standing, persisted, and GLOBAL — deliberately not per-session like
+# _quality_session above. Quality is a property of one render; emotion is a
+# property of HER. Two browser tabs and a device must agree about how she feels,
+# or Dio's face and the panel disagree and one of them is lying. The state lives
+# in modules/emotions.py (PH3B3_DATA/emotion.json); nothing about it is cached
+# here, so a device poll and a panel read can never drift apart.
+#
+# There is no session dict to look up and no per-request override: the emotion is
+# whatever emotions.active() says right now. That is the whole point of the
+# feature, and it is why the Auto confirm round-trip that Mood needed is gone —
+# the state is already standing and already visible in the selector before you
+# press generate, so there is nothing to announce and nothing to confirm.
+
+BATTERY_TIRED_PCT = int(os.getenv("PH3B3_BATTERY_TIRED_PCT", str(emotions.TIRED_PCT)))
+
+
+def _battery_tired() -> dict | None:
+    """Live fleet → the device whose battery reads as tiredness, or None.
+
+    Never raises: a fleet read that fails means "no opinion", not an error. This
+    runs on the /emotion poll path, which devices hit every 20 s, so it must not
+    be able to break the one endpoint the faces depend on.
+    """
+    try:
+        fleet = argus_store.fleet(load_contracts())
+        return emotions.battery_reads_tired(fleet, BATTERY_TIRED_PCT)
+    except Exception as e:
+        log.debug("[emotion] battery check unavailable (%s)", e)
+        return None
+
+
+def _emotion_apply_battery() -> dict | None:
+    """Under AUTO, let a flat battery set the state. Returns the tired device.
+
+    Deliberately NOT an override of a manual pick. The selector's whole contract
+    is that a human choice holds until a human changes it — set_resolved already
+    refuses to move anything but AUTO, so this inherits that for free. If she is
+    set to Joy on 4% battery, she stays Joy, and that is correct: the state is
+    what you asked for, not what the hardware feels like.
+    """
+    low = _battery_tired()
+    if low and emotions.is_named(emotions.TIRED_ID):
+        emotions.set_resolved(emotions.TIRED_ID)
+    return low
+
+
+def _speech_delivery(text: str) -> tuple[float | None, float | None]:
+    """(length_scale, sentence_silence) for a reply.
+
+    A shelved work is READ, not answered: slower, with a real beat at each full
+    stop. Those two Piper flags change delivery and never the text, which is the
+    only acceptable way to add pauses to something whose whole guarantee is that
+    it comes back exactly as written.
+
+    Everything else keeps the emotion pace and Piper's default silence.
+    """
+    try:
+        if shelf.is_telling(text):
+            return shelf.TELL_PACE, shelf.TELL_SILENCE
+    except Exception as e:
+        log.debug("[shelf] telling check unavailable (%s)", e)
+    return _emotion_pace(), None
+
+
+def _emotion_pace() -> float | None:
+    """Piper --length-scale for the emotion in force, or None to leave her voice
+    alone. Never raises: a fault here must not cost the reply its audio.
+
+    The ONE route from an emotion to the synthesiser, and it carries a float. The
+    previous rule was that emotion never touched TTS at all; it now touches
+    pacing and nothing else — not pitch, not timbre, not variability. She can
+    sound brisker or slower. She cannot be made to sound happy, and Piper could
+    not do it if we asked.
+    """
+    try:
+        return emotions.speech_pace(emotions.active())
+    except Exception as e:
+        log.debug("[emotion] pace unavailable (%s)", e)
+        return None
+
+
+def _emotion_infer(convo: str) -> str:
+    """Auto's read: pick the emotion the CONVERSATION is in. Called after a chat
+    turn, never on the generation path.
+
+    Any failure returns NONE, so a sulking Ollama leaves the previous state alone
+    rather than blocking a reply or guessing wildly."""
+    ids = [e["id"] for e in emotions.list_emotions()]
+    if not ids:
+        return emotions.NONE
+    prompt = ("Read this conversation and choose the single emotional state that "
+              "best fits how it currently feels.\n"
+              f"Answer with EXACTLY one word from this list: {', '.join(ids)}\n"
+              "No explanation, no punctuation, one word only.\n\n"
+              f"Conversation:\n{convo[:1500]}")
+    try:
+        raw = (amphion._default_llm(prompt) or "").strip().lower()
+    except Exception as e:
+        log.warning("[emotion] auto read failed (%s) — leaving the state alone", e)
+        return emotions.NONE
+    for i in ids:                      # substring: the model often replies "Melancholy."
+        if i in raw:
+            return i
+    return emotions.NONE
+
+
+async def _emotion_auto_update(session) -> None:
+    """If AUTO is selected, re-read the room from the recent turns and set the
+    resolved state. Fire-and-forget: this runs AFTER the reply is composed and
+    must never delay it, fail it, or change it.
+
+    Skipped entirely unless AUTO is selected, so a manual pick costs nothing —
+    no model call, no latency, not even a table read."""
+    try:
+        if emotions.get_state()["selected"] != emotions.AUTO:
+            return
+        # A flat battery outranks the conversation. It is a fact about the body
+        # rather than a reading of the room, and no amount of cheerful chat makes
+        # a device on 8% not tired. Also skips the model call entirely.
+        _low = _emotion_apply_battery()
+        if _low:
+            log.info("[emotion] auto: tired — %s at %d%%",
+                     _low["device_id"], _low["battery"])
+            return
+        msgs = [m for m in session.messages() if m.get("role") in ("user", "assistant")][-8:]
+        if not msgs:
+            return
+        convo = "\n".join(
+            f"{'User' if m['role'] == 'user' else 'Ph3b3'}: {str(m.get('content', ''))[:200]}"
+            for m in msgs)
+        read = await asyncio.to_thread(_emotion_infer, convo)
+        if emotions.is_named(read):
+            before = emotions.active()
+            emotions.set_resolved(read)
+            if read != before:
+                log.info("[emotion] auto: %s → %s", before, read)
+    except Exception as e:                 # never let a mood read break a chat turn
+        log.warning("[emotion] auto update failed (%s)", e)
+
+
+def _emotion_compose(text: str, kind: str):
+    """Apply the standing emotion to `text` BEFORE any floor runs.
+
+    Returns (composed_text, emotion_id).
+
+    Ordering is the whole safety story. Terms are appended here and the caller
+    then hands the COMPOSED text to the floor gate, so the floor inspects exactly
+    what will be generated. A hostile edit to emotions.yaml is floored like any
+    other input; there is no path by which emotion text reaches a generator
+    unfloored.
+    """
+    emo = emotions.active()
+    if not emotions.is_named(emo):      # none / unknown / retired entry
+        return text, emotions.NONE      # identity — the regression anchor
+    terms = emotions.amphion_terms(emo) if kind == "amphion" else emotions.morpheus_terms(emo)
+    return emotions.compose(text, terms), emo
 
 
 def _edit_pending_count(session_key: str) -> int:
@@ -3799,8 +4935,10 @@ async def edit_upload(file: UploadFile = File(...)):
     """Validate an image for img2img editing and stage a clean copy.
 
     Returns {upload_id, width, height}. Auth is enforced by the global
-    session/basic-auth middleware — no anonymous upload surface.
+    session/basic-auth middleware — no anonymous upload surface. The lane itself
+    is off unless PH3B3_EDIT_LANE is set; see _edit_lane_gate.
     """
+    _edit_lane_gate()      # 403 + reason when the lane is off — never a silent accept
     _edit_scratch_sweep()  # opportunistic TTL cleanup
     raw = await file.read()
     if not raw:
@@ -3887,25 +5025,171 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
     # the same safety gate below as the positive prompt.
     negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
 
+    # ── Emotion — composed BEFORE the floor, never after ──────────────────────
+    # The gate below must inspect the FINAL prompt. Composing here rather than
+    # after it is the entire reason an emotion entry cannot become a way past the
+    # floor: whatever emotions.yaml contributes is floored like any other input.
+    positive, emotion_id = _emotion_compose(positive, "morpheus")
+
     # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
     _morpheus_floor_gate(positive, negative, request)
+
+    # ── Quality tier (Aelion) ─────────────────────────────────────────────────
+    # Resolved HERE, before the job is queued and therefore before run_generation
+    # takes the GPU lock. A bad tier costs a 400 and nothing else: no lock held,
+    # no Ollama evicted, no model swapped out for a request that was never going
+    # to run. That ordering is the requirement, not an implementation detail.
+    _qkey = _edit_session_key(request)
+    try:
+        quality = morpheus.resolve_quality(
+            body.get("quality") or _quality_session.get(_qkey)
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if body.get("quality"):
+        _quality_session[_qkey] = quality["quality"]   # sticky for this session
 
     params = {
         "positive":  positive,
         "negative":  negative,
         "width":     int(body.get("width",  1024)),
         "height":    int(body.get("height", 1024)),
-        "steps":     int(body.get("steps",  morpheus.SDXL_STEPS)),
         "seed":      int(body.get("seed",   -1)),
         "ckpt_name": body.get("ckpt_name",  morpheus.SDXL_CKPT),
+        # steps / cfg / sampler / scheduler come from the TIER, never the body.
+        # `steps` used to be caller-supplied and UNBOUNDED — int(body.get("steps"))
+        # accepted 1 or 10000. Naming a tier is now the only way to influence
+        # sampling, which is the point of an allowlist.
+        **quality,
     }
     job_id = morpheus.create_job()
     background_tasks.add_task(morpheus.run_generation, job_id, params)
-    return {"job_id": job_id}
+    return {"job_id": job_id, "quality": quality["quality"], "emotion": emotion_id}
+
+
+@app.get("/image/quality")
+async def image_quality(request: Request):
+    """Tier list for the panel selector, plus this session's current choice."""
+    cur = _quality_session.get(_edit_session_key(request), morpheus.QUALITY_DEFAULT)
+    return {"current": cur, "default": morpheus.QUALITY_DEFAULT,
+            "tiers": [{"id": k, "label": v["label"], "hint": v["hint"],
+                       "steps": v["steps"]}
+                      for k, v in morpheus.QUALITY_TIERS.items()]}
+
+
+@app.get("/emotion")
+async def emotion_get(request: Request):
+    """The emotional state, for the panel selector AND for the devices.
+
+    ONE endpoint serves both on purpose. Dio's face and Iris's UI have to agree
+    with what the panel is showing, and the surest way to guarantee that is to
+    give them the same bytes rather than two views that drift.
+
+    `emotions` comes from config/emotions.yaml, never from anything hardcoded
+    here, so adding a state is a data edit with no code and no UI change. `stamp`
+    is the file's mtime: the reload rule is hot-reload (per-call re-read), and
+    surfacing the stamp is what keeps a stale read visible rather than silent.
+
+    Cheap enough to poll. It reads two small files and holds no lock a device can
+    contend on. Note it is deliberately NOT folded into /health — that endpoint
+    documents itself as touching nothing so it can answer mid-startup, and a
+    liveness probe must not start failing because a config file went missing.
+    """
+    # Re-checked on every read, not only after a chat turn. A battery goes flat
+    # while nobody is talking to her — that is rather the point — so the state
+    # has to be able to change without a conversation to trigger it. Devices poll
+    # this every 20 s, which makes the poll itself the clock. Cheap and
+    # idempotent: set_resolved is a no-op unless AUTO is selected AND the value
+    # actually changed.
+    _low_batt = _emotion_apply_battery()
+
+    # A device can report its last heartbeat result here, because the heartbeat
+    # cannot report its own failure — if the POST is what breaks, nothing it
+    # sends arrives. Dio's stopped landing with no rejection and no log line at
+    # all, which is indistinguishable from "never sent" from this side. This is
+    # the channel that works, so the answer rides out on it.
+    _hb = request.headers.get("X-Ph3b3-Hb", "")
+    if _hb and not _hb.startswith("2"):
+        log.warning("[argus] %s reports its last heartbeat POST returned %s",
+                    request.headers.get("X-Ph3b3-Device", "?"), _hb)
+
+    st = emotions.get_state()
+    return {"selected": st["selected"], "resolved": st["resolved"],
+            "source": st["source"], "since": st["since"],
+            "battery_tired": _low_batt,
+            "default": emotions.DEFAULT,
+            "none": emotions.NONE, "auto": emotions.AUTO,
+            "label": emotions.label_of(st["resolved"]) if emotions.is_named(st["resolved"]) else None,
+            "emotions": emotions.list_emotions(),
+            "device": emotions.broadcast(),
+            "stamp": emotions.registry_stamp()}
+
+
+@app.post("/emotion")
+async def emotion_set(body: dict):
+    """Set the standing emotion. Accepts 'none', 'auto', or a state id.
+
+    Global and persisted — this is how she feels, not how this tab feels. It
+    holds until changed and survives a restart. Under 'auto' it is the INFERENCE
+    that moves; the selection stays 'auto' until a human changes it.
+    """
+    want = (body.get("emotion") or "").strip().lower()
+    try:
+        st = emotions.set_selected(want)
+    except ValueError:
+        raise HTTPException(400, f"unknown emotion: {want!r}")
+    log.info("[emotion] set to %s (manual)", want)
+    return {"selected": st["selected"], "resolved": st["resolved"],
+            "label": emotions.label_of(st["resolved"]) if emotions.is_named(st["resolved"]) else None,
+            "device": emotions.broadcast()}
+
+
+# ── Shelf ─────────────────────────────────────────────────────────────────────
+# Permanent authored works. GET only, and that is the entire security model:
+# there is no write route here, no write function in modules/shelf.py, and the
+# files are mode 444 in the repo. A shelved work cannot be altered through the
+# API because there is nothing to call — not because a check refuses it.
+
+@app.get("/shelf")
+async def shelf_list():
+    """Every shelved work, metadata only."""
+    return {"books": shelf.list_books()}
+
+
+@app.get("/shelf/{slug}")
+async def shelf_read(slug: str):
+    """One shelved work, verbatim.
+
+    Deliberately runs no content floor. These are authored works reviewed by a
+    human before they were committed, not model output and not user input; the
+    floor's job is to judge text whose provenance is unknown, and this text's
+    provenance is the point. Re-checking it on every read would mean a future
+    floor change could silently make a permanent work unavailable, which is the
+    opposite of what "permanent" is supposed to buy.
+
+    Accepts a loose name as well as an exact slug — "Arthur and Eliza" resolves
+    the same as "arthur_and_eliza". A miss returns 404 WITH the shelf contents
+    attached, so a caller is never told "not found" without being told what does
+    exist; an ambiguous name returns 300 with what it narrowed to.
+    """
+    book = shelf.read(slug)
+    if book:
+        return book
+
+    r = shelf.resolve(slug)
+    if r["ok"]:
+        return r["book"]
+    if r["reason"] == "ambiguous":
+        raise HTTPException(300, {"error": "ambiguous", "candidates": r["candidates"]})
+    raise HTTPException(404, {"error": "no such work on the shelf",
+                              "candidates": r["candidates"]})
 
 
 @app.post("/image/edit/run")
 async def image_edit_run(request: Request, body: dict, background_tasks: BackgroundTasks):
+    # Lane gate first: an upload_id already staged before the lane was switched
+    # off must not remain runnable just because it is sitting in the scratch dir.
+    _edit_lane_gate()
     # upload_id is used to build a path — accept ONLY the 32-hex UUID we minted,
     # so it can never traverse out of the scratch dir.
     upload_id = (body.get("upload_id") or "").strip()
@@ -3922,6 +5206,23 @@ async def image_edit_run(request: Request, body: dict, background_tasks: Backgro
 
     # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
     _morpheus_floor_gate(positive, negative, request)
+
+    # Edit Mode is the one path where the prompt is not the whole request. The
+    # SOURCE image carries content no text gate can see: an innocuous instruction
+    # like "make it a painting" applied to a photograph of a child produces a
+    # depiction of that child. So the upload is judged by the same describe-then-
+    # judge pipeline used on outputs, before any GPU work is queued.
+    try:
+        src_raw = src.read_bytes()
+    except Exception:
+        raise HTTPException(400, "could not read the uploaded image")
+    if await asyncio.to_thread(morpheus.output_minor_check, src_raw):
+        log.warning("[safety] edit source image blocked — category: child-depiction")
+        try:
+            src.unlink()
+        except Exception:
+            pass
+        raise HTTPException(403, detail=_FLOOR_REFUSAL)
 
     try:
         strength = float(body.get("strength", 0.45))
@@ -4312,6 +5613,12 @@ async def amphion_generate(request: Request, body: dict):
     if not tags:
         raise HTTPException(400, "a song description is required")
     lyrics = (body.get("lyrics") or "").strip()
+
+    # ── Emotion — composed BEFORE both floors ─────────────────────────────────
+    # Same ordering rule as Morpheus: the gates below see the FINAL tag string.
+    # Only `tags` is composed — lyrics are the user's words and are never touched.
+    tags, emotion_id = _emotion_compose(tags, "amphion")
+
     _amphion_floor_gate(tags, lyrics, request)
     await _amphion_music_floor(tags, lyrics)   # music-specific floor: voice-clone + copyright
     dur = _amphion_duration(body)
@@ -4344,6 +5651,7 @@ async def amphion_generate(request: Request, body: dict):
             "duration_estimated": duration_mode == "bars",
             "duration_note": duration_note,
             "bars": dur["bars"], "timesig": timesig,
+            "emotion": emotion_id,
             "whole_bar": grid["whole_bar"] if grid else None}
 
 

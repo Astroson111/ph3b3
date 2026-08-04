@@ -240,7 +240,19 @@
             display: none; align-items: center; justify-content: center; cursor: zoom-out;
         }
         #gallery-lightbox.open { display: flex; }
-        #gallery-lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 6px; }
+        #gallery-lightbox img,
+        #gallery-lightbox video { max-width: 94vw; max-height: 94vh; border-radius: 6px; }
+        #gallery-lightbox video { display: none; background: #000; }
+        /* A clip is marked in the grid: <img> shows the poster frame, so without
+           this a still and a video are indistinguishable until you click one. */
+        .gallery-cell { position: relative; }
+        .gallery-cell .gplay {
+            position: absolute; top: 6px; right: 6px;
+            background: rgba(10,8,24,0.78); color: #a78bfa;
+            border: 1px solid #7c3aed; border-radius: 4px;
+            font-size: 10px; line-height: 1; padding: 3px 5px;
+            pointer-events: none; font-family: "Courier New", monospace;
+        }
     </style>
 </head>
 <body>
@@ -292,7 +304,7 @@
         </div>
         <div id="gallery-grid"></div>
     </div>
-    <div id="gallery-lightbox"><img id="gallery-lightbox-img" alt="" /></div>
+    <div id="gallery-lightbox"><img id="gallery-lightbox-img" alt="" /><video id="gallery-lightbox-vid" controls playsinline></video></div>
 
     <script>
     // ── Auth (mobile-safe Basic auth) ─────────────────────────────────────────
@@ -899,11 +911,17 @@
     const galleryCount       = document.getElementById('gallery-count');
     const galleryLightbox    = document.getElementById('gallery-lightbox');
     const galleryLightboxImg = document.getElementById('gallery-lightbox-img');
+    const galleryLightboxVid = document.getElementById('gallery-lightbox-vid');
     let galleryUrls = [];   // active blob URLs; revoked on close to free memory
 
     function closeGallery() {
         galleryOverlay.classList.remove('open');
         galleryLightbox.classList.remove('open');
+        // Detach the clip BEFORE revoking: a <video> still holding a revoked blob
+        // URL keeps decoding against a dead handle and logs errors on some phones.
+        galleryLightboxVid.pause();
+        galleryLightboxVid.removeAttribute('src');
+        galleryLightboxVid.load();
         galleryUrls.forEach(u => URL.revokeObjectURL(u));
         galleryUrls = [];
         galleryGrid.innerHTML = '';
@@ -930,8 +948,16 @@
         // <img> can't send the auth header, so fetch each render (by job_id) with auth → blob URL.
         for (const row of rows) {
             try {
-                const ir = await fetch(`/image/file/${encodeURIComponent(row.job_id)}`, { headers: { 'Authorization': authHeader } });
-                if (!ir.ok) continue;   // e.g. a video render with no PNG frame — skip quietly
+                const isVid = row.kind === 'video';
+                // Stills come from /image/file; a clip's grid cell is its poster
+                // frame from /morpheus/video/thumb. Videos used to be dropped here
+                // — the 404 on /image/file was swallowed by `continue`, so a clip
+                // was invisible in this gallery while showing fine in the panel.
+                const thumbUrl = isVid
+                    ? `/morpheus/video/thumb/${encodeURIComponent(row.job_id)}`
+                    : `/image/file/${encodeURIComponent(row.job_id)}`;
+                const ir = await fetch(thumbUrl, { headers: { 'Authorization': authHeader } });
+                if (!ir.ok) continue;   // render with no frame on disk — skip quietly
                 const url = URL.createObjectURL(await ir.blob());
                 galleryUrls.push(url);
                 const cell = document.createElement('div');
@@ -939,7 +965,40 @@
                 const im = document.createElement('img');
                 im.src = url; im.alt = row.prompt || row.job_id; im.loading = 'lazy';
                 im.title = row.prompt || '';
-                im.addEventListener('click', () => { galleryLightboxImg.src = url; galleryLightbox.classList.add('open'); });
+                if (isVid) {
+                    // The mp4 itself is fetched only when the clip is opened. Pulling
+                    // every clip as a blob just to build the grid would cost tens of MB
+                    // on a phone for renders the user may never play.
+                    let vidUrl = null;
+                    im.addEventListener('click', async () => {
+                        if (!vidUrl) {
+                            try {
+                                const vr = await fetch(`/morpheus/video/file/${encodeURIComponent(row.job_id)}`,
+                                                       { headers: { 'Authorization': authHeader } });
+                                if (!vr.ok) return;
+                                vidUrl = URL.createObjectURL(await vr.blob());
+                                galleryUrls.push(vidUrl);
+                            } catch { return; }
+                        }
+                        galleryLightboxImg.style.display = 'none';
+                        galleryLightboxVid.style.display = 'block';
+                        galleryLightboxVid.src = vidUrl;
+                        galleryLightbox.classList.add('open');
+                        galleryLightboxVid.play().catch(() => {});
+                    });
+                    const badge = document.createElement('span');
+                    badge.className = 'gplay';
+                    badge.textContent = '▶ CLIP';
+                    cell.appendChild(badge);
+                } else {
+                    im.addEventListener('click', () => {
+                        galleryLightboxVid.pause();
+                        galleryLightboxVid.style.display = 'none';
+                        galleryLightboxImg.style.display = 'block';
+                        galleryLightboxImg.src = url;
+                        galleryLightbox.classList.add('open');
+                    });
+                }
                 const cap = document.createElement('div');
                 cap.className = 'gcap';
                 cap.textContent = row.prompt || row.job_id;
@@ -952,10 +1011,16 @@
 
     document.getElementById('gallery-open').addEventListener('click', openGallery);
     document.getElementById('gallery-back').addEventListener('click', closeGallery);
-    galleryLightbox.addEventListener('click', () => galleryLightbox.classList.remove('open'));
+    galleryLightbox.addEventListener('click', () => {
+        galleryLightboxVid.pause();
+        galleryLightbox.classList.remove('open');
+    });
+    // Without this, the first tap on play/scrub/volume bubbles to the backdrop
+    // handler above and shuts the lightbox — the controls would be unusable.
+    galleryLightboxVid.addEventListener('click', (e) => e.stopPropagation());
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
-        if (galleryLightbox.classList.contains('open'))      galleryLightbox.classList.remove('open');
+        if (galleryLightbox.classList.contains('open'))      { galleryLightboxVid.pause(); galleryLightbox.classList.remove('open'); }
         else if (galleryOverlay.classList.contains('open'))  closeGallery();
     });
 

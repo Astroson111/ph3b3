@@ -401,6 +401,25 @@
     .lv-prev { flex:0 0 auto; width:2rem; height:2rem; border-radius:.4rem; cursor:pointer;
       background:transparent; color:var(--accent,#c060e0); border:1px solid var(--accent,#c060e0); font-size:.7rem; }
     .lv-prev:hover { background:var(--accent,#c060e0); color:#fff; }
+    /* Shelf — list of permanent works, and the reader they open into. */
+    .shelf-list { display:flex; flex-direction:column; gap:.4rem; }
+    .shelf-item { display:flex; flex-direction:column; align-items:flex-start; gap:.1rem;
+      width:100%; text-align:left; cursor:pointer; padding:.5rem .6rem; border-radius:.4rem;
+      background:transparent; border:1px solid var(--border); color:var(--text); font:inherit; }
+    .shelf-item:hover { border-color:var(--accent,#a06cd5); }
+    .shelf-t { font-size:.86rem; font-weight:600; }
+    .shelf-s { font-size:.72rem; color:var(--dim); }
+    .shelf-modal { max-width:44rem; max-height:82vh; display:flex; flex-direction:column; }
+    /* The reader scrolls, the header does not — a long work must not push its
+       own close button off the screen. */
+    .shelf-body { overflow-y:auto; padding-right:.4rem; line-height:1.65;
+      font-size:.9rem; color:var(--text); }
+    .shelf-body h1 { font-size:1.25rem; margin:.2rem 0 .1rem; }
+    .shelf-body h2 { font-size:1.02rem; margin:1.4rem 0 .5rem; color:var(--accent,#a06cd5); }
+    .shelf-body h3 { font-size:.86rem; margin:.1rem 0 .1rem; color:var(--dim); font-weight:600; }
+    .shelf-body p { margin:.62rem 0; }
+    .shelf-body em { color:var(--dim); }
+    .shelf-body hr { border:none; border-top:1px solid var(--border); margin:1.1rem 0; }
     .lv-note { font-size:.74rem; color:var(--dim); margin-top:.3rem; line-height:1.4; }
     .lv-note .lv-tier-strong { color:#5fbf7f; }
     .lv-note .lv-tier-functional { color:#d8a24a; }
@@ -595,6 +614,8 @@
       cursor: pointer;
     }
     .morph-eng-sel:focus { border-color: var(--purple); }
+    .morph-qual-hint { margin-left:.5rem; font-size:.78rem; color: var(--dim); }
+    .morph-eng-row { display:flex; align-items:center; margin:.4rem 0 0; }
     .morph-eng-sel option:disabled { color: var(--dim); font-style: italic; }
     .morph-textarea {
       display: block; width: 100%;
@@ -1197,6 +1218,32 @@
         <div id="lvReviewList"></div>
       </div>
     </div>
+    <!-- ══ Emotion — ONE selector governing chat tone, Dio's face and Iris's UI ══
+         Its own card rather than a row in Language & Voice: emotion never touches
+         TTS, and grouping it with the voice picker would imply otherwise.
+         `emoNow` is the resolved state, shown only under Auto — under a manual
+         pick the selector already says it, and repeating it reads as a second
+         setting. ═══════════════════════════════════════════════════════════ -->
+    <div class="card">
+      <div class="card-title" data-i18n="status.emotion">Emotion</div>
+      <div class="lv-row">
+        <label class="lv-label" for="emoSel" data-i18n="status.emotion.label">Feeling</label>
+        <select id="emoSel" class="lv-sel"><option>…</option></select>
+      </div>
+      <div class="lv-note" id="emoNow" style="display:none"></div>
+      <div class="lv-note" id="emoNote"></div>
+    </div>
+
+    <!-- ══ Shelf — permanent authored works, read-only ═════════════════════════
+         Read surface only. There is no edit control here because there is no
+         write route to call: the API is GET-only and the files are 444 in the
+         repo. ══════════════════════════════════════════════════════════════ -->
+    <div class="card">
+      <div class="card-title" data-i18n="status.shelf">Shelf</div>
+      <div id="shelfList" class="shelf-list"></div>
+      <div class="lv-note" id="shelfNote" data-i18n="status.shelf.note">Permanent works. Read-only — they are part of Ph3b3, not something she generated.</div>
+    </div>
+
     <div class="card">
       <div class="card-title">
         <span data-i18n="status.tunnel">Remote Tunnel (WireGuard)</span>
@@ -1229,6 +1276,16 @@
     </div>
 
     <!-- Account modal — hidden until "Change…" -->
+    <div class="modal-backdrop" id="shelfModal" hidden>
+      <div class="modal shelf-modal" role="dialog" aria-modal="true" aria-labelledby="shelfModalTitle">
+        <div class="modal-hd">
+          <span id="shelfModalTitle">…</span>
+          <button class="modal-x" id="shelfCloseBtn" type="button" aria-label="Close">&times;</button>
+        </div>
+        <div class="shelf-body" id="shelfBody"></div>
+      </div>
+    </div>
+
     <div class="modal-backdrop" id="acctModal" hidden>
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="acctModalTitle">
         <div class="modal-hd">
@@ -1562,6 +1619,12 @@
           <option value="wan-fast">Clip · Quality — Wan (~10 min)</option>
         </select>
       </div>
+      <div class="morph-eng-row" id="morphQualRow">
+        <label for="morphQualSel" class="sr">Quality</label>
+        <select id="morphQualSel" class="morph-eng-sel" title="Sampling quality — higher tiers take longer">
+        </select>
+        <span id="morphQualHint" class="morph-qual-hint"></span>
+      </div>
       <div class="sr" id="morphEngRow">
         <span class="sr-l" data-i18n="morpheus.engine">Engine</span>
         <select id="morphEngSel" class="morph-eng-sel">
@@ -1822,12 +1885,19 @@
             <button type="button" class="amp-preset active" data-secs="60">1 min</button>
             <button type="button" class="amp-preset" data-secs="120">2 min</button>
             <button type="button" class="amp-preset" data-secs="180">3 min</button>
+            <button type="button" class="amp-preset" data-secs="240">4 min</button>
+            <button type="button" class="amp-preset" data-secs="480">8 min</button>
             <button type="button" class="amp-preset" data-secs="custom" data-i18n="amphion.custom">Custom</button>
           </div>
           <!-- step="any": free entry. step="5" made 187 an "invalid" value to the
                browser and nudged the arrows to round numbers; the model takes a
                float and the user is allowed to want 187.5s. -->
-          <input type="number" id="ampSecs" class="ari-url" value="60" min="5" max="240" step="any" style="display:none;margin-top:6px">
+          <input type="number" id="ampSecs" class="ari-url" value="60" min="5" max="1000" step="any" style="display:none;margin-top:6px">
+          <!-- Advisory, never a clamp. Past 240s is inside what the node accepts
+               (hard ceiling 1000s) but has no track record on this install, so the
+               note says "unproven here" rather than inventing a measured quality
+               cliff. It never blocks a render. -->
+          <div id="ampLenNote" style="display:none;margin-top:6px;font-size:.78rem;opacity:.85;border-left:2px solid var(--pink,#e28);padding-left:.5rem"></div>
           <!-- Seconds stays the default unit. Bars is an optional layer for people
                who think in musical time; it converts to an ESTIMATE because bpm is
                requested, never measured. -->
@@ -2760,7 +2830,12 @@ let apInit;
   //      The SERVER still owns dispatch: this block only draws the readout. ====
   window.ampDur = (function(){
     var TIMESIGS = ['2','3','4','6'];   // the node's COMBO options, verbatim
-    var MIN_S = 5, MAX_S = 240;         // mirrors amphion.MIN_DURATION / MAX_DURATION
+    // MAX_S is the model node's own hard ceiling (EmptyAceStep1.5LatentAudio.seconds
+    // max=1000.0), verified against ComfyUI /object_info — not a policy number.
+    // CLEAN_S is advisory only: 240s is the longest length with a track record on
+    // this install. Past it the model still accepts the job; it is unproven here,
+    // which is what the note says. Nothing is blocked.
+    var MIN_S = 5, MAX_S = 1000, CLEAN_S = 240;
     var EPS = 1e-6;
     function beatsPerBar(ts){
       if (ts === null || ts === undefined) return null;
@@ -2800,7 +2875,7 @@ let apInit;
       return {bars: bars, secondsPerBar: spb, beatsPerBar: beatsPerBar(ts),
               wholeBar: whole, phraseClean: phrase, subBar: bars < 1, suggestions: sugg};
     }
-    return {TIMESIGS: TIMESIGS, MIN_S: MIN_S, MAX_S: MAX_S, beatsPerBar: beatsPerBar,
+    return {TIMESIGS: TIMESIGS, MIN_S: MIN_S, MAX_S: MAX_S, CLEAN_S: CLEAN_S, beatsPerBar: beatsPerBar,
             secondsPerBar: secondsPerBar, secondsToBars: secondsToBars, analyse: analyse};
   })();
   // ==== /AMP-DURATION-MATH ====
@@ -3131,7 +3206,21 @@ let apInit;
   // here while the server clamped at 240, so a 300s request came back as a 240s
   // track with nothing said. The node itself would take 1000s — this ceiling is
   // ours, which is exactly why it has to be stated rather than blamed on the model.
-  const GEN_PER_S = 0.36, MAX_SECS = ampDur.MAX_S, MIN_SECS = ampDur.MIN_S;
+  const GEN_PER_S = 0.36, MAX_SECS = ampDur.MAX_S, MIN_SECS = ampDur.MIN_S,
+        CLEAN_SECS = ampDur.CLEAN_S;
+  // Advisory under the length control. Never blocks, never clamps — it states what
+  // has and has not actually been generated at this length on this machine.
+  function ampLenAdvisory(secs){
+    var el = document.getElementById('ampLenNote');
+    if (!el) return;
+    if (!isFinite(secs) || secs <= CLEAN_SECS){ el.style.display='none'; return; }
+    var m = Math.floor(secs/60), r = Math.round(secs%60), eta = Math.round(secs*GEN_PER_S);
+    el.textContent = 'Past ' + CLEAN_SECS + 's the model still accepts the job (ACE-Step takes '
+      + MAX_SECS + 's natively), but nothing this long has been generated here yet, so '
+      + 'coherence over ' + m + 'm' + (r ? r + 's' : '') + ' is unproven. Render takes about '
+      + Math.floor(eta/60) + 'm' + (eta%60) + 's.';
+    el.style.display = 'block';
+  }
   const etaFor = s => Math.max(6, Math.round(s * GEN_PER_S));
   function checkLyrics(secs){
     const lines = $('ampLyrics').value.split('\n').filter(l => l.trim() && !/^\s*\[/.test(l)).length;
@@ -3155,7 +3244,13 @@ let apInit;
     b.classList.add('active');
     if (b.dataset.secs === 'custom'){ $('ampSecs').style.display = 'block'; $('ampSecs').focus(); }
     else { $('ampSecs').style.display = 'none'; $('ampSecs').value = b.dataset.secs; }
-    updateEta(); ampDurationRefresh();
+    // A length preset IS a statement in seconds, so clicking one asserts seconds
+    // mode. Previously the presets were merely dimmed to 45% in bars mode and did
+    // nothing when clicked: submit deletes body.seconds whenever ampUnit is 'bars',
+    // so an 8 min click was silently discarded and the bars box was sent instead.
+    // That is how a 480s request rendered 45.176s = exactly 16 bars at 85bpm.
+    if (window.ampUnit === 'bars') window.ampSetUnit('seconds');
+    updateEta(); ampDurationRefresh(); ampLenAdvisory(parseFloat($('ampSecs').value));
   }));
   $('ampSecs').addEventListener('input', () => {
     // Free entry — parseFloat, not parseInt, and no rounding to the step. The
@@ -3166,7 +3261,7 @@ let apInit;
       $('ampSecs').value = MAX_SECS;
       ampClampNote = 'clamped ' + v + 's → ' + MAX_SECS + 's, the longest track Amphion generates';
     } else ampClampNote = '';
-    updateEta(); ampDurationRefresh();
+    updateEta(); ampDurationRefresh(); ampLenAdvisory(parseFloat($('ampSecs').value));
   });
   $('ampLyrics').addEventListener('input', () => checkLyrics(ampEffectiveSeconds() || 60));
   updateEta();
@@ -3383,7 +3478,7 @@ async function refreshStatus() {
   }
 }
 refreshStatus();
-wgRefresh(); egressRefresh(); acctInit(); dgInit();  // WireGuard + Account + Paired-devices cards live in Status (default pane)
+wgRefresh(); egressRefresh(); acctInit(); dgInit(); qualInit(); emotionInit(); shelfInit();  // WireGuard + Account + Paired-devices + Emotion + Shelf cards live in Status (default pane)
 setInterval(refreshStatus, 10_000);
 
 // ── chat + audio ──────────────────────────────────────────────────────────────
@@ -3779,6 +3874,183 @@ if (!MIC_OK) {
   micBtn.addEventListener('touchend',   e => { e.preventDefault(); stopHold();  }, {passive:false});
 }
 
+
+// ── Morpheus quality tier ─────────────────────────────────────────────────────
+// Options come from /image/quality, never hardcoded here. The server owns the
+// allowlist; a client that invented a tier would just be rejected, and a client
+// that duplicated the list would drift from it.
+async function qualInit() {
+  const sel  = document.getElementById('morphQualSel');
+  const hint = document.getElementById('morphQualHint');
+  if (!sel) return;
+  try {
+    const d = await fetch('/image/quality').then(r => r.json());
+    sel.innerHTML = '';
+    d.tiers.forEach(t => {
+      const o = document.createElement('option');
+      o.value = t.id;
+      o.textContent = t.label;
+      o.dataset.hint = t.hint + ' · ' + t.steps + ' steps';
+      sel.appendChild(o);
+    });
+    sel.value = d.current || d.default;
+    const show = () => {
+      const o = sel.selectedOptions[0];
+      hint.textContent = o ? o.dataset.hint : '';
+    };
+    show();
+    sel.addEventListener('change', show);
+  } catch (e) { /* selector simply stays empty if the server is unreachable */ }
+}
+
+// ── Emotion ───────────────────────────────────────────────────────────────────
+// Options come from /emotion, never hardcoded here — a state added to
+// config/emotions.yaml appears in this selector with no UI change, which is the
+// point of keeping the vocabulary in exactly one place. None is the default and
+// the regression anchor: selecting it means zero behaviour change anywhere.
+//
+// The selector shows SELECTED; the line above the hint shows RESOLVED. They
+// differ only under Auto, where the state moves on its own — and that is exactly
+// when the user needs to be able to see what she has settled on without opening
+// a log. Polling stops the moment Auto is not selected, so a fixed state costs
+// no traffic at all.
+let _emoPoll = null;
+async function emotionInit() {
+  const sel  = document.getElementById('emoSel');
+  const note = document.getElementById('emoNote');
+  const now  = document.getElementById('emoNow');
+  if (!sel) return;
+  try {
+    const d = await fetch('/emotion').then(r => r.json());
+    sel.innerHTML = '';
+    const add = (v, label) => {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = label; sel.appendChild(o);
+    };
+    add(d.none, t('status.emotion.none', 'None'));
+    d.emotions.forEach(e => add(e.id, e.label));   // labels are the server's
+    add(d.auto, t('status.emotion.auto', 'Auto'));
+    sel.value = d.selected || d.default;
+
+    // Under Auto, say what she has actually settled on. Blank until the first
+    // read lands — claiming a feeling she has not formed yet would be a lie.
+    const showResolved = (data) => {
+      if (!now) return;
+      if (sel.value === d.auto && data && data.label) {
+        now.textContent = t('status.emotion.now', 'Currently feeling:') + ' ' + data.label;
+        now.style.display = '';
+      } else if (sel.value === d.auto) {
+        now.textContent = t('status.emotion.reading', 'Reading the conversation…');
+        now.style.display = '';
+      } else {
+        now.style.display = 'none';
+      }
+    };
+    const poll = async () => {
+      if (sel.value !== d.auto) return;
+      try { showResolved(await fetch('/emotion').then(r => r.json())); } catch (e) {}
+    };
+    const show = (data) => {
+      if (sel.value === d.auto)       note.textContent = t('status.emotion.hint.auto', 'Phoebe reads the conversation and sets this herself. Pick any state to hold it steady.');
+      else if (sel.value === d.none)  note.textContent = t('status.emotion.hint.none', 'No emotion applied.');
+      else                            note.textContent = t('status.emotion.hint.set',  'Shapes her chat tone, Dio’s face and Iris’s display. Never her voice. Holds until you change it.');
+      showResolved(data);
+      clearInterval(_emoPoll); _emoPoll = null;
+      if (sel.value === d.auto) _emoPoll = setInterval(poll, 20000);   // Dio's own poll cadence
+    };
+    show(d);
+    sel.addEventListener('change', async () => {
+      try {
+        const r = await fetch('/emotion', {method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({emotion: sel.value})});
+        if (!r.ok) throw new Error(r.status);
+        show(await r.json());
+      } catch (e) {
+        // Say so rather than leaving a selector that looks set but isn't.
+        clearInterval(_emoPoll); _emoPoll = null;
+        note.textContent = t('status.emotion.err', 'Could not save that — the server did not accept it.');
+      }
+    });
+  } catch (e) { /* selector stays as-is if the server is unreachable */ }
+}
+
+// ── Shelf ─────────────────────────────────────────────────────────────────────
+// Read-only by construction: there is no write route to call, so there is no
+// edit affordance to build. The list and the reader are the whole surface.
+//
+// The renderer escapes FIRST and marks up second. These are trusted works, but
+// "trusted" is a fact about the author and not about the pipeline — the day a
+// second work lands on the shelf from somewhere less careful, the escaping is
+// what makes that a non-event.
+function shelfMd(src) {
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inline = s => esc(s).replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  const out = [];
+  let para = [];
+  const flush = () => { if (para.length) { out.push('<p>' + inline(para.join(' ')) + '</p>'); para = []; } };
+  for (const raw of src.split('\n')) {
+    const line = raw.trim();
+    if (!line)                  { flush(); continue; }
+    if (line === '---')         { flush(); out.push('<hr>'); continue; }
+    const h = line.match(/^(#{1,3})\s+(.*)$/);
+    if (h)                      { flush(); const n = h[1].length; out.push(`<h${n}>${inline(h[2])}</h${n}>`); continue; }
+    para.push(line);
+  }
+  flush();
+  return out.join('\n');
+}
+
+async function shelfInit() {
+  const list = document.getElementById('shelfList');
+  const modal = document.getElementById('shelfModal');
+  const body = document.getElementById('shelfBody');
+  const titleEl = document.getElementById('shelfModalTitle');
+  if (!list) return;
+
+  const close = () => { modal.hidden = true; body.innerHTML = ''; };
+  document.getElementById('shelfCloseBtn')?.addEventListener('click', close);
+  modal?.addEventListener('click', e => { if (e.target === modal) close(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !modal.hidden) close(); });
+
+  const open = async (slug) => {
+    try {
+      const b = await fetch('/shelf/' + encodeURIComponent(slug)).then(r => {
+        if (!r.ok) throw new Error(r.status); return r.json();
+      });
+      titleEl.textContent = b.title;
+      body.innerHTML = shelfMd(b.text);
+      body.scrollTop = 0;
+      modal.hidden = false;
+      document.getElementById('shelfCloseBtn')?.focus();
+    } catch (e) {
+      titleEl.textContent = t('status.shelf.err', 'Could not open that');
+      body.textContent = '';
+      modal.hidden = false;
+    }
+  };
+
+  try {
+    const d = await fetch('/shelf').then(r => r.json());
+    list.innerHTML = '';
+    if (!d.books || !d.books.length) {
+      list.innerHTML = `<div class="lv-note">${t('status.shelf.empty', 'Nothing on the shelf yet.')}</div>`;
+      return;
+    }
+    d.books.forEach(b => {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'shelf-item';
+      const ttl = document.createElement('span'); ttl.className = 'shelf-t'; ttl.textContent = b.title;
+      const sub = document.createElement('span'); sub.className = 'shelf-s';
+      sub.textContent = [b.subtitle, b.words ? b.words.toLocaleString() + ' words' : '']
+        .filter(Boolean).join(' · ');
+      el.append(ttl, sub);
+      el.addEventListener('click', () => open(b.slug));
+      list.appendChild(el);
+    });
+  } catch (e) { /* card stays empty if the server is unreachable */ }
+}
 
 // ── WireGuard tunnel toggle ───────────────────────────────────────────────────
 async function wgRefresh() {
@@ -4521,7 +4793,8 @@ document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
       const res  = await fetch('/image/generate', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({positive, negative_prompt, steps, width, height, seed}),
+        body: JSON.stringify({positive, negative_prompt, width, height, seed,
+                              quality: (document.getElementById('morphQualSel') || {}).value}),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -4605,7 +4878,7 @@ document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
 
   async function refreshGallery() {
     try {
-      const data = await fetch('/image/gallery?n=12').then(r => r.json());
+      const data = await fetch('/image/gallery?n=20').then(r => r.json());
       const imgs = data.images || [];
       if (!imgs.length) {
         galleryEl.innerHTML = '<div class="morph-gal-empty">No generations yet.</div>';

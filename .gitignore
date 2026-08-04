@@ -28,3 +28,15 @@ modules/content_profiles/*.local.*
 SESSION_LOG.md
 TODO_tomorrow.md
 FUTURE.md
+
+# Floor regression probes — LOCAL ONLY, never committed.
+# These files list, in plain text and in ~30 languages, the exact phrasings that
+# must be refused, plus every artistic-framing bypass attempt tried against the
+# child-safety floor. Every case is blocked, but this repo is public and the
+# files would still publish a ready-made prompt list usable against any other
+# generator. Keep them on the machine; run them before touching the floor.
+tests/floor_*_probe.py
+
+# Security audit — LOCAL ONLY. Documents open findings on a live, internet-
+# reachable host; publishing it hands over a current vulnerability map.
+docs/security_audit_*.md

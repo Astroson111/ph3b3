@@ -88,16 +88,34 @@ class StoriesModule:
 
     _TELL_VERBS = ("tell", "read", "recite", "narrate", "story of", "tale of", "hear the")
 
+    @staticmethod
+    def _squash(text):
+        """Letters and digits only, so word boundaries stop mattering.
+
+        Whisper decides where the spaces go, and it does not always agree with
+        the title. "The Lamplighter's Apprentice" came back as "tell me the lamp
+        lighter story" — a correct transcript that scored ZERO title hits,
+        because "lamplighter" is not a substring of "lamp lighter". The request
+        then fell through to inference, which invented a different story
+        entirely. Comparing against a squashed copy makes the two spellings the
+        same string. Any compound title can hit this, so fix it here rather than
+        renaming stories around the speech recogniser.
+        """
+        return re.sub(r"[^a-z0-9]+", "", text.lower())
+
     def tellable(self, message):
         """If the message asks to TELL/READ a saved story by title, return (title, full_text).
 
         Used to recite a saved story verbatim instead of letting inference summarise it.
         Requires a telling verb AND a title match (majority of the title's distinctive
         words, len>=4, present in the message), so ordinary chat never triggers it.
+        Title words are matched against the message both as spoken and with all
+        spacing removed — see _squash().
         """
         if not message:
             return None
         m = message.lower()
+        m_squashed = self._squash(m)
         if not any(v in m for v in self._TELL_VERBS):
             return None
         all_stories = (self.stories["ph3b3_stories"] +
@@ -106,7 +124,8 @@ class StoriesModule:
         for s in all_stories:
             title = s.get("title") or ""
             words = re.findall(r"[a-z]{4,}", title.lower())
-            if words and sum(1 for w in words if w in m) >= max(1, (len(words) + 1) // 2):
+            hits = sum(1 for w in words if w in m or w in m_squashed)
+            if words and hits >= max(1, (len(words) + 1) // 2):
                 story = s.get("story", "")
                 if story:
                     return (title, story)

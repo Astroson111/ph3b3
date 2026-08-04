@@ -19,8 +19,84 @@ except ImportError:                       # pragma: no cover
     from modules import voices as _voices
 
 
+# ── Wire sample rate ─────────────────────────────────────────────────────────
+# Piper renders at 22050 Hz. That is fine over a socket on the LAN and expensive
+# over TLS on an ESP32-S3: 22050/16-bit/mono is ~57 KB/s of base64 sustained, and
+# a device that cannot hold that starves mid-word however deep its buffer is.
+# 16 kHz costs 27% less and keeps every formant that matters for speech — the
+# content above 8 kHz in a TTS voice is sibilance, not intelligibility.
+#
+# Consumers must read the rate from the WAV header. Browsers always did; Dio was
+# hard-coded to 22050 until the firmware was taught to parse it.
+PIPER_RATE = 22050
+WIRE_RATE = int(os.getenv("PH3B3_TTS_WIRE_RATE", "16000"))
+
+
+def _resample_s16(pcm: bytes, src: int, dst: int) -> bytes:
+    """Downsample signed-16 mono PCM. Box-filters before decimating, because
+    dropping samples outright folds everything above the new Nyquist back into
+    the audible band as a metallic buzz."""
+    if src == dst or not pcm:
+        return pcm
+    try:
+        import numpy as np
+    except Exception:
+        return pcm                      # numpy absent: ship it at source rate
+    a = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
+    if a.size == 0:
+        return pcm
+    ratio = src / dst
+    width = max(1, int(round(ratio)))
+    if width > 1:                       # cheap anti-alias ahead of the decimation
+        kern = np.ones(width, dtype=np.float32) / width
+        a = np.convolve(a, kern, mode="same")
+    idx = np.arange(0, a.size, ratio, dtype=np.float32)
+    out = np.interp(idx, np.arange(a.size, dtype=np.float32), a)
+    return np.clip(out, -32768, 32767).astype("<i2").tobytes()
+
+
+def _safe_sentence_silence(sec: float, rate: int = PIPER_RATE) -> str:
+    """Format --sentence-silence so Piper's inter-sentence pad lands on a WHOLE
+    sample. Returns the formatted flag value, clamped to 0..2 s.
+
+    Piper sizes that pad in BYTES as int(seconds * rate * 2). When the result is
+    ODD it writes half a sample, and from that pause onward every sample is read
+    one byte out of phase — the low byte of one sample pairs with the high byte
+    of the next and the waveform becomes full-scale noise: static, with cracks
+    like gunfire. 0.55 s at 22050 Hz is exactly such a value (24255 bytes).
+
+    That is why only shelf readings were affected. Every other reply passes
+    sentence_silence=None and omits the flag entirely, so it never hit the path;
+    a story is the one thing that asks for a real beat at each full stop.
+
+    Nudge by HALF samples — a whole sample adds 2 bytes and cannot change parity
+    — preferring a slightly LONGER pause so a deliberate beat is never trimmed
+    toward nothing. The correction is at most ~23 microseconds, inaudible.
+    """
+    target = max(0.0, min(2.0, float(sec)))
+    half = 1.0 / (2 * rate)
+    for k in range(64):
+        for cand in ((target + k * half), (target - k * half)):
+            if not 0.0 <= cand <= 2.0:
+                continue
+            out = f"{cand:.6f}"          # 6 dp resolves a half-sample at 22050 Hz
+            if int(float(out) * rate * 2) % 2 == 0:
+                return out
+    return f"{target:.6f}"               # not reachable in practice; never raise
+
+
+def _even(pcm: bytes) -> bytes:
+    """Drop a trailing odd byte from raw s16 PCM.
+
+    Belt-and-braces against the half-sample above: a stream that is not a whole
+    number of 16-bit samples desynchronises everything downstream of it, and the
+    consumers here (np.frombuffer, pacat --format=s16le) either raise or play the
+    misalignment as noise. One dropped byte is 1/44100 s of nothing."""
+    return pcm[:-1] if (len(pcm) & 1) else pcm
+
+
 def trim_silence_b64(b64, thr=350, keep_ms=40):
-    """Trim leading/trailing near-silence from a base64 WAV (22050/mono/16-bit),
+    """Trim leading/trailing near-silence from a base64 WAV (mono/16-bit, any rate),
     keeping `keep_ms` of pad each side.
 
     Piper emits ~100 ms of silence at each end of every utterance; concatenating
@@ -31,7 +107,12 @@ def trim_silence_b64(b64, thr=350, keep_ms=40):
     try:
         wav = base64.b64decode(b64)
         wf = wave.open(io.BytesIO(wav), "rb")
-        if (wf.getframerate(), wf.getnchannels(), wf.getsampwidth()) != (22050, 1, 2):
+        rate = wf.getframerate()
+        # Rate-agnostic on purpose. This used to demand exactly 22050 and bail
+        # otherwise — which would have silently stopped trimming the moment the
+        # wire rate changed, letting Piper's ~200ms of dead air back between every
+        # chunk. Mono 16-bit is still required; the rate is read, not assumed.
+        if (wf.getnchannels(), wf.getsampwidth()) != (1, 2):
             return b64
         s = array.array("h")
         s.frombytes(wf.readframes(wf.getnframes()))
@@ -44,14 +125,14 @@ def trim_silence_b64(b64, thr=350, keep_ms=40):
             j -= 1
         if i >= j:
             return b64  # all silence — leave as-is
-        keep = int(22050 * keep_ms / 1000)
+        keep = int(rate * keep_ms / 1000)
         i = max(0, i - keep)
         j = min(n, j + keep)
         buf = io.BytesIO()
         with wave.open(buf, "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
-            w.setframerate(22050)
+            w.setframerate(rate)
             w.writeframes(s[i:j].tobytes())
         return base64.b64encode(buf.getvalue()).decode("ascii")
     except Exception:
@@ -228,12 +309,24 @@ class TTSModule:
         """Synthesise one chunk to raw s16le/22050/mono PCM (headerless), or None."""
         model = model or VOICE_MODEL
         try:
-            cmd = f'echo {subprocess.list2cmdline([text])} | {PIPER_BIN} --model {model} --output-raw'
+            # NO SHELL. Piper reads its text from stdin, so the old
+            # `echo <text> | piper` never needed one — and subprocess.list2cmdline()
+            # is the WINDOWS quoting function: on POSIX it wraps in DOUBLE quotes,
+            # inside which sh still performs $(...) and backtick substitution.
+            # Since this text arrives from the model (server.py's `speak` tool) and
+            # can be steered by a crafted message or a poisoned document, that was
+            # arbitrary command execution as the service user. Passing argv as a
+            # list and the text via stdin removes the shell from the path entirely,
+            # so there is no quoting to get right.
             proc = subprocess.run(
-                cmd, shell=True, capture_output=True, timeout=20,
+                [PIPER_BIN, "--model", model, "--output-raw"],
+                input=text.encode("utf-8"),
+                capture_output=True, timeout=20,
                 env={**os.environ, **_XDG_ENV},
             )
-            return proc.stdout or None
+            # Even-trimmed for the same reason as synthesize_to_b64: pacat is fed
+            # this buffer as --format=s16le and would play a half sample as noise.
+            return _even(proc.stdout) or None
         except subprocess.TimeoutExpired:
             log.warning("[TTS] chunk synth timed out (20 s)")
             return None
@@ -250,9 +343,15 @@ class TTSModule:
         device_arg = f" --device={sink}" if sink else ""
         dur = len(pcm) / 2 / 22050.0                 # s16le mono @ 22050 Hz
         try:
+            # argv list, no shell: the sink name comes from pactl and is not
+            # attacker-controlled today, but a device name is still external input
+            # and there is no reason to hand it to a shell.
+            pacat = ["pacat", "--playback", "--raw", "--format=s16le",
+                     "--rate=22050", "--channels=1"]
+            if sink:
+                pacat.append(f"--device={sink}")
             subprocess.run(
-                f"pacat --playback --raw --format=s16le --rate=22050 --channels=1{device_arg}",
-                shell=True, input=pcm, check=True, timeout=dur + 15,
+                pacat, input=pcm, check=True, timeout=dur + 15,
                 env={**os.environ, **_XDG_ENV},
             )
             return True
@@ -311,9 +410,21 @@ class TTSModule:
                     pass
                 prod.join(timeout=2)
 
-    def synthesize_to_b64(self, text: str, voice=None) -> str | None:
+    def synthesize_to_b64(self, text: str, voice=None,
+                          length_scale: float | None = None,
+                          sentence_silence: float | None = None) -> str | None:
         """Run Piper and return base64-encoded WAV, or None if unavailable. `voice`
-        is a registry code (e.g. 'es'); default = the selected primary voice."""
+        is a registry code (e.g. 'es'); default = the selected primary voice.
+
+        `length_scale` is Piper's duration multiplier — larger is SLOWER. None
+        omits the flag entirely, so the default path is byte-identical to before
+        this parameter existed.
+
+        Deliberately a NUMBER rather than an emotion. This module has no idea
+        emotions exist and should not acquire one: the caller decides how fast she
+        speaks, and the mapping from a feeling to a float lives in
+        modules/emotions.py where it can be tested without a synthesiser.
+        """
         if not self._available or not text or not text.strip():
             return None
         if voice is None and _current_text_only():   # declared text-only: no audio
@@ -324,17 +435,39 @@ class TTSModule:
             return None
         with self._lock:
             try:
-                cmd = f'echo {subprocess.list2cmdline([tts_text])} | {PIPER_BIN} --model {model} --output-raw'
-                proc = subprocess.run(cmd, shell=True, capture_output=True, timeout=30)
-                raw_pcm = proc.stdout
+                # Same fix as _piper_raw: no shell, text via stdin. See the note there.
+                cmd = [PIPER_BIN, "--model", model, "--output-raw"]
+                if length_scale is not None:
+                    # Clamped again here. This module is the last thing between a
+                    # number and a subprocess, and it should not trust a caller
+                    # any more than firmware trusts a wire.
+                    cmd += ["--length-scale", f"{max(0.5, min(2.0, float(length_scale))):.3f}"]
+                if sentence_silence is not None:
+                    # Seconds of silence after each sentence. This is the honest
+                    # way to add pauses to a reading: it changes the DELIVERY and
+                    # never the text, so a work stored verbatim is still spoken
+                    # verbatim. Editing pauses into the prose would change what
+                    # the file says.
+                    # Snapped to a whole sample — see _safe_sentence_silence.
+                    # Passing the raw value here is what turned every pause in a
+                    # shelf reading into static and gunfire-like cracks.
+                    cmd += ["--sentence-silence",
+                            _safe_sentence_silence(sentence_silence)]
+                proc = subprocess.run(
+                    cmd,
+                    input=tts_text.encode("utf-8"),
+                    capture_output=True, timeout=30,
+                )
+                raw_pcm = _even(proc.stdout)
                 if not raw_pcm:
                     return None
+                pcm = _resample_s16(raw_pcm, PIPER_RATE, WIRE_RATE)
                 buf = io.BytesIO()
                 with wave.open(buf, 'wb') as wf:
                     wf.setnchannels(1)
                     wf.setsampwidth(2)
-                    wf.setframerate(22050)
-                    wf.writeframes(raw_pcm)
+                    wf.setframerate(WIRE_RATE)
+                    wf.writeframes(pcm)
                 return base64.b64encode(buf.getvalue()).decode('ascii')
             except Exception as e:
                 log.error(f"TTS synthesize error: {e}")

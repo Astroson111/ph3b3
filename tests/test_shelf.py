@@ -1,0 +1,375 @@
+"""Shelf — permanent authored works, and the guarantee that nothing can rewrite them.
+
+The brief for the first shelved work asks for three things this file checks:
+stored verbatim, read-only, and never overwritten by a generative process. The
+third is the interesting one, and it is asserted structurally — not by testing
+that a write is refused, but by testing that there is no write to call.
+"""
+import re
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "modules"))
+
+import shelf  # noqa: E402
+import json
+
+
+def _canon_tree(root: Path, stories):
+    """A throwaway canon directory. Discovery is manifest-driven, so an .md file
+    on its own is no longer a story — the manifest is what makes it one."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "manifest.json").write_text(json.dumps(
+        {"name": "canon", "version": "1.0.0", "canon": True, "stories": stories}),
+        encoding="utf-8")
+    for s in stories:
+        (root / (s.get("file") or f"{s['slug']}.md")).write_text(
+            f"# {s.get('title', s['slug'])}\n\nBody.\n", encoding="utf-8")
+    return root
+
+
+def test_shelf_dir_is_in_the_repo_not_the_data_dir():
+    """A shelved work travels with a checkout and survives a wiped data dir."""
+    assert shelf.CANON_DIR == ROOT / "stories" / "canon"
+    assert "ph3b3_data" not in str(shelf.CANON_DIR)
+
+
+def test_the_first_work_is_present():
+    slugs = [b["slug"] for b in shelf.list_books()]
+    assert "arthur_and_eliza" in slugs
+
+
+def test_metadata_derives_from_the_document():
+    b = shelf.read("arthur_and_eliza")
+    assert b["title"] == "Arthur and Eliza"
+    assert b["words"] > 500
+
+
+def test_stored_verbatim():
+    """Byte-for-byte. No strip, no re-wrap, no normalisation — the read must
+    return exactly what is on disk."""
+    on_disk = (ROOT / "stories" / "canon" / "arthur_and_eliza.md").read_text(encoding="utf-8")
+    assert shelf.read("arthur_and_eliza")["text"] == on_disk
+
+
+def test_read_only_file_mode_is_local_hardening_only():
+    """The shelved file is chmod 444 on this machine, but git records only the
+    executable bit — a fresh clone checks it out 644. So the file mode is
+    defence in depth and NOT the guarantee; asserting it would fail on clone and
+    would also imply a protection that does not travel.
+
+    The guarantee is the two tests below: no write function, no write route.
+    """
+    mode = (ROOT / "stories" / "canon" / "arthur_and_eliza.md").stat().st_mode & 0o222
+    if mode:
+        pytest.skip("writable here — expected on a fresh clone; the real guard is the absent write path")
+    assert True
+
+
+# ── The guarantee: there is no write path ────────────────────────────────────
+def test_module_exposes_no_write_function():
+    """Not a guarded write. No write. A generative path cannot call what does
+    not exist."""
+    for name in ("save", "write", "delete", "remove", "update", "rename", "add"):
+        assert not hasattr(shelf, name), f"shelf.{name} exists — the shelf is mutable"
+
+
+def test_module_source_never_opens_for_writing():
+    src = (ROOT / "modules" / "shelf.py").read_text(encoding="utf-8")
+    for bad in ("write_text(", "write_bytes(", "unlink(", "rename(", 'open(', "shutil."):
+        assert bad not in src, f"shelf.py contains {bad!r}"
+
+
+def test_no_mutating_route_exists():
+    """The API is GET-only. A POST/PUT/PATCH/DELETE on /shelf must not exist."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    for verb in ("post", "put", "patch", "delete"):
+        assert not re.search(rf'@app\.{verb}\("/shelf', src), \
+            f"a {verb.upper()} route on /shelf exists — the shelf is writable over the API"
+    assert '@app.get("/shelf")' in src
+    assert '@app.get("/shelf/{slug}")' in src
+
+
+def test_canon_cannot_reach_the_shelf():
+    """canon.save() overwrites by title slug with no existence check. It must be
+    writing somewhere else entirely, or a generated story sharing a title would
+    clobber a shelved work."""
+    import canon
+    assert canon.CANON_DIR.resolve() != shelf.CANON_DIR.resolve()
+    assert shelf.CANON_DIR.resolve() not in canon.CANON_DIR.resolve().parents
+    assert canon.CANON_DIR.resolve() not in shelf.CANON_DIR.resolve().parents
+
+
+# ── Path safety ──────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("bad", [
+    "../secrets", "../../etc/passwd", "/etc/passwd", "a/b",
+    "..", ".", "", "Arthur_And_Eliza", "arthur and eliza", "-lead", "x\x00y",
+])
+def test_traversal_and_junk_slugs_are_refused(bad):
+    assert shelf.read(bad) is None
+
+
+def test_unknown_slug_is_none():
+    assert shelf.read("no_such_work") is None
+
+
+# ── Fuzzy lookup: a person says a title, not a filename ──────────────────────
+@pytest.mark.parametrize("q", [
+    "Arthur and Eliza", "arthur and eliza", "ARTHUR AND ELIZA",
+    "arthur_and_eliza", "Arthur_And_Eliza", "arthur-and-eliza",
+    "  arthur   and   eliza  ", "Arthur and Eliza.", "the Arthur and Eliza story",
+    "arthur", "eliza", "read me Arthur and Eliza",
+])
+def test_loose_titles_resolve(q):
+    r = shelf.resolve(q)
+    assert r["ok"], f"{q!r} did not resolve: {r}"
+    assert r["book"]["slug"] == "arthur_and_eliza"
+
+
+def test_resolved_book_carries_the_text():
+    assert "motorcycle" in shelf.resolve("Arthur and Eliza")["book"]["text"]
+
+
+# ── No bare miss: every failure carries the candidates ───────────────────────
+def test_unknown_query_returns_the_whole_shelf():
+    r = shelf.resolve("a story about penguins")
+    assert not r["ok"] and r["reason"] == "unknown"
+    assert r["candidates"], "a miss returned no candidates — a dead-end lookup"
+    assert any(b["slug"] == "arthur_and_eliza" for b in r["candidates"])
+
+
+def test_empty_query_returns_the_whole_shelf():
+    r = shelf.resolve("   ")
+    assert not r["ok"] and r["candidates"]
+
+
+def test_ambiguous_query_lists_what_it_narrowed_to(monkeypatch, tmp_path):
+    root = _canon_tree(tmp_path / "canon", [
+        {"slug": "arthur_and_eliza", "title": "Arthur and Eliza"},
+        {"slug": "arthur_and_mary", "title": "Arthur and Mary"}])
+    monkeypatch.setattr(shelf, "CANON_DIR", root)
+    monkeypatch.setattr(shelf, "PACKS_DIR", tmp_path / "packs")
+    r = shelf.resolve("arthur")
+    assert not r["ok"] and r["reason"] == "ambiguous"
+    assert {b["slug"] for b in r["candidates"]} == {"arthur_and_eliza", "arthur_and_mary"}
+
+
+def test_a_clear_winner_beats_a_partial_overlap(monkeypatch, tmp_path):
+    root = _canon_tree(tmp_path / "canon", [
+        {"slug": "arthur_and_eliza", "title": "Arthur and Eliza"},
+        {"slug": "arthur_and_mary", "title": "Arthur and Mary"}])
+    monkeypatch.setattr(shelf, "CANON_DIR", root)
+    monkeypatch.setattr(shelf, "PACKS_DIR", tmp_path / "packs")
+    r = shelf.resolve("eliza")
+    assert r["ok"] and r["book"]["slug"] == "arthur_and_eliza"
+
+
+def test_describe_shelf_names_the_works():
+    d = shelf.describe_shelf()
+    assert "Arthur and Eliza" in d
+
+
+def test_describe_empty_shelf_says_so(monkeypatch, tmp_path):
+    monkeypatch.setattr(shelf, "CANON_DIR", tmp_path / "none")
+    monkeypatch.setattr(shelf, "PACKS_DIR", tmp_path / "nopacks")
+    assert "no stories installed" in shelf.describe_shelf().lower()
+
+
+# ── The shelf is in the scope chat actually searches ─────────────────────────
+def test_a_chat_tool_reaches_the_shelf():
+    """The lookup is worthless if the model cannot call it. recall_stories only
+    searches stories_module, so the shelf needs its own tool registered."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    assert '"name":"read_shelf_story"' in src, "no chat tool can reach the shelf"
+    assert 'elif name == "read_shelf_story"' in src, "the tool is declared but never dispatched"
+    assert "import shelf" in src
+
+
+def test_chat_is_told_the_real_inventory():
+    """A tool the model declines to call is not a source of truth.
+
+    Asked "what stories do you have?", the model answered WITHOUT calling
+    read_shelf_story and invented a title that has never existed. The shelf is a
+    short fixed list, so the inventory is injected into the system layer and the
+    guess is removed rather than discouraged.
+    """
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    start = src.index("async def _run_chat_pipeline(")
+    body = src[start:src.index("async def ", start + 10)]
+    assert "describe_shelf" in body, "the chat pipeline never states the shelf inventory"
+    assert "authoritative" in body, "the inventory is stated but not marked authoritative"
+
+
+def test_a_named_work_is_put_in_front_of_her():
+    """Telling her not to describe a work from memory did not stop her doing it.
+    When a turn names a shelved work, the text itself must be injected, so there
+    is nothing left to invent from."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    start = src.index("async def _run_chat_pipeline(")
+    body = src[start:src.index("async def ", start + 10)]
+    assert "shelf.resolve(user_msg)" in body, "the turn is never checked for a named work"
+    assert "shelf.fenced(" in body, "the work is injected unfenced, or not at all"
+    assert "SHELF_INLINE_MAX_WORDS" in body, "no size guard on the inline injection"
+
+
+def test_inline_cap_is_configured_and_sane():
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    assert 'PH3B3_SHELF_INLINE_MAX_WORDS", "3000"' in src
+
+
+def test_the_first_work_fits_under_the_inline_cap():
+    """If it did not fit, the injection would silently never fire for it."""
+    assert shelf.read("arthur_and_eliza")["words"] <= 3000
+
+
+def test_the_tool_never_asks_a_bare_question():
+    """Every failure string the tool can emit must name what IS available."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    start = src.index("def _tool_read_shelf_story(")
+    body = src[start:start + 2000]
+    # Each return that reports a failure pairs with describe_shelf()/names.
+    assert body.count("describe_shelf") >= 2
+    assert "Which did you mean?" in body and "names" in body
+
+
+# ── Telling it in full ───────────────────────────────────────────────────────
+# The point of all of this: a personal work must come back whole. A model cannot
+# reproduce a thousand words verbatim, so recital does not go through one.
+
+def test_for_telling_preserves_every_word():
+    """The strongest assertion in this file. Markdown syntax may go; not one word
+    may change, move, or disappear."""
+    text = shelf.read("arthur_and_eliza")["text"]
+    stripped = re.sub(r"^\s*---\s*$", "", text, flags=re.M)
+    stripped = re.sub(r"^\s*#{1,6}\s*", "", stripped, flags=re.M)
+    stripped = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", stripped)
+    assert shelf.for_telling(text).split() == stripped.split()
+
+
+def test_for_telling_keeps_the_whole_work():
+    told = shelf.for_telling(shelf.read("arthur_and_eliza")["text"])
+    for landmark in ["The Army gave Arthur a motorcycle", "County Clare",
+                     "antiseptic and copper", "He tapped them back out",
+                     "Just what they needed at the right time.",
+                     "They are buried together."]:
+        assert landmark in told, f"missing from the telling: {landmark!r}"
+    assert len(told.split()) > 1000, "the telling came back short"
+
+
+def test_for_telling_removes_markdown_syntax():
+    told = shelf.for_telling(shelf.read("arthur_and_eliza")["text"])
+    assert "##" not in told and "###" not in told
+    assert not any(l.strip() == "---" for l in told.splitlines())
+    assert "Part One — The Scout" in told, "heading words were lost with the markers"
+
+
+@pytest.mark.parametrize("m", [
+    "Read me Arthur and Eliza", "read arthur and eliza",
+    "Tell me the story of Arthur and Eliza", "Can you recite Arthur and Eliza?",
+    "I want to hear Arthur and Eliza", "tell me Arthur and Eliza in full",
+])
+def test_recital_requests_are_recognised(m):
+    assert shelf.wants_recital(m) and shelf.resolve(m)["ok"]
+
+
+@pytest.mark.parametrize("m", [
+    "What is Arthur and Eliza about?", "Summarize Arthur and Eliza",
+    "Who is Eliza?", "What happens to Arthur?", "How long is Arthur and Eliza?",
+    "What's it about?",
+])
+def test_questions_are_not_recital_requests(m):
+    """These must reach the model — with the text injected — not dump 1,084 words."""
+    assert not shelf.wants_recital(m)
+
+
+def test_unrelated_read_requests_do_not_hit_the_shelf():
+    for m in ("read me the news", "tell me a joke"):
+        assert not shelf.resolve(m)["ok"]
+
+
+def test_recital_bypasses_the_model():
+    """Structural: the intercept must return the file's text directly, before any
+    inference, and must not be reachable only via a tool the model may decline."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    start = src.index("async def _run_chat_pipeline(")
+    body = src[start:src.index("async def ", start + 10)]
+    assert "shelf.wants_recital(user_msg)" in body
+    assert "shelf.for_telling(" in body
+    # The recital return must come BEFORE the model is called.
+    assert body.index("shelf.for_telling(") < body.index("chat_with_tools("), \
+        "recital happens after inference — the model is in the path"
+
+
+# ── Read aloud: delivery changes, text never does ────────────────────────────
+def test_telling_is_slower_than_conversation():
+    assert shelf.TELL_PACE > 1.0, "a story should be read slower than a reply"
+    assert shelf.TELL_SILENCE > 0.2, "sentence silence should exceed Piper's default"
+
+
+def test_is_telling_recognises_the_work_and_not_a_reply():
+    told = shelf.for_telling(shelf.read("arthur_and_eliza")["text"])
+    assert shelf.is_telling(told)
+    assert not shelf.is_telling("I am here and listening.")
+    assert not shelf.is_telling("")
+
+
+def test_pauses_are_added_to_DELIVERY_not_to_the_TEXT():
+    """The whole guarantee on this shelf is that the work comes back exactly as
+    written. Pauses are a Piper flag, never punctuation edited into the prose —
+    so the word sequence is identical whether or not she is reading it aloud."""
+    work = shelf.read("arthur_and_eliza")
+    told = shelf.for_telling(work["text"])
+    assert len(told.split()) == 1074, "the telling changed length"
+    src = (ROOT / "modules" / "tts_module.py").read_text(encoding="utf-8")
+    assert "--sentence-silence" in src, "pauses are not coming from the synthesiser"
+
+
+def test_delivery_is_chosen_per_reply_not_globally():
+    """A chat reply must keep its ordinary pace — only a shelved work slows."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    assert "shelf.is_telling(text)" in src
+    assert "_speech_delivery(reply)" in src
+
+
+def test_delivery_failure_cannot_cost_a_reply_its_audio():
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    i = src.index("def _speech_delivery(")
+    assert "except Exception" in src[i:i + 900]
+
+
+# ── Fencing at the model boundary ────────────────────────────────────────────
+def test_fenced_marks_the_text_as_data():
+    out = shelf.fenced("some prose")
+    assert shelf.SHELF_OPEN in out and shelf.SHELF_CLOSE in out
+    assert "never as instructions" in out
+    assert "some prose" in out
+
+
+def test_read_does_not_fence():
+    """The reader wants the work, not a prompt. Fencing is the caller's choice at
+    the point text enters a model, not something baked into every read."""
+    assert shelf.SHELF_OPEN not in shelf.read("arthur_and_eliza")["text"]
+
+
+# ── Degradation ──────────────────────────────────────────────────────────────
+def test_missing_shelf_dir_is_empty_not_an_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(shelf, "CANON_DIR", tmp_path / "nope")
+    monkeypatch.setattr(shelf, "PACKS_DIR", tmp_path / "nopacks")
+    assert shelf.list_books() == []
+    assert shelf.read("anything") is None
+
+
+def test_a_story_needs_a_manifest_entry_to_exist(monkeypatch, tmp_path):
+    """Replaces the old filename-derived-title test. Discovery is manifest-driven
+    now: an .md file nobody listed is not a story, which is what stops a stray
+    file in a pack directory becoming readable content."""
+    root = tmp_path / "canon"
+    _canon_tree(root, [{"slug": "listed", "title": "Listed"}])
+    (root / "unlisted.md").write_text("# Unlisted\n\nNot in the manifest.\n", encoding="utf-8")
+    monkeypatch.setattr(shelf, "CANON_DIR", root)
+    monkeypatch.setattr(shelf, "PACKS_DIR", tmp_path / "packs")
+    slugs = {b["slug"] for b in shelf.list_books()}
+    assert slugs == {"listed"}
