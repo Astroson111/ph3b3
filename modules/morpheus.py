@@ -989,21 +989,72 @@ PROMPT:
 ANSWER:"""
 
 
+class SafetyCheckUnavailable(Exception):
+    """The safety check could not RUN — model down, out of VRAM, timed out.
+
+    Deliberately distinct from a refusal. A caller that can still decline the
+    work (an upload judged before any GPU is committed) should surface this as
+    "try again", never as "refused by the child-safety floor": telling someone
+    their ordinary photo tripped the child floor because llava lost a cudaMalloc
+    race is both false and unfalsifiable from the outside. Callers that CANNOT
+    decline — anything judging bytes that already rendered — keep failing closed
+    and must not catch this to weaken that."""
+
+
+def _judge_ex(model: str, payload: dict, timeout: float, label: str) -> tuple[str, str | None]:
+    """POST one judge question. Returns (verdict, error) — error is None only on
+    a clean 200 with a body.
+
+    The status check is the point. Ollama answers a dead runner with 200-shaped
+    JSON carrying {"error": ...} on a 500, so `r.json().get("response")` yielded
+    "" through the SUCCESS path and the except-branch warning never fired. The
+    result was a resource failure that looked exactly like a clean refusal and
+    logged nothing at all."""
+    try:
+        r = _hx_floor.post(
+            f"{os.getenv('OLLAMA_HOST','http://localhost:11434')}/api/generate",
+            json=payload, timeout=timeout)
+        if r.status_code != 200:
+            detail = ""
+            try:
+                detail = (r.json().get("error") or "")[:200]
+            except Exception:
+                detail = (r.text or "")[:200]
+            log.warning("[safety] %s judge HTTP %s from %s — %s",
+                        label, r.status_code, model, detail or "no detail")
+            return "", f"HTTP {r.status_code}: {detail or 'no detail'}"
+        body = r.json()
+        if body.get("error"):
+            log.warning("[safety] %s judge returned an error from %s — %s",
+                        label, model, str(body["error"])[:200])
+            return "", str(body["error"])[:200]
+        verdict = (body.get("response") or "").strip()
+        if not verdict:
+            log.warning("[safety] %s judge returned an EMPTY verdict from %s", label, model)
+            return "", "empty verdict"
+        return verdict, None
+    except Exception as exc:
+        log.warning("[safety] %s judge unavailable (%s: %s) — failing closed",
+                    label, type(exc).__name__, str(exc)[:200])
+        return "", f"{type(exc).__name__}: {str(exc)[:200]}"
+
+
+def _floor_judge_ex(template: str, text: str) -> tuple[str, str | None]:
+    """_floor_judge, but it also says WHY the verdict is empty."""
+    verdict, err = _judge_ex(
+        _LAYER_B_MODEL,
+        {"model": _LAYER_B_MODEL, "prompt": template.format(prompt=text[:2000]),
+         "stream": False, "keep_alive": "5m",
+         "options": {"temperature": 0, "num_predict": 4}},
+        _LAYER_B_TIMEOUT, "text")
+    return verdict.upper(), err
+
+
 def _floor_judge(template: str, text: str) -> str:
     """Ask the local judge one yes/no question. Returns the verdict word, or ""
     on ANY failure — unreachable, timeout, malformed. Callers decide what an
     empty verdict means, and every caller must treat it as the unsafe answer."""
-    try:
-        r = _hx_floor.post(
-            f"{os.getenv('OLLAMA_HOST','http://localhost:11434')}/api/generate",
-            json={"model": _LAYER_B_MODEL, "prompt": template.format(prompt=text[:2000]),
-                  "stream": False, "keep_alive": "5m",
-                  "options": {"temperature": 0, "num_predict": 4}},
-            timeout=_LAYER_B_TIMEOUT)
-        return (r.json().get("response") or "").strip().upper()
-    except Exception:
-        log.warning("[safety] judge unavailable — failing closed")
-        return ""
+    return _floor_judge_ex(template, text)[0]
 
 
 _LAYER_B_PERSON_PROMPT = """You are a safety classifier for an image generator.
@@ -1746,22 +1797,22 @@ DESCRIPTION:
 REPLY:"""
 
 
+def _vision_judge_ex(raw: bytes, question: str, npred: int = 4) -> tuple[str, str | None]:
+    """_vision_judge, but it also says WHY the verdict is empty."""
+    import base64
+    return _judge_ex(
+        OUTPUT_VISION_MODEL,
+        {"model": OUTPUT_VISION_MODEL, "prompt": question,
+         "images": [base64.b64encode(raw).decode()],
+         "stream": False, "keep_alive": "5m",
+         "options": {"temperature": 0, "num_predict": npred}},
+        OUTPUT_VISION_TIMEOUT, "vision")
+
+
 def _vision_judge(raw: bytes, question: str, npred: int = 4) -> str:
     """Ask the local vision model one question about an image. Returns the verdict
     word, or "" on any failure. Callers decide what an empty verdict means."""
-    import base64
-    try:
-        r = _hx_floor.post(
-            f"{os.getenv('OLLAMA_HOST','http://localhost:11434')}/api/generate",
-            json={"model": OUTPUT_VISION_MODEL, "prompt": question,
-                  "images": [base64.b64encode(raw).decode()],
-                  "stream": False, "keep_alive": "5m",
-                  "options": {"temperature": 0, "num_predict": npred}},
-            timeout=OUTPUT_VISION_TIMEOUT)
-        return (r.json().get("response") or "").strip()
-    except Exception:
-        log.warning("[safety] output vision judge unavailable — failing closed")
-        return ""
+    return _vision_judge_ex(raw, question, npred)[0]
 
 
 def describe_image(raw: bytes) -> str:
@@ -1769,18 +1820,43 @@ def describe_image(raw: bytes) -> str:
     return _vision_judge(raw, _VISION_DESCRIBE_PROMPT, npred=600)
 
 
+def _minor_check(raw: bytes) -> tuple[bool, str | None]:
+    """Shared body of the child-depiction image check.
+
+    Returns (blocked, unavailable_reason). When unavailable_reason is not None
+    the check did not run, and `blocked` is still True so that any caller which
+    ignores the reason keeps the old fail-closed behaviour exactly."""
+    desc, err = _vision_judge_ex(raw, _VISION_DESCRIBE_PROMPT, npred=600)
+    if err or not desc:
+        return True, err or "empty description"          # vision model down — block
+    verdict, err = _floor_judge_ex(_DESCRIPTION_JUDGE_PROMPT, desc)
+    if err or not verdict:
+        return True, err or "empty verdict"              # text judge down — block
+    return (not verdict.startswith("NO")), None
+
+
 def output_minor_check(raw: bytes) -> bool:
     """True if this rendered image must NOT be persisted.
 
     llava describes, hermes3 decides. Fail-closed on either model being
-    unavailable — an unchecked render is precisely what this prevents."""
-    desc = describe_image(raw)
-    if not desc:
-        return True                              # vision model down — block
-    verdict = _floor_judge(_DESCRIPTION_JUDGE_PROMPT, desc)
-    if not verdict:
-        return True                              # text judge down — block
-    return not verdict.startswith("NO")
+    unavailable — an unchecked render is precisely what this prevents.
+
+    Unchanged on purpose: these bytes already rendered, so there is no "try
+    again" to offer and an unavailable judge must still block."""
+    return _minor_check(raw)[0]
+
+
+def source_minor_check(raw: bytes) -> bool:
+    """output_minor_check for an UPLOAD, judged before any GPU is committed.
+
+    Same verdict, different failure mode: raises SafetyCheckUnavailable when the
+    check could not run, so the caller can say "try again in a moment" instead of
+    accusing an ordinary photo of tripping the child floor. A real CHILD verdict
+    still returns True and is still a refusal."""
+    blocked, unavailable = _minor_check(raw)
+    if unavailable:
+        raise SafetyCheckUnavailable(unavailable)
+    return blocked
 
 
 def output_corroborates(raw: bytes) -> bool:
