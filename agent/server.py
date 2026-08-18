@@ -5268,7 +5268,27 @@ async def image_edit_run(request: Request, body: dict, background_tasks: Backgro
         src_raw = src.read_bytes()
     except Exception:
         raise HTTPException(400, "could not read the uploaded image")
-    if await asyncio.to_thread(morpheus.output_minor_check, src_raw):
+    # A check that could not RUN is not a refusal. The vision judge shares a 16 GB
+    # card with ComfyUI, and this runs PRE-LOCK — before evict_hermes/comfy_free —
+    # so a video job holding 8 GB can starve llava of VRAM. That used to surface as
+    # "Refused by the child-safety floor" on an ordinary photo, which is false, and
+    # sends the operator hunting a safety bug instead of a memory one.
+    #
+    # The upload is deliberately NOT unlinked here: the caller is being told to try
+    # again, so the upload_id it would retry with has to still exist. Only a real
+    # verdict destroys the upload.
+    try:
+        _src_blocked = await asyncio.to_thread(morpheus.source_minor_check, src_raw)
+    except morpheus.SafetyCheckUnavailable as exc:
+        log.error("[safety] edit source check UNAVAILABLE — %s (upload kept for retry)", exc)
+        raise HTTPException(
+            503,
+            detail=("The safety check that has to look at your image could not run "
+                    "just now — the vision model could not load, usually because "
+                    "something else is using the GPU. Your upload is still here; "
+                    "try again in a moment. This is not a refusal."),
+            headers={"Retry-After": "30"})
+    if _src_blocked:
         log.warning("[safety] edit source image blocked — category: child-depiction")
         try:
             src.unlink()
