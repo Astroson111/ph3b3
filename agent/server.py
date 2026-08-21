@@ -5083,6 +5083,37 @@ async def kadmos_cancel(session_id: str):
     return {"session_id": session_id, "cancelling": True}
 
 
+@app.post("/kadmos/release")
+async def kadmos_release(body: dict | None = None, session_id: str = "default"):
+    """Release the session's document — the door out.
+
+    A document had a door in and no door out. Reading mode could be switched off,
+    which stops the capture at server.py's reading-mode branch, but the document
+    itself stayed staged with its extracted text, ready to take the next turn the
+    moment the switch went back on. This clears the SOURCE.
+
+    Release is not delete. The staged file stays on disk exactly where the upload
+    put it; what goes is this session's claim on it — doc_id, extracted full text,
+    rolling summary, confirmation and lane. Conversation history is untouched
+    (turns that discussed the document keep their text; we are releasing the lens,
+    not rewriting the past), and Mnemosyne is untouched.
+
+    Idempotent: releasing when nothing is loaded is a no-op that reports held=False,
+    so a double-click or a stale chip cannot error.
+    """
+    sid = ((body or {}).get("session_id") or session_id or "default")
+    had = kadmos.get_pending(sid) is not None
+    kadmos.clear_pending(sid)
+    # Standing "how to read it" instruction belonged to the released document.
+    # doc_mode is deliberately left alone — that is the user's preference, not the
+    # document's. Reading mode itself is client-owned and re-sent every turn.
+    _reading = kadmos.get_reading(sid)
+    kadmos.set_reading(sid, _reading.get("mode", False), "", _reading.get("doc_mode", "auto"))
+    _kadmos_cancel.pop(sid, None)
+    log.info("[kadmos] document released for %r (had_document=%s)", sid, had)
+    return {"session_id": sid, "released": True, "held": had}
+
+
 @app.post("/image/generate")
 async def image_generate(request: Request, body: dict, background_tasks: BackgroundTasks):
     positive = body.get("positive", "").strip()
