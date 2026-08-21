@@ -302,6 +302,42 @@
     }
     .rb-instr:focus { border-color: var(--purple); }
 
+    /* ── Apelles preview ──────────────────────────────────────────────────
+       Two panes side by side, stacking when the viewport is too narrow to
+       give each one a readable width. In single mode (nothing edited yet)
+       the After pane and both labels are gone entirely — there is nothing to
+       compare against, so a "Before" label would be describing a comparison
+       that does not exist. */
+    .ap-panes { display: flex; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+    .ap-pane { flex: 1; min-width: 220px; margin: 0; }
+    .ap-box {
+      overflow: auto; max-height: 55vh;
+      border: 1px solid #333; border-radius: 6px;
+      position: relative; min-height: 60px;
+    }
+    .ap-box img { max-width: 100%; display: block; margin: 0 auto; object-fit: contain; }
+    .ap-dims { margin-top: 4px; }
+    /* Single mode: one image, no labels, full width. */
+    .ap-preview.is-single #apAfterPane { display: none; }
+    .ap-preview.is-single .ap-label   { display: none; }
+    /* Busy: the previous image stays put and dims rather than blanking, so a
+       slow operation never flashes an empty box. */
+    .ap-busy-host { }
+    .ap-busy {
+      position: absolute; inset: 0;
+      background: rgba(10,4,24,.45);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .ap-busy::after {
+      content: ""; width: 26px; height: 26px; border-radius: 50%;
+      border: 3px solid rgba(255,255,255,.25); border-top-color: var(--magenta);
+      animation: ap-spin .8s linear infinite;
+    }
+    @keyframes ap-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .ap-busy::after { animation: none; border-top-color: rgba(255,255,255,.6); }
+    }
+
     /* ── Device roster ── */
     .dev-list { display: flex; flex-direction: column; gap: .45rem; }
     .dev-row {
@@ -2063,6 +2099,32 @@
     <div id="apLoaded" class="ari-hint" style="display:none;margin-top:8px"></div>
   </div>
 
+  <!-- Preview sits directly under Load, because a photo editor should show you
+       the photo before it shows you a list of things it could do to it. It used
+       to be the fifth card, below the capability list and every operate control,
+       so on load the image was well past the fold. Unnumbered on purpose: it is
+       a display surface you read, not a step you perform. -->
+  <div class="card ap-preview" id="apPreviewCard" style="display:none">
+    <div class="card-title">Preview</div>
+    <label><input type="checkbox" id="apZoom"> View at 100% (edge inspection)</label>
+    <div class="ap-panes" id="apPanes">
+      <figure class="ap-pane" id="apBeforePane">
+        <figcaption class="ari-hint ap-label">Before</figcaption>
+        <div id="apBeforeBox" class="ap-box"><img id="apBefore" alt="the photo as loaded"></div>
+        <figcaption class="ari-hint ap-dims" id="apBeforeDims"></figcaption>
+      </figure>
+      <figure class="ap-pane" id="apAfterPane">
+        <figcaption class="ari-hint ap-label">After</figcaption>
+        <div id="apAfterBox" class="ap-box ap-busy-host">
+          <img id="apAfter" alt="the edited result">
+          <div class="ap-busy" id="apBusy" hidden aria-hidden="true"></div>
+        </div>
+        <figcaption class="ari-hint ap-dims" id="apAfterDims"></figcaption>
+      </figure>
+    </div>
+    <div id="apPrevInfo" class="ari-hint" style="margin-top:6px"></div>
+  </div>
+
   <div class="card">
     <div class="card-title">What Apelles can do on this box</div>
     <div class="ari-note">Every operation Apelles knows about is listed. Unavailable ones say <b>why</b>, so
@@ -2134,23 +2196,7 @@
   </div>
 
   <div class="card">
-    <div class="card-title">3 &middot; Preview</div>
-    <label><input type="checkbox" id="apZoom"> View at 100% (edge inspection)</label>
-    <div style="display:flex;gap:12px;margin-top:8px;flex-wrap:wrap">
-      <div style="flex:1;min-width:220px">
-        <div class="ari-hint">Before</div>
-        <div id="apBeforeBox" style="overflow:auto;max-height:420px;border:1px solid #333;border-radius:6px"><img id="apBefore" style="max-width:100%;display:block"></div>
-      </div>
-      <div style="flex:1;min-width:220px">
-        <div class="ari-hint">After</div>
-        <div id="apAfterBox" style="overflow:auto;max-height:420px;border:1px solid #333;border-radius:6px"><img id="apAfter" style="max-width:100%;display:block"></div>
-      </div>
-    </div>
-    <div id="apPrevInfo" class="ari-hint" style="margin-top:6px"></div>
-  </div>
-
-  <div class="card">
-    <div class="card-title">4 &middot; Export</div>
+    <div class="card-title">3 &middot; Export</div>
     <label>Format <select id="apFmt"><option>PNG</option><option>JPEG</option><option>WEBP</option></select></label>
     <label style="margin-left:12px">Quality <input type="number" id="apQ" min="1" max="100" value="92" style="width:70px"></label>
     <div style="margin-top:10px;padding:10px;border:1px solid #6b8f5b;border-radius:8px">
@@ -2163,7 +2209,7 @@
   </div>
 
   <div class="card">
-    <div class="card-title">5 &middot; Batch a folder</div>
+    <div class="card-title">4 &middot; Batch a folder</div>
     <div class="ari-note">Dry run first &mdash; it lists <b>the real destination paths</b> before anything is written.
     Originals are never touched, and output never goes into the source folder.</div>
     <label>Folder <input type="text" id="apFolder" placeholder="/home/&hellip;/Pictures/holiday" style="width:58%"></label>
@@ -2302,6 +2348,52 @@ let apInit;
 (function(){
   const $ = id => document.getElementById(id);
   let imageId = null, srcW = 0, srcH = 0, caps = null, batchTimer = null, curBatch = null;
+
+  // ── Preview display rule ───────────────────────────────────────────────
+  // Before any edit: ONE image, no labels — there is nothing to compare yet.
+  // After the first SUCCESSFUL op: Before/After, with Before pinned to the
+  // untouched original for the rest of the session.
+  //
+  // Pinning costs nothing to enforce: /apelles/edit re-applies the whole step
+  // pipeline to the ORIGINAL every time rather than chaining onto the last
+  // result, so the original is structurally the only thing Before could show.
+  // apEditSeq exists to settle rapid back-to-back ops — a slow first request
+  // must not land after a fast second one and leave a stale image on screen.
+  let apEdited = false, apEditSeq = 0;
+
+  function apPreviewMode() {
+    const card = $('apPreviewCard');
+    card.style.display = imageId || $('apGate').dataset.pending ? 'block' : 'none';
+    card.classList.toggle('is-single', !apEdited);
+  }
+
+  function apSetBusy(on) {
+    $('apBusy').hidden = !on;
+    $('apApply').disabled = on;
+  }
+
+  // A src that fails to decode renders as a broken-image glyph, which reads as
+  // "your photo is corrupt" when it usually means one request went wrong. Hide
+  // the element instead and say so in words; the next good src re-shows it.
+  ['apBefore', 'apAfter'].forEach(function(id){
+    const im = $(id);
+    im.addEventListener('error', function(){
+      if (!im.getAttribute('src')) return;      // cleared on purpose, not a failure
+      im.style.visibility = 'hidden';
+      $('apPrevInfo').textContent = 'that image could not be displayed — the file is still on disk';
+    });
+    im.addEventListener('load', function(){ im.style.visibility = ''; });
+  });
+
+  function apResetPreview() {
+    apEdited = false;
+    apEditSeq++;                       // orphan any op still in flight
+    $('apAfter').removeAttribute('src');
+    $('apAfterDims').textContent = '';
+    $('apPrevInfo').textContent = '';
+    apSetBusy(false);
+    apPreviewMode();
+  }
   const esc = s => (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
   const SLIDERS = [['apExp','apExpV',1],['apCon','apConV',2],['apSat','apSatV',2],
@@ -2388,8 +2480,12 @@ let apInit;
       : 'No camera metadata found in this file.';
     $('apGate').style.display = 'block';
     $('apGate').dataset.pending = d.image_id;
+    // Shown straight away from the local file, before the gate is answered —
+    // you should be able to see what you are being asked about.
     $('apBefore').src = URL.createObjectURL(f);
+    $('apBeforeDims').textContent = d.width + '×' + d.height;
     srcW = d.width; srcH = d.height;
+    apResetPreview();                  // a new photo returns to single-image mode
   });
 
   $('apConfirm').addEventListener('click', async function(){
@@ -2401,6 +2497,11 @@ let apInit;
     $('apLoaded').style.display = 'block';
     $('apLoaded').innerHTML = 'Open for editing &mdash; ' + srcW + '&times;' + srcH +
       '. <b>The original on disk is not modified.</b>';
+    // Re-point Before at the SERVER copy now that there is an id for it. The
+    // object URL above dies with the page; this survives a reload, and it is
+    // the same bytes the edit pipeline reads.
+    $('apBefore').src = '/apelles/file/' + id + '?preview=1';
+    apPreviewMode();
   });
 
   $('apDiscard').addEventListener('click', async function(){
@@ -2408,6 +2509,9 @@ let apInit;
       body: JSON.stringify({session_id:'panel', image_id:$('apGate').dataset.pending, confirm:false})});
     imageId = null; $('apGate').style.display='none'; $('apFile').value='';
     $('apBefore').removeAttribute('src');
+    $('apBeforeDims').textContent = '';
+    $('apGate').dataset.pending = '';
+    apResetPreview();
   });
 
   $('apRestore').addEventListener('click', function(){
@@ -2429,12 +2533,28 @@ let apInit;
 
   $('apApply').addEventListener('click', async function(){
     if (!imageId) { alert('Load and confirm a photo first.'); return; }
+    const seq = ++apEditSeq;           // this op's ticket; a later one supersedes it
     $('apPrevInfo').textContent = 'working...';
-    const r = await fetch('/apelles/edit', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({image_id:imageId, steps:steps()})});
-    const d = await r.json();
-    if (!r.ok) { $('apPrevInfo').textContent = d.detail || 'that edit failed'; return; }
-    $('apAfter').src = '/apelles/file/' + d.preview_id + '?t=' + Date.now();
+    apSetBusy(true);                   // old image stays visible underneath — no blank flash
+    let r, d;
+    try {
+      r = await fetch('/apelles/edit', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({image_id:imageId, steps:steps()})});
+      d = await r.json();
+    } catch (e) {
+      if (seq === apEditSeq) { apSetBusy(false); $('apPrevInfo').textContent = 'that edit failed: ' + e.message; }
+      return;                          // After keeps the last good image
+    }
+    if (seq !== apEditSeq) return;     // superseded mid-flight; the newer op owns the panel
+    apSetBusy(false);
+    if (!r.ok) { $('apPrevInfo').textContent = (d && d.detail) || 'that edit failed'; return; }
+    // Only a SUCCESSFUL op flips to Before/After. A failed one leaves the panel
+    // exactly as it was, showing the last good result rather than a broken glyph.
+    $('apAfter').src = '/apelles/file/' + d.preview_id + '?preview=1';
+    $('apAfterDims').textContent = d.width + '×' + d.height;
+    $('apBeforeDims').textContent = d.source_width + '×' + d.source_height;
+    apEdited = true;
+    apPreviewMode();
     $('apPrevInfo').innerHTML = d.source_width + '&times;' + d.source_height + ' &rarr; ' +
       d.width + '&times;' + d.height +
       ' &middot; <b>original untouched</b> (sha256 ' + esc(d.original_sha256.slice(0,12)) + '...)';
@@ -2553,7 +2673,14 @@ let apInit;
       const d = await r.json();
       if (!r.ok) { $('apUpOut').innerHTML = '<span style="color:#e0a33a">' + esc(d.detail||'upscale failed') + '</span>'; }
       else {
-        $('apAfter').src = '/apelles/file/' + d.file_id + '?t=' + Date.now();
+        // An upscale is a successful operation like any other — it flips the
+        // panel to Before/After too, or the result would land in a pane the
+        // display rule still had hidden.
+        $('apAfter').src = '/apelles/file/' + d.file_id + '?preview=1';
+        $('apAfterDims').textContent = d.width + '×' + d.height;
+        $('apBeforeDims').textContent = d.source_width + '×' + d.source_height;
+        apEdited = true; apEditSeq++;
+        apPreviewMode();
         $('apUpOut').innerHTML = esc(d.model) + ': ' + d.source_width + '&times;' + d.source_height +
           ' &rarr; <b>' + d.width + '&times;' + d.height + '</b> (' + d.factor + '&times;), ' +
           Math.round(d.bytes/1024) + ' KB &middot; original untouched' +
