@@ -379,17 +379,23 @@ async def basic_auth(request: Request, call_next):
             return await call_next(request)
         return RedirectResponse(url="/setup", status_code=303)
 
-    # Login / logout pages are public.
-    if request.url.path in ("/login", "/logout"):
-        return await call_next(request)
-
     # Refuse a throttled caller before doing any credential comparison — a blocked
     # key should cost this server nothing, which is the point of the throttle.
+    #
+    # This MUST stay above the /login passthrough below. It used to sit under it,
+    # which exempted the login form from the throttle entirely: the one credential
+    # path a browser — or anyone reaching the Funnel — actually uses was the one
+    # path with no rate limit and no logging, which is the hole the throttle was
+    # built to close. /logout rides along; a blocked caller has no session to end.
     _ckey = _auth_client_key(request)
     _blk = _auth_blocked_for(_ckey)
     if _blk:
         return Response(content="Too many failed attempts", status_code=429,
                         headers={"Retry-After": str(_blk)})
+
+    # Login / logout pages are public — but only past the throttle, above.
+    if request.url.path in ("/login", "/logout"):
+        return await call_next(request)
 
     if not AUTH_PASS:
         return Response(
@@ -3783,12 +3789,21 @@ async def login_page(request: Request):
 
 @app.post("/login")
 async def login_submit(request: Request):
+    # The throttle bookkeeping is done HERE, not in the middleware. The middleware
+    # refuses an already-blocked caller before this route runs, but it passes
+    # /login through without inspecting the outcome — so this 401 is invisible to
+    # it, and a success never reaches its clear-on-success branch either. Both
+    # halves have to be recorded locally or the form stays unthrottled and silent.
+    _ckey = _auth_client_key(request)
     form = await request.form()
     user = str(form.get("user", "")).strip()
     pw   = str(form.get("pass", ""))
     if (AUTH_PASS
             and secrets.compare_digest(user.encode(), AUTH_USER.encode())
             and secrets.compare_digest(pw.encode(),   AUTH_PASS.encode())):
+        # Mirrors the middleware: a typo before a correct password carries no penalty.
+        _auth_fails.pop(_ckey, None)
+        _auth_blocked.pop(_ckey, None)
         token = secrets.token_hex(32)
         _sessions[token] = user
         resp = RedirectResponse(url="/panel", status_code=303)
@@ -3800,6 +3815,7 @@ async def login_submit(request: Request):
             samesite="lax",
         )
         return resp
+    _auth_note_failure(_ckey, "/login", "")
     return HTMLResponse(content=_login_html(error=True), status_code=401)
 
 
