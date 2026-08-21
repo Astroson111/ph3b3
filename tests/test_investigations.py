@@ -43,10 +43,14 @@ _auth = base64.b64encode(f"{server.AUTH_USER}:{server.AUTH_PASS}".encode()).deco
 HEADERS = {"Authorization": f"Basic {_auth}"}
 
 _passed = _failed = 0
+# Also recorded as (label, ok) so pytest can name each check individually —
+# the counters alone would collapse the whole file into one pass/fail.
+_results: list[tuple[str, bool]] = []
 
 
 def check(label, cond, detail=""):
     global _passed, _failed
+    _results.append((label, bool(cond)))
     if cond:
         _passed += 1
         print(f"  PASS  {label}")
@@ -361,5 +365,19 @@ check("synced clock recorded as server", m6b["clock"] == "server", m6b.get("cloc
 
 shutil.rmtree(_INV_TMP, ignore_errors=True)
 shutil.rmtree(_TMP, ignore_errors=True)
-print(f"\n{_passed} passed, {_failed} failed")
-sys.exit(1 if _failed else 0)
+
+if __name__ == "__main__":
+    print(f"\n{_passed} passed, {_failed} failed")
+    sys.exit(1 if _failed else 0)
+else:
+    # Collected by pytest — see the note in test_triage_gate.py. The module-scope
+    # sys.exit() this replaces aborted collection for the whole tests/ directory.
+    # Temp dirs are already cleaned above, so collection leaves nothing behind.
+    import pytest
+
+    def test_probe_produced_results():
+        assert _results, "the probe body recorded nothing — it did not run"
+
+    @pytest.mark.parametrize("name,ok", _results, ids=[n for n, _ in _results])
+    def test_check(name, ok):
+        assert ok, name

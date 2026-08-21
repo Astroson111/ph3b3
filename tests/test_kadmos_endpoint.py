@@ -34,7 +34,9 @@ _results = []
 
 def check(desc, ok):
     ok = bool(ok)
-    _results.append(ok)
+    # (desc, ok) rather than a bare bool: pytest names each case from desc, so a
+    # failure says which check broke instead of just "one of them".
+    _results.append((desc, ok))
     print(f"{'PASS' if ok else 'FAIL'} - {desc}")
 
 
@@ -154,5 +156,18 @@ try:
 finally:
     server.vision._analyze = _orig_analyze
 
-print(f"\n{sum(_results)}/{len(_results)} passed")
-sys.exit(0 if all(_results) else 1)
+if __name__ == "__main__":
+    _passed = sum(1 for _, ok in _results if ok)
+    print(f"\n{_passed}/{len(_results)} passed")
+    sys.exit(0 if _passed == len(_results) else 1)
+else:
+    # Collected by pytest — see the note in test_triage_gate.py. The module-scope
+    # sys.exit() this replaces aborted collection for the whole tests/ directory.
+    import pytest
+
+    def test_probe_produced_results():
+        assert _results, "the probe body recorded nothing — it did not run"
+
+    @pytest.mark.parametrize("name,ok", _results, ids=[n for n, _ in _results])
+    def test_check(name, ok):
+        assert ok, name

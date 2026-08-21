@@ -105,6 +105,22 @@ r = run("x", "", [], _boom)   # empty /api/ps → not resident
 check("evicted model → fail OPEN + TRIAGE_FAILOPEN_EVICTED", r.answerable and any("TRIAGE_FAILOPEN_EVICTED" in m for m in _logs), extra=str(_logs))
 check("evicted → triage inference NOT attempted (no reload)", not any("must NOT be called" in m for m in _logs))
 
-passed = sum(1 for _, ok in _results if ok)
-print(f"\n{passed}/{len(_results)} passed")
-sys.exit(0 if passed == len(_results) else 1)
+if __name__ == "__main__":
+    passed = sum(1 for _, ok in _results if ok)
+    print(f"\n{passed}/{len(_results)} passed")
+    sys.exit(0 if passed == len(_results) else 1)
+else:
+    # Collected by pytest. The probe body above already ran at import, so each
+    # recorded check becomes its own test case — a failure names the check that
+    # broke instead of collapsing the file into one pass/fail.
+    #
+    # The sys.exit() this replaces was at module scope, which aborted collection
+    # for the WHOLE tests/ directory, not just this file.
+    import pytest
+
+    def test_probe_produced_results():
+        assert _results, "the probe body recorded nothing — it did not run"
+
+    @pytest.mark.parametrize("name,ok", _results, ids=[n for n, _ in _results])
+    def test_check(name, ok):
+        assert ok, name
