@@ -6034,6 +6034,27 @@ _apelles_pending: dict = {}     # session_id -> attach awaiting an explicit yes
 _apelles_files: dict = {}       # file_id -> {"path": Path, "kind": str}
 _apelles_current: dict = {}     # session_id -> the confirmed photo chat acts on
 
+# ── Cross-surface handoff for "edit the photo" ───────────────────────────────
+# The panel confirms under the FIXED session id "panel" (panel.html), while chat
+# tools arrive carrying the chat's own session id. Those never match, so the
+# per-session lookup above never resolves across surfaces — which means this
+# fallback is what actually carries "confirm it in the panel, then ask Phoebe to
+# make it black and white". It cannot simply be deleted; deleting it removes
+# photo editing from chat entirely.
+#
+# It used to live in _apelles_current under the "_last" key, which had two
+# problems. It shared a namespace with real session ids, so a session literally
+# named "_last" would collide with it. And it never expired: one confirmed photo
+# stayed silently actionable forever, so "make it black and white" could reach
+# for a picture from days ago that nobody remembered opening — on any surface,
+# including a device speaking to Phoebe from another room.
+#
+# Now it is its own slot with an IDLE timeout: the clock resets every time the
+# photo is actually used, so an active editing session never expires underneath
+# the user, and a forgotten one stops answering.
+_apelles_last: dict = {}        # {"image_id": str, "ts": float} — most recent confirm
+_APELLES_LAST_TTL_S = 1800      # 30 min idle before the cross-surface handoff lapses
+
 
 def _apelles_register(path: Path, kind: str) -> str:
     fid = uuid.uuid4().hex[:12]
@@ -6137,6 +6158,9 @@ async def apelles_confirm(body: dict):
     if not body.get("confirm"):
         _apelles_files.pop(pend["image_id"], None)
         _apelles_pending.pop(sid, None)
+        # A discarded photo must not remain the cross-surface fallback.
+        if _apelles_last.get("image_id") == pend["image_id"]:
+            _apelles_last.clear()
         return {"confirmed": False, "discarded": True}
     _apelles_files[pend["image_id"]]["confirmed"] = True
     _apelles_pending.pop(sid, None)
@@ -6144,7 +6168,7 @@ async def apelles_confirm(body: dict):
     # "it" without the user repeating which picture they mean. Set only after the
     # gate passes — an unconfirmed image is never something Phoebe can touch.
     _apelles_current[sid] = pend["image_id"]
-    _apelles_current["_last"] = pend["image_id"]
+    _apelles_last.update({"image_id": pend["image_id"], "ts": time.time()})
     return {"confirmed": True, "image_id": pend["image_id"]}
 
 
@@ -6399,13 +6423,42 @@ _AP_ADJUST = {
 }
 
 
+def _apelles_last_fresh() -> str | None:
+    """The cross-surface photo, if it has not gone idle. Expiry is silent and the
+    caller falls through to 'there's no photo open' — the honest answer, and a
+    better one than editing something the user stopped thinking about."""
+    fid = _apelles_last.get("image_id")
+    if not fid:
+        return None
+    if time.time() - _apelles_last.get("ts", 0) > _APELLES_LAST_TTL_S:
+        _apelles_last.clear()
+        log.info("[apelles] cross-surface photo lapsed after %ds idle", _APELLES_LAST_TTL_S)
+        return None
+    return fid
+
+
 def _ap_photo(session_id: str = "default"):
-    """The photo chat is talking about, or a plain explanation of why there isn't one."""
-    fid = _apelles_current.get(session_id or "default") or _apelles_current.get("_last")
+    """The photo chat is talking about, or a plain explanation of why there isn't one.
+
+    Session first, then the cross-surface fallback — the panel confirms under
+    "panel" while chat arrives under its own id, so for chat the fallback is
+    normally the one that resolves.
+    """
+    sid = session_id or "default"
+    fid = _apelles_current.get(sid) or _apelles_last_fresh()
     ent = _apelles_files.get(fid or "")
     if not ent or not Path(ent["path"]).exists():
+        # Drop a pointer to a file that is gone, so the next turn does not retry it.
+        if fid:
+            _apelles_current.pop(sid, None)
+            if _apelles_last.get("image_id") == fid:
+                _apelles_last.clear()
         return None, ("There's no photo open. Load one in the Apelles tab and confirm it "
                       "first — I don't touch a picture until it's been confirmed.")
+    # Used, so it is not idle: restart the clock. This makes the timeout an IDLE
+    # one — an active editing session never expires underneath the user.
+    if _apelles_last.get("image_id") == fid:
+        _apelles_last["ts"] = time.time()
     return ent, None
 
 
