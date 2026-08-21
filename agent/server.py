@@ -6231,15 +6231,55 @@ async def apelles_export(body: dict):
             "original_sha256": sha_before, "original_name": src.name}
 
 
+_APELLES_PREVIEW_EDGE = 1600     # longest edge served to the preview panel
+
+
 @app.get("/apelles/file/{file_id}")
-async def apelles_file(file_id: str):
+async def apelles_file(file_id: str, preview: int = 0):
+    """Serve a registered file. `preview=1` caps the longest edge for on-screen
+    display; without it the full-resolution file is served unchanged, which is
+    what the download links rely on.
+
+    The downscale is response-only and never touches disk — no second copy is
+    written, and the working file the next edit reads is byte-identical. A photo
+    editor that quietly re-encoded the thing you are editing would be lying to
+    you about what you are looking at.
+
+    Reachable only by opaque registered id, so there is no path parameter that
+    can address the filesystem.
+    """
     ent = _apelles_files.get(str(file_id))
     if not ent or not Path(ent["path"]).exists():
         raise HTTPException(404, "no such file")
     p = Path(ent["path"])
     mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
             "webp": "image/webp"}.get(p.suffix.lower().lstrip("."), "application/octet-stream")
+    if preview:
+        try:
+            buf = await asyncio.to_thread(_apelles_preview_bytes, p)
+            if buf is not None:
+                return Response(content=buf, media_type="image/png")
+        except Exception as e:
+            # A preview that cannot be downscaled is still a preview — fall back
+            # to the full file rather than showing the user a broken image.
+            log.warning("[apelles] preview downscale failed for %s (%s) — serving full size",
+                        file_id, e)
     return FileResponse(str(p), media_type=mime, filename=p.name)
+
+
+def _apelles_preview_bytes(p: Path) -> bytes | None:
+    """PNG bytes capped at _APELLES_PREVIEW_EDGE, or None if it is already small
+    enough to serve as-is (the common case — no work, no re-encode)."""
+    import io
+    from PIL import Image
+    with Image.open(p) as im:
+        if max(im.width, im.height) <= _APELLES_PREVIEW_EDGE:
+            return None
+        im = im.copy()
+        im.thumbnail((_APELLES_PREVIEW_EDGE, _APELLES_PREVIEW_EDGE), Image.LANCZOS)
+        bio = io.BytesIO()
+        im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB").save(bio, format="PNG")
+        return bio.getvalue()
 
 
 def _apelles_steps(body: dict) -> list:
