@@ -470,8 +470,12 @@ def test_emotion_composes_before_floor_in_both_routes():
     route the _emotion_compose call must appear before the floor gate call."""
     src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
 
-    for route, gate in (("/image/generate", "_morpheus_floor_gate("),
-                        ("/amphion/generate", "_amphion_floor_gate(")):
+    # Matched WITHOUT a trailing "(" on purpose. The gate is dispatched through
+    # asyncio.to_thread, so it is spelled `to_thread(_morpheus_floor_gate, ...)`
+    # — a bare reference, no paren. The invariant under test is the ORDER, which
+    # is unchanged; only the spelling of the call moved.
+    for route, gate in (("/image/generate", "_morpheus_floor_gate"),
+                        ("/amphion/generate", "_amphion_floor_gate")):
         start = src.index(f'@app.post("{route}")')
         body = src[start:start + 3000]
         compose_at = body.find("_emotion_compose(")

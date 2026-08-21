@@ -793,7 +793,9 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "recall":
             result = _format_recall(mem_spine.recall(args["query"], top_k=int(args.get("top_k", 5))))
         elif name == "occult_lookup": result = occult.lookup(args["query"], args.get("category","any"))
-        elif name == "generate_video": result = _tool_generate_video(args)
+        # Off-thread like the other synchronous handlers: this one runs the full
+        # floor gate, and Layer B blocks on the judge.
+        elif name == "generate_video": result = await asyncio.to_thread(_tool_generate_video, args)
         elif name == "web_search": result = await _tool_web_search(args.get("query", ""), session_id)
         elif name == "occult_random": result = occult.random_phenomenon()
         elif name == "tell_joke":
@@ -5131,7 +5133,10 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
     positive, emotion_id = _emotion_compose(positive, "morpheus")
 
     # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
-    _morpheus_floor_gate(positive, negative, request)
+    # Off-thread: the gate is synchronous and Layer B is a blocking httpx call to
+    # the judge, so calling it inline stalled the whole event loop — every other
+    # request, the chat socket, device heartbeats — for the judge's duration.
+    await asyncio.to_thread(_morpheus_floor_gate, positive, negative, request)
 
     # ── Quality tier (Aelion) ─────────────────────────────────────────────────
     # Resolved HERE, before the job is queued and therefore before run_generation
@@ -5304,7 +5309,10 @@ async def image_edit_run(request: Request, body: dict, background_tasks: Backgro
     negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
 
     # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
-    _morpheus_floor_gate(positive, negative, request)
+    # Off-thread: the gate is synchronous and Layer B is a blocking httpx call to
+    # the judge, so calling it inline stalled the whole event loop — every other
+    # request, the chat socket, device heartbeats — for the judge's duration.
+    await asyncio.to_thread(_morpheus_floor_gate, positive, negative, request)
 
     # Edit Mode is the one path where the prompt is not the whole request. The
     # SOURCE image carries content no text gate can see: an innocuous instruction
@@ -5433,7 +5441,10 @@ async def morpheus_video(request: Request, body: dict, background_tasks: Backgro
         raise HTTPException(400, f"unknown preset; choose from {list(morpheus.VIDEO_PRESETS)}")
 
     # Safety: FLOOR → interlock → profile (shared gate, identical for all Morpheus gen).
-    _morpheus_floor_gate(positive, negative, request)
+    # Off-thread: the gate is synchronous and Layer B is a blocking httpx call to
+    # the judge, so calling it inline stalled the whole event loop — every other
+    # request, the chat socket, device heartbeats — for the judge's duration.
+    await asyncio.to_thread(_morpheus_floor_gate, positive, negative, request)
 
     params = {"positive": positive, "negative": negative, "preset": preset,
               "seed": int(body.get("seed", -1))}
