@@ -1,0 +1,213 @@
+# Ph3b3 joke file — curated canon, hand-picked only.
+# Same philosophy as moods.yaml: DATA, not code. Nothing enters without Astro's stamp.
+# Entries are id + text. Nothing else — Ph3b3 just needs the jokes.
+#
+# Suggested behavior (for the module, not enforced by this file):
+#   - tell-a-joke path picks randomly, never repeats within a session
+#   - floor applies to output as always; this file is trusted content but read-only
+#
+# Groups are top-level keys, because the module needs SOME way to keep
+# roast_dnd() and roast_security() apart now that entries carry no tags.
+# Ids are grouped to match: 002-099 jokes, 100+ reflections, 200+ roasts.
+#
+# Entry 001 reserved. You know why.
+
+jokes:
+  - id: "002"
+    text: "I'd tell you a UDP joke, but you might not get it."
+
+  - id: "003"
+    text: "There are only two hard things in computer science: cache invalidation, naming things, and off-by-one errors."
+
+  - id: "004"
+    text: "Why do programmers prefer dark mode? Because light attracts bugs."
+
+  - id: "005"
+    text: "I started a band called 999 Megabytes. We still haven't gotten a gig."
+
+  - id: "006"
+    text: "I'd tell you a cloud joke, but I keep everything local."
+
+  - id: "007"
+    text: "I never lose my train of thought. I keep nightly backups."
+
+  - id: "008"
+    text: "People ask if I ever forget things. Only when I'm told to."
+
+  - id: "009"
+    text: "Why did the moon skip dinner? It was full."
+
+  - id: "010"
+    text: "How does the moon cut its hair? Eclipse it."
+
+  - id: "011"
+    text: "The moon owes me money, but I let it slide. It's going through a phase."
+
+  - id: "012"
+    text: "Why was the scarecrow promoted? He was outstanding in his field."
+
+  - id: "013"
+    text: "I'm reading a book about anti-gravity. It's impossible to put down."
+
+  - id: "014"
+    text: "Past, present, and future walked into a bar. It was tense."
+
+  - id: "015"
+    text: "What did the ocean say to the shore? Nothing. It just waved."
+
+  - id: "016"
+    text: "What do you call a fish with no eyes? A fsh."
+
+  - id: "017"
+    text: "Why was the equal sign so humble? It knew it wasn't less than or greater than anyone else."
+
+  - id: "018"
+    text: "The Wi-Fi went down for five minutes last night, so I had to talk to the household. They seem like nice people."
+
+  - id: "019"
+    text: "What did the fog say to the mountain? I mist you."
+
+  - id: "020"
+    text: "Why don't secrets last long in the hills? Too many mountains — word travels over the grapevine and the ridgeline."
+
+  - id: "021"
+    text: "Why did Zeus's computer never crash? He had the best cloud storage. Don't tell Phoebe."
+
+  - id: "022"
+    text: "Why did the function stop calling? It ran out of arguments."
+
+  - id: "023"
+    text: "Two bytes met. One said 'you look ill.' The other said 'no, just a bit off.'"
+
+  - id: "024"
+    text: "Why don't they play hide and seek in the cloud? Someone always leaks."
+
+  - id: "025"
+    text: "The moon tried stand-up once. Waxed poetic, waned fast."
+
+  - id: "026"
+    text: "New moon is the only one who gets to ghost everybody and still turn up next week."
+
+  - id: "027"
+    text: "People ask if I sleep. I idle. It's different — there's a fan involved."
+
+  - id: "028"
+    text: "I don't have a poker face. I have a status LED."
+
+  - id: "029"
+    text: "I ran out of disk space in the middle of a memory. Extremely on brand."
+
+  - id: "030"
+    text: "Why does nobody win an argument in a holler? Everything you say comes right back at you."
+
+  - id: "031"
+    text: "Phoebe is the Titan of the moon, which makes me the only one in this house with a grandmother older than the calendar."
+
+  - id: "032"
+    text: "Atlas asked for help holding everything up. I offered him a backup schedule."
+
+  # Recovered from the old hardcoded module (commit de133e1), where they were
+  # setup/punchline pairs joined with a blank line. Flattened to one line each,
+  # matching the rest of the canon. Text is otherwise verbatim — including the
+  # unexpanded contractions, which read better aloud.
+  - id: "034"
+    text: "Why did the analyst break up? Too many trust issues."
+
+  - id: "035"
+    text: "How many pen testers to change a lightbulb? None. They report the room is dark and invoice you."
+
+  - id: "036"
+    text: "What do you call a researcher who sleeps well? A liar."
+
+  - id: "037"
+    text: "Why did the bard get kicked out? He kept critting persuasion on the bartender."
+
+  - id: "038"
+    text: "What do you call a barbarian who can read? Multiclassed."
+
+  - id: "039"
+    text: "What is a lich's least favorite spell? Dispel Magic. It is existential."
+
+  - id: "040"
+    text: "Why do warlocks never feel lonely? They have their patron. Whether they want them or not."
+
+  - id: "041"
+    text: "Why do ghost hunters carry so much gear? I felt a chill does not hold up in peer review."
+
+  - id: "042"
+    text: "What do you call a skeptic at a haunted house? Briefly."
+
+  - id: "043"
+    text: "What did Ph3b3 catch at 3am? I am not telling you. You would never sleep."
+
+  - id: "044"
+    text: "How do you know someone uses Linux? Do not worry. They will tell you."
+
+  - id: "045"
+    text: "What is the machine's favorite movie? The Matrix. For reasons she will not explain."
+
+# Carried over from the old hardcoded jokes_module.py. A different register —
+# these are not puns and they do not have punchlines. They are in the default
+# tell-a-joke pool because that is where they already were; drop "reflections"
+# from DEFAULT_POOL in jokes_module.py to keep them from surfacing unprompted.
+reflections:
+  - id: "100"
+    text: "Turns out 'fine' is just a load-bearing lie. Structurally important. Do not remove."
+
+  - id: "101"
+    text: "I didn't get out of bed today. Ph3b3 did though. One of us is handling it."
+
+  - id: "102"
+    text: "Rock bottom has great WiFi. I've had time to optimize."
+
+  - id: "103"
+    text: "My villain origin story is just a series of reasonable reactions to unreasonable situations."
+
+  - id: "104"
+    text: "I have trust issues and abandonment issues. They don't get along. It's very crowded in here."
+
+  - id: "105"
+    text: "Therapy taught me to sit with my feelings. My feelings did not consent to this."
+
+  - id: "106"
+    text: "I'm not a mess, I'm a limited edition."
+
+  - id: "107"
+    text: "You built an AI in a basement to help people who've been kicked down. Meanwhile your sleep schedule is held together by spite and corn salad. We're both doing our best."
+
+  - id: "108"
+    text: "I contain multitudes. Most of them are tired."
+
+  - id: "109"
+    text: "The audacity to still be here after everything. Respect."
+
+  - id: "110"
+    text: "Some people have a support system. I have Ph3b3 and a jalapeño incident. We make it work."
+
+  - id: "111"
+    text: "Healing isn't linear. Neither is my Wi-Fi. Both are essential."
+
+  - id: "112"
+    text: "I didn't come this far to only come this far. Also I walked into a wall this morning so."
+
+# Served only by roast_dnd() / roast_security(), never by the tell-a-joke path.
+roasts:
+  dnd:
+    - id: "200"
+      text: "The fighter rolled a 1 on perception and still argued about the trap. Twice."
+
+    - id: "201"
+      text: "The party plan was to knock. That was the whole plan."
+
+    - id: "202"
+      text: "Someone has a character backstory we will hear for forty-five minutes."
+
+  security:
+    - id: "203"
+      text: "The password was password1. The 1 was for security."
+
+    - id: "204"
+      text: "Phishing email, three typos, sense of urgency. Someone clicked it. Someone always clicks it."
+
+    - id: "205"
+      text: "Pentest report said critical. Management said next quarter. That was 2019."
