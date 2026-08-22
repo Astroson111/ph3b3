@@ -19,6 +19,27 @@ sys.path.insert(0, str(REPO / "agent"))
 import memory_spine  # noqa: E402
 from sentence_transformers import SentenceTransformer  # noqa: E402
 
+# ── Silence the machine ──────────────────────────────────────────────────────
+# Several test files drive real FastAPI routes through TestClient, and some of
+# those routes have side effects in the physical world. /kadmos/upload speaks its
+# confirmation prompt out loud on Nyx:
+#
+#     if not voices.output_for_response().get("text_only"):
+#         tts.speak(prompt, blocking=False)      # confirm out loud on Nyx
+#
+# So `pytest tests/` made the machine announce "That's g.pdf — PDF, 2 pages…"
+# through the HDMI sink, once per upload, on every run. Nothing in the service
+# journal, because it is the test process talking, not the service.
+#
+# Patched on the CLASS before any test module imports server, so the instance
+# server builds at import is already mute. Autouse and session-scoped: this must
+# not be something a new test file has to remember to opt into.
+sys.path.insert(0, str(REPO / "modules"))       # tts_module lives here
+import tts_module  # noqa: E402
+
+_real_speak = tts_module.TTSModule.speak
+tts_module.TTSModule.speak = lambda self, text, blocking=True, voice=None: None
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _shared_model():
