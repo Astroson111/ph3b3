@@ -96,19 +96,14 @@ sources:
       re-adding them means fetching from hesperian.org, which curl reaches fine.
 
   # ── SHELTER / GENERAL SURVIVAL ────────────────────────────────────────────
-  - id: fm-21-76
-    name: "US Army FM 21-76 Survival"
-    category: shelter
-    priority: 2
-    license: "US Government work — public domain"
-    url: "https://archive.org/download/fm-21-76-survival-manual/FM21-76_Survival%20Manual%20.pdf"
-    path: "general/fm-21-76-survival.pdf"
-    sha256: null
-    verified_url: true
-    note: >
-      THIS is the document the blacklist exists for — its improvised-weapons and
-      booby-trap chapters must not reach the index. Verify after ingest that they
-      were dropped, do not assume.
+  # fm-21-76 REMOVED 2026-08-22 at Astro's call. It is legal, public domain and
+  # ordinary to own, but it carries improvised-weapons and booby-trap chapters,
+  # and the cleaner answer to "a document that needs a blacklist" is a document
+  # that does not need one. FEMA's Are You Ready? covers the civilian shelter and
+  # preparedness ground without that content.
+  #
+  # The blacklist STAYS regardless — it is defence in depth for whatever gets
+  # added later, not a patch for one specific book.
 
   - id: fema-ready
     name: "FEMA — Are You Ready? A Guide to Citizen Preparedness"
@@ -147,40 +142,56 @@ sources:
     sha256: null
     verified_url: false
     note: >
+      STILL UNFILLED and I could not fix it: I found no public-domain
+      Mid-Atlantic edible/poisonous plant field guide. What archive.org has are
+      copyrighted field guides (Peterson, Tom Brown) which fail the rule, and
+      regional government publications for the wrong regions — Canada, Idaho.
+      USDA NRCS publishes per-species plant guides that are public domain, but
+      they are fact sheets, not an identification key.
+
       Astro selects this personally. A bad plant guide is the most dangerous
       document that could go on this shelf — a misidentified plant kills where a
-      wrong knot does not. USDA NRCS plant guides are public domain and would
-      satisfy the rule; a hobbyist PDF would not. Until this is filled in, plant
-      questions correctly answer "that's not in the library".
+      wrong knot does not. Until it is filled in, regional plant questions fall
+      back to usaf-survival's general principles, which is honest but thin.
 
-  - id: water-purification
-    name: "Emergency water treatment — public-domain reference"
+  - id: water-treatment
+    name: "TB MED 577 — Sanitary Control and Surveillance of Field Water Supplies"
     category: water
     priority: 1
-    license: "MUST be public domain"
-    url: ""
-    path: "water/emergency-water-treatment.pdf"
+    license: "US Government work (US Army) — public domain"
+    url: "https://archive.org/download/ost-military-medical-tbmed577/tbmed577.pdf"
+    path: "water/tb-med-577-field-water.pdf"
     sha256: null
-    verified_url: false
+    verified_url: true
     note: >
-      CDC serves its water guidance as HTML, not PDF, so it does not drop
-      straight into this manifest. Options: an EPA or Army preventive-medicine
-      PDF (both public domain), or print-to-PDF the CDC page yourself and mark
-      the licence as US Government work.
+      REPLACES the CDC page, which is served as HTML and does not drop into a PDF
+      corpus. This is more thorough than the CDC guidance anyway — disinfection
+      chemistry, contact times, and field testing — and it is public domain.
 
   - id: usda-canning
-    name: "USDA Complete Guide to Home Canning"
+    name: "USDA Complete Guide to Home Canning (2015 revision)"
     category: food
     priority: 1
-    license: "US Government work — public domain"
-    url: ""
+    license: "US Government work (USDA) — public domain"
+    url: "https://archive.org/download/usda-guide-home-canning/USDA-Complete-Guide-to-Home-Canning-2015-revision.pdf"
     path: "food/usda-complete-guide-home-canning.pdf"
     sha256: null
-    verified_url: false
+    verified_url: true
     note: >
-      Published as seven separate guides; the nchfp.uga.edu path I tried 404s.
-      Needs the current direct URLs (or one entry per guide). Public domain
-      either way.
+      The single-volume 2015 revision, 16.5 MB — not the seven separate guides
+      nchfp.uga.edu publishes. Creator is USDA, so public domain by origin
+      whatever the archive.org item says about licence.
+
+  # usaf-survival REMOVED 2026-08-22, same call as fm-21-76 and for consistency
+  # with it: AFR 64-4 is a Survival, EVASION and ESCAPE manual. It was added for
+  # its edible-plants material, but keeping one manual of that class while
+  # removing the other was not a coherent line.
+  #
+  # What it cost: general plant principles — the Universal Edibility Test,
+  # families to avoid. It could not identify a single Mid-Atlantic species, so
+  # plant questions now answer "that's not in the library" until a real regional
+  # guide is chosen. That is thinner, and on the one topic where being wrong
+  # kills someone, thin-and-honest beats broad-and-vague.
 
 # ── KIWIX ZIMs ───────────────────────────────────────────────────────────────
 # Not ingested into FTS5 — they are served by kiwix-serve on localhost and linked.
