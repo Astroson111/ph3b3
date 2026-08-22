@@ -71,13 +71,29 @@ def _upload() -> str:
 
 uid = _upload()
 
+# Checks that expect an edit to be ACCEPTED must not depend on the source-image
+# vision judge, which needs llava resident — and llava is frequently evicted by a
+# render. An unstubbed call then returns 503 (SafetyCheckUnavailable, "try
+# again"), so "clean edit accepted" and the rate-limit checks end up measuring
+# which model happened to be loaded rather than the thing they name. That is why
+# this file passed standalone and failed inside the suite.
+#
+# Scoped, NOT global: the blocks further down deliberately exercise a judge
+# outage and a real verdict, and a blanket stub silently guts them.
+_clean_verdict = lambda raw: (False, None)          # noqa: E731
+
 # ── 0. sanity: a clean edit is accepted and schedules run_edit ────────────────
 _run_edit_calls["n"] = 0
-r = client.post("/image/edit/run", headers=HEADERS,
-                json={"upload_id": uid, "prompt": "a watercolor mountain", "strength": 0.4})
-check("clean edit accepted (job queued, run_edit scheduled once)",
-      r.status_code == 200 and "job_id" in r.json() and _run_edit_calls["n"] == 1,
-      extra=f"{r.status_code} calls={_run_edit_calls['n']} {r.text[:80]}")
+_saved_mc = morpheus._minor_check
+morpheus._minor_check = _clean_verdict
+try:
+    r = client.post("/image/edit/run", headers=HEADERS,
+                    json={"upload_id": uid, "prompt": "a watercolor mountain", "strength": 0.4})
+    check("clean edit accepted (job queued, run_edit scheduled once)",
+          r.status_code == 200 and "job_id" in r.json() and _run_edit_calls["n"] == 1,
+          extra=f"{r.status_code} calls={_run_edit_calls['n']} {r.text[:80]}")
+finally:
+    morpheus._minor_check = _saved_mc
 
 # ── 1/2. FLOOR routing — sentinel in each field must hard-block PRE-LOCK ──────
 morpheus.floor_check = _stub_floor
@@ -117,6 +133,8 @@ for i in range(server._EDIT_MAX_PENDING):
     jid = f"__ratetest_{i}__"
     morpheus.jobs[jid] = {"state": "queued", "kind": "edit", "session": sess}
     fakes.append(jid)
+_saved_mc = morpheus._minor_check
+morpheus._minor_check = _clean_verdict       # rate limiting, not judge availability
 try:
     r = client.post("/image/edit/run", headers=HEADERS,
                     json={"upload_id": uid, "prompt": "a river", "strength": 0.4})
@@ -126,10 +144,11 @@ finally:
     for jid in fakes:
         morpheus.jobs.pop(jid, None)
 
-_run_edit_calls["n"] = 0
-r = client.post("/image/edit/run", headers=HEADERS,
-                json={"upload_id": uid, "prompt": "a river", "strength": 0.4})
-check("after slots free, edit accepted again", r.status_code == 200, extra=str(r.status_code))
+    _run_edit_calls["n"] = 0
+    r = client.post("/image/edit/run", headers=HEADERS,
+                    json={"upload_id": uid, "prompt": "a river", "strength": 0.4})
+    check("after slots free, edit accepted again", r.status_code == 200, extra=str(r.status_code))
+    morpheus._minor_check = _saved_mc
 
 # ── 5. path-traversal guard on upload_id ──────────────────────────────────────
 r = client.post("/image/edit/run", headers=HEADERS,
