@@ -86,7 +86,7 @@ sources:
     license: "US Government work — public domain"
     url: "https://archive.org/download/fm-4-25.11-first-aid/FM%204-25.11%20First%20Aid.pdf"
     path: "medical/army-fm-4-25-11-first-aid.pdf"
-    sha256: null
+    sha256: 95fb01c941cdb385c152d045081ae011b59805931524e03192e953dc4e57af2f
     verified_url: true
     note: >
       Public domain by origin (US Army), so the archive.org item stating no
@@ -112,7 +112,7 @@ sources:
     license: "US Government work — public domain (item states CC public domain)"
     url: "https://archive.org/download/FemaEmergencyHandbook-areYouReady/FemaEmergencyHandbook-areYouReady.pdf"
     path: "general/fema-are-you-ready.pdf"
-    sha256: null
+    sha256: 0d06472d035309aba015a830376da19f01e1ed6a5a3b87cc0ad346ea7cb67e4d
     verified_url: true
     note: "fema.gov itself returns 403 to non-browser agents; archive.org serves it directly."
 
@@ -124,7 +124,7 @@ sources:
     license: "US Government work (govinfo) — public domain"
     url: "https://www.govinfo.gov/content/pkg/CFR-2024-title47-vol5/pdf/CFR-2024-title47-vol5-part97.pdf"
     path: "comms/fcc-part-97.pdf"
-    sha256: null
+    sha256: 144b9fa5ecbb4fdbf960c9ef5512cec5ceee015be57417bc0ed17e2bd1d91618
     verified_url: true
     note: >
       The actual regulation rather than the ARRL band plan, which is ARRL
@@ -161,7 +161,7 @@ sources:
     license: "US Government work (US Army) — public domain"
     url: "https://archive.org/download/ost-military-medical-tbmed577/tbmed577.pdf"
     path: "water/tb-med-577-field-water.pdf"
-    sha256: null
+    sha256: c6545d275891af9b1204bcc4c6e924250e03579578fd29acc847bd0a66986df7
     verified_url: true
     note: >
       REPLACES the CDC page, which is served as HTML and does not drop into a PDF
@@ -175,7 +175,7 @@ sources:
     license: "US Government work (USDA) — public domain"
     url: "https://archive.org/download/usda-guide-home-canning/USDA-Complete-Guide-to-Home-Canning-2015-revision.pdf"
     path: "food/usda-complete-guide-home-canning.pdf"
-    sha256: null
+    sha256: 82014af73d1d5283ed1a711f7d0940e72a7ea9a10d0c0c4551bc79a1f4092028
     verified_url: true
     note: >
       The single-volume 2015 revision, 16.5 MB — not the seven separate guides

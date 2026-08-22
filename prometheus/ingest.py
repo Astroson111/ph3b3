@@ -15,6 +15,7 @@ waiting for a query that slips past. The floor still runs on every output; this
 is the layer underneath it.
 """
 import argparse
+import os
 import re
 import sqlite3
 import sys
@@ -23,6 +24,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
 sys.path.insert(0, str(REPO / "modules"))
+
+# Re-exec under the project venv if we were started by a bare python3. PyMuPDF
+# and PyYAML live there, not in the system interpreter, and "./ingest.py" is the
+# documented way to run this — it should work rather than lecture.
+_VENV = REPO / ".venv" / "bin" / "python"
+if _VENV.exists() and not sys.executable.startswith(str(REPO / ".venv")):
+    try:
+        import fitz  # noqa: F401 — already usable, no need to re-exec
+    except ImportError:
+        os.execv(str(_VENV), [str(_VENV), str(Path(__file__).resolve()), *sys.argv[1:]])
 
 import prometheus                                    # noqa: E402
 from prometheus import blacklist_headings, is_blacklisted, load_manifest  # noqa: E402

@@ -269,6 +269,12 @@ def search(question: str, k: int = MAX_CHUNKS, manifest: dict | None = None) -> 
     q = _fts_query(question)
     if not q:
         return []
+    # ORDER BY rank first, priority only to break ties. Sorting by priority
+    # globally made every priority-1 category (medical, water, food) outrank
+    # comms no matter how irrelevant, so "what frequencies can a technician use"
+    # returned the water manual. The Triage Gate is "prefer medical sources for
+    # MEDICAL questions", which relevance already delivers — it is not "medical
+    # outranks everything".
 
     try:
         with sqlite3.connect(f"file:{idx}?mode=ro", uri=True) as db:
@@ -280,7 +286,7 @@ def search(question: str, k: int = MAX_CHUNKS, manifest: dict | None = None) -> 
                   FROM chunks_fts
                   JOIN chunks c ON c.rowid = chunks_fts.rowid
                  WHERE chunks_fts MATCH ?
-                 ORDER BY c.priority ASC, rank ASC
+                 ORDER BY rank ASC, c.priority ASC
                  LIMIT ?
                 """,
                 (q, max(1, int(k)) * 4),
@@ -291,11 +297,22 @@ def search(question: str, k: int = MAX_CHUNKS, manifest: dict | None = None) -> 
     # FTS ORs the terms, so a chunk can rank on one incidental word. Require it
     # to actually contain a content word before it counts as a hit — otherwise
     # the library looks like it answers everything and never says it cannot.
+    #
+    # WORD BOUNDARIES, not substrings. Plain `"fix" in body` matches "fixed",
+    # "fixture" and "affix", so on a real 2,300-chunk corpus "how do I fix a
+    # Tesla" matched the water manual and the refusal never fired. A synthetic
+    # fixture is too small to show this; the real corpus showed it immediately.
+    # And require TWO distinct content words where the question has two. One
+    # common word is not coverage: "how do I fix a Tesla" matched the water
+    # manual because it happens to contain "fix". A single-word question still
+    # needs only its one word, so "hypothermia" still works.
     wanted = _content_words(question)
+    need = min(2, len(wanted))
     hits = []
     for r in rows:
         body = ((r["text"] or "") + " " + (r["heading"] or "")).lower()
-        if any(w in body for w in wanted):
+        found = sum(1 for w in wanted if re.search(rf"\b{re.escape(w)}\b", body))
+        if found >= need:
             hits.append(Chunk(
                 id=r["id"],
                 source_id=r["source_id"], source_name=r["source_name"],

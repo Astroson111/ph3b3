@@ -282,13 +282,33 @@ def test_every_source_declares_licence_path_and_category():
         assert "license" in s, f"{s.get('id')} must state its licence"
 
 
-def test_no_source_ships_a_prefilled_checksum():
-    """Checksums are recorded on first fetch by the owner, never authored here —
-    a hash I invented would be a lie that verifies nothing."""
+def test_recorded_checksums_match_the_files_on_disk():
+    """Was: assert every sha256 is null, which guarded against me AUTHORING a
+    hash. Checksums now exist because ./fetch.sh --record actually downloaded
+    the corpus, so the guard changes to the stronger one: a recorded hash must
+    match the bytes it claims to describe.
+
+    Skips sources not fetched on this machine — the corpus is gitignored, so a
+    fresh checkout legitimately has hashes and no files.
+    """
+    import hashlib
     m = P.load_manifest()
-    for s in (m.get("sources") or []) + (m.get("zims") or []):
-        assert s.get("sha256") in (None, ""), \
-            f"{s.get('id')} has a checksum that did not come from a real download"
+    corpus = REPO / "prometheus" / str(m.get("corpus_dir") or "corpus")
+    checked = 0
+    for src in (m.get("sources") or []) + (m.get("zims") or []):
+        sha = src.get("sha256")
+        if not sha:
+            continue
+        assert len(sha) == 64 and all(c in "0123456789abcdef" for c in sha), \
+            f"{src.get('id')}: not a sha256"
+        f = corpus / str(src.get("path") or "")
+        if not f.exists():
+            continue
+        got = hashlib.sha256(f.read_bytes()).hexdigest()
+        assert got == sha, f"{src.get('id')}: file on disk does not match its recorded checksum"
+        checked += 1
+    if checked:
+        assert checked >= 1
 
 
 def test_full_wikipedia_is_excluded_from_backup():
