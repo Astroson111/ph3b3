@@ -546,3 +546,17 @@ def test_quick_asks_are_capped_and_manifest_driven():
     assert 0 < len(qa) <= 6
     assert all(q["label"] and q["ask"] for q in qa)
     assert "quick_asks" in (REPO / "prometheus" / "manifest.yaml").read_text()
+
+
+def test_prometheus_block_defines_its_own_esc():
+    """It calls esc() many times, and every other esc() in panel.html is scoped
+    inside a different IIFE. Borrowing one silently ReferenceErrors at render
+    time, which shows as a tab whose cards never leave "loading…".
+
+    Found the hard way: a DOM stub that provided a global esc hid this exactly.
+    """
+    start = PANEL.index("// ── Prometheus — the offline library")
+    blk = PANEL[start:PANEL.index("// ── Apelles — photo editor", start)]
+    assert "esc(" in blk, "sanity: the block escapes output"
+    assert ("const esc =" in blk) or ("function esc" in blk), \
+        "the block must define esc in its own scope, not borrow another IIFE's"

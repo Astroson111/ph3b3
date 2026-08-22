@@ -2413,6 +2413,12 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
 let promInit;
 (function(){
   const $ = id => document.getElementById(id);
+  // Own copy on purpose: the other esc() definitions in this file are each
+  // scoped inside their own IIFE, so borrowing one would depend on load order
+  // that is not actually guaranteed. Everything rendered below is either
+  // server data or corpus text, so escaping is not optional.
+  const esc = s => (s == null ? '' : String(s))
+    .replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const STATE_COLOR = { ready: '#6b8f5b', unverified: '#e0a33a', missing: '#c05a5a' };
   let busy = false;
 
