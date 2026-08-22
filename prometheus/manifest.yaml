@@ -68,81 +68,32 @@ quick_asks:
     ask: "how do I treat hypothermia"
   - label: "Food preservation"
     ask: "how do I safely can food at home"
-  - label: "Repeaters"
-    ask: "what repeater frequencies are near me"
   - label: "Shelter"
     ask: "how do I build an emergency shelter"
 
 sources:
+  # REBUILT 2026-08-22 on Astro's rule: open-source or public-domain routes only,
+  # and only repositories that publish direct files and expect mirroring.
+  # Every url below was probed with curl and returned 200 application/pdf.
+  # verified_url: true means I CONFIRMED THE CONTENT TYPE — not that I have read
+  # the document. Confirm it is the right document before recording a checksum.
+
   # ── MEDICAL — priority 1, consulted first for anything clinical ────────────
-  - id: hesperian-doctor
-    name: "Where There Is No Doctor"
+  - id: army-first-aid
+    name: "US Army FM 4-25.11 First Aid"
     category: medical
     priority: 1
-    license: "CC BY-NC-SA 3.0"
-    url: "https://en.hesperian.org/hhg/Where_There_Is_No_Doctor"
-    path: "medical/where-there-is-no-doctor.pdf"
+    license: "US Government work — public domain"
+    url: "https://archive.org/download/fm-4-25.11-first-aid/FM%204-25.11%20First%20Aid.pdf"
+    path: "medical/army-fm-4-25-11-first-aid.pdf"
     sha256: null
-    verified_url: false
-    note: "Hesperian serves per-chapter PDFs; confirm whether a single-volume PDF is offered."
-
-  - id: hesperian-dentist
-    name: "Where There Is No Dentist"
-    category: medical
-    priority: 1
-    license: "CC BY-NC-SA 3.0"
-    url: "https://en.hesperian.org/hhg/Where_There_Is_No_Dentist"
-    path: "medical/where-there-is-no-dentist.pdf"
-    sha256: null
-    verified_url: false
-
-  - id: hesperian-vet
-    name: "Where There Is No Vet"
-    category: medical
-    priority: 2
-    license: "CC BY-NC-SA 3.0"
-    url: "https://en.hesperian.org/hhg/Where_There_Is_No_Vet"
-    path: "medical/where-there-is-no-vet.pdf"
-    sha256: null
-    verified_url: false
-
-  - id: redcross-firstaid
-    name: "American Red Cross First Aid/CPR/AED Participant's Manual"
-    category: medical
-    priority: 1
-    license: "© American Red Cross — free participant PDF; redistribution NOT permitted"
-    url: ""
-    path: "medical/redcross-first-aid-cpr-aed.pdf"
-    sha256: null
-    verified_url: false
+    verified_url: true
     note: >
-      Astro must supply this URL. The Red Cross manual is free to download but is
-      NOT openly licensed, unlike the Hesperian titles. Fine for a private local
-      library on your own machine; do not redistribute the corpus with it inside.
-
-  # ── WATER ─────────────────────────────────────────────────────────────────
-  - id: cdc-water
-    name: "CDC — Making Water Safe in an Emergency"
-    category: water
-    priority: 1
-    license: "US Government work — public domain"
-    url: "https://www.cdc.gov/healthywater/emergency/making-water-safe.html"
-    path: "water/cdc-making-water-safe.pdf"
-    sha256: null
-    verified_url: false
-    note: "CDC serves this as HTML; fetch.sh stores a print-to-PDF or the raw HTML. Confirm which."
-
-  # ── FOOD ──────────────────────────────────────────────────────────────────
-  - id: usda-canning
-    name: "USDA Complete Guide to Home Canning"
-    category: food
-    priority: 1
-    license: "US Government work — public domain"
-    url: "https://nchfp.uga.edu/resources/category/usda-guide"
-    path: "food/usda-complete-guide-home-canning.pdf"
-    sha256: null
-    verified_url: false
-    note: "Published as separate guides 1-7; may need multiple entries."
+      Public domain by origin (US Army), so the archive.org item stating no
+      licence does not matter here — a government work is public domain wherever
+      it is hosted. This is now the ONLY clinical reference on the shelf; the
+      Hesperian books were dropped with the open-repositories-only rule, and
+      re-adding them means fetching from hesperian.org, which curl reaches fine.
 
   # ── SHELTER / GENERAL SURVIVAL ────────────────────────────────────────────
   - id: fm-21-76
@@ -150,67 +101,86 @@ sources:
     category: shelter
     priority: 2
     license: "US Government work — public domain"
-    url: ""
+    url: "https://archive.org/download/fm-21-76-survival-manual/FM21-76_Survival%20Manual%20.pdf"
     path: "general/fm-21-76-survival.pdf"
     sha256: null
-    verified_url: false
+    verified_url: true
     note: >
-      Astro supplies the URL — prefer an official .mil or Army Publishing
-      Directorate mirror over a random survivalist site, since the checksum gets
-      welded to whatever is fetched. THIS is the document the blacklist exists
-      for: its improvised-weapons and booby-trap chapters must not reach the index.
+      THIS is the document the blacklist exists for — its improvised-weapons and
+      booby-trap chapters must not reach the index. Verify after ingest that they
+      were dropped, do not assume.
 
   - id: fema-ready
-    name: "FEMA — Are You Ready? An In-depth Guide to Citizen Preparedness"
+    name: "FEMA — Are You Ready? A Guide to Citizen Preparedness"
     category: general
     priority: 2
-    license: "US Government work — public domain"
-    url: ""
+    license: "US Government work — public domain (item states CC public domain)"
+    url: "https://archive.org/download/FemaEmergencyHandbook-areYouReady/FemaEmergencyHandbook-areYouReady.pdf"
     path: "general/fema-are-you-ready.pdf"
     sha256: null
-    verified_url: false
+    verified_url: true
+    note: "fema.gov itself returns 403 to non-browser agents; archive.org serves it directly."
 
-  # ── PLANTS — Mid-Atlantic / Pennsylvania ──────────────────────────────────
+  # ── COMMS ─────────────────────────────────────────────────────────────────
+  - id: fcc-part97
+    name: "FCC Part 97 — Amateur Radio Service (47 CFR Part 97)"
+    category: comms
+    priority: 2
+    license: "US Government work (govinfo) — public domain"
+    url: "https://www.govinfo.gov/content/pkg/CFR-2024-title47-vol5/pdf/CFR-2024-title47-vol5-part97.pdf"
+    path: "comms/fcc-part-97.pdf"
+    sha256: null
+    verified_url: true
+    note: >
+      The actual regulation rather than the ARRL band plan, which is ARRL
+      copyright. In an emergency the legal allocations matter more than the
+      voluntary courtesy plan. Bump the year in the URL to update.
+
+  # ── STILL NEEDED — no verified open route yet ─────────────────────────────
   - id: plants-midatlantic
     name: "Edible and poisonous plants — Mid-Atlantic / Eastern woodlands"
     category: plants
     priority: 1
-    license: ""
+    license: "MUST be public domain or openly licensed"
     url: ""
     path: "plants/mid-atlantic-plants.pdf"
     sha256: null
     verified_url: false
     note: >
-      Astro selects this one personally. Licence and quality vary enormously and
-      a bad plant guide is the single most dangerous document in this library —
-      a misidentified plant kills where a wrong knot does not. Prefer a state
-      extension service or university publication (Penn State Extension, USDA
-      NRCS) over a hobbyist PDF. Whatever is chosen, every plant answer carries
-      an "I am not certain" line; see prometheus.py.
+      Astro selects this personally. A bad plant guide is the most dangerous
+      document that could go on this shelf — a misidentified plant kills where a
+      wrong knot does not. USDA NRCS plant guides are public domain and would
+      satisfy the rule; a hobbyist PDF would not. Until this is filled in, plant
+      questions correctly answer "that's not in the library".
 
-  # ── COMMS — wider PA + Mid-Atlantic ───────────────────────────────────────
-  - id: arrl-bandplan
-    name: "ARRL US Amateur Radio Band Plan"
-    category: comms
-    priority: 2
-    license: "© ARRL — personal use"
-    url: "https://www.arrl.org/band-plan"
-    path: "comms/arrl-band-plan.pdf"
-    sha256: null
-    verified_url: false
-
-  - id: repeaters-pa
-    name: "Repeater list — Pennsylvania and Mid-Atlantic"
-    category: comms
+  - id: water-purification
+    name: "Emergency water treatment — public-domain reference"
+    category: water
     priority: 1
-    license: ""
+    license: "MUST be public domain"
     url: ""
-    path: "comms/repeaters-pa-midatlantic.csv"
+    path: "water/emergency-water-treatment.pdf"
     sha256: null
     verified_url: false
     note: >
-      CSV, not PDF — ingested as rows rather than prose. RepeaterBook and the
-      PA Repeater Council both publish regional lists; Astro supplies the export.
+      CDC serves its water guidance as HTML, not PDF, so it does not drop
+      straight into this manifest. Options: an EPA or Army preventive-medicine
+      PDF (both public domain), or print-to-PDF the CDC page yourself and mark
+      the licence as US Government work.
+
+  - id: usda-canning
+    name: "USDA Complete Guide to Home Canning"
+    category: food
+    priority: 1
+    license: "US Government work — public domain"
+    url: ""
+    path: "food/usda-complete-guide-home-canning.pdf"
+    sha256: null
+    verified_url: false
+    note: >
+      Published as seven separate guides; the nchfp.uga.edu path I tried 404s.
+      Needs the current direct URLs (or one entry per guide). Public domain
+      either way.
 
 # ── KIWIX ZIMs ───────────────────────────────────────────────────────────────
 # Not ingested into FTS5 — they are served by kiwix-serve on localhost and linked.
@@ -218,50 +188,44 @@ sources:
 zims:
   - id: wikimed
     name: "WikiMed — Wikipedia medical subset"
+    license: "CC BY-SA (Wikipedia) — free/open"
     category: medical
     priority: 1
-    size_hint: "~2 GB"
-    sha256_url: ""          # Kiwix publishes <file>.sha256 beside each ZIM — confirm exact path
-    url: "https://download.kiwix.org/zim/wikipedia/"
-    path: "zim/wikipedia_en_medicine_maxi.zim"
+    size_hint: "2.1 GB"
+    sha256_url: "https://download.kiwix.org/zim/wikipedia/wikipedia_en_medicine_maxi_2026-04.zim.sha256"          # Kiwix publishes <file>.sha256 beside each ZIM — confirm exact path
+    url: "https://download.kiwix.org/zim/wikipedia/wikipedia_en_medicine_maxi_2026-04.zim"
+    path: "zim/wikipedia_en_medicine_maxi_2026-04.zim"
     sha256: null
-    verified_url: false
+    verified_url: true
     rhea_backup: true
 
-  - id: wikihow
-    name: "wikiHow"
-    category: general
-    priority: 3
-    size_hint: "~10 GB"
-    sha256_url: ""          # Kiwix publishes <file>.sha256 beside each ZIM — confirm exact path
-    url: "https://download.kiwix.org/zim/wikihow/"
-    path: "zim/wikihow_en_maxi.zim"
-    sha256: null
-    verified_url: false
-    rhea_backup: true
+  # wikihow REMOVED: https://download.kiwix.org/zim/wikihow/ returns 404 — there
+  # is no such category on the mirror, so the entry pointed at nothing.
 
   - id: ifixit
     name: "iFixit repair guides"
     category: general
     priority: 3
+    license: "CC BY-NC-SA (iFixit) — open but NON-COMMERCIAL"
     size_hint: "~2 GB"
-    sha256_url: ""          # Kiwix publishes <file>.sha256 beside each ZIM — confirm exact path
-    url: "https://download.kiwix.org/zim/ifixit/"
-    path: "zim/ifixit_en_all.zim"
+    sha256_url: "https://download.kiwix.org/zim/ifixit/ifixit_en_all_2025-12.zim.sha256"
+    url: "https://download.kiwix.org/zim/ifixit/ifixit_en_all_2025-12.zim"
+    path: "zim/ifixit_en_all_2025-12.zim"
     sha256: null
-    verified_url: false
+    verified_url: true
     rhea_backup: true
 
   - id: wikipedia-full
     name: "Wikipedia (full, no images)"
+    license: "CC BY-SA (Wikipedia) — free/open"
     category: general
     priority: 4
-    size_hint: "~20 GB"
-    sha256_url: ""          # Kiwix publishes <file>.sha256 beside each ZIM — confirm exact path
-    url: "https://download.kiwix.org/zim/wikipedia/"
-    path: "zim/wikipedia_en_all_nopic.zim"
+    size_hint: "~49 GB — measured, not the 20 GB the brief assumed"
+    sha256_url: "https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_2026-06.zim.sha256"          # Kiwix publishes <file>.sha256 beside each ZIM — confirm exact path
+    url: "https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_2026-06.zim"
+    path: "zim/wikipedia_en_all_nopic_2026-06.zim"
     sha256: null
-    verified_url: false
+    verified_url: true
     # Astro's call, 2026-08-22: keep it on disk, keep it OUT of the nightly
     # backup. It is the one item genuinely re-fetchable from a public mirror,
     # and 20 GB in restic would push the Rhea drive toward the 80% mark Argus

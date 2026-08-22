@@ -52,7 +52,13 @@ echo "manifest: $MANIFEST"
 echo
 
 # The manifest is YAML; parse it with the interpreter that already has PyYAML
-# rather than reimplementing YAML in bash. Emits TSV: id, url, path, sha, verified.
+# rather than reimplementing YAML in bash.
+#
+# Fields are separated by ASCII UNIT SEPARATOR (0x1f), NOT tab. Tab is an IFS
+# whitespace character, so `read` collapses runs of tabs into one delimiter —
+# an empty sha256 field then disappears and every later field shifts left, so
+# `verified` reads empty and `sha` picks up the "1" that meant verified. That
+# silently refused every source AND would have used "1" as a checksum.
 read_manifest() {
   "$PY" - "$MANIFEST" "$WANT_ZIMS" "$ONLY" <<'PYEOF'
 import sys, yaml
@@ -64,7 +70,7 @@ if want_zims:
 for s in rows:
     if only and s.get("id") != only:
         continue
-    print("\t".join([
+    print("\x1f".join([
         str(s.get("id") or ""), str(s.get("url") or ""), str(s.get("path") or ""),
         str(s.get("sha256") or ""), "1" if s.get("verified_url") else "0",
         str(s.get("sha256_url") or ""),
@@ -79,7 +85,7 @@ fail=0; done_n=0; skipped=0; recorded=0
 # ${#array[@]}, which trips `set -u` on an empty array.
 RECORDED_IDS=(); RECORDED_SHAS=()
 
-while IFS=$'\t' read -r id url relpath sha verified shaurl; do
+while IFS=$'\x1f' read -r id url relpath sha verified shaurl; do
   [ -n "$id" ] || continue
   dest="$CORPUS/$relpath"
 
