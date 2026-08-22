@@ -79,6 +79,17 @@ log "restic backup..."
 #              The voice REGISTRY that describes them (config/voices.yaml) IS backed
 #              up via "$PH3B3_DIR/config" below, so the choice of voices survives; the
 #              weights don't need to.
+#   wikipedia_en_all_nopic.zim — ~20 GB, and the one Prometheus item genuinely
+#              re-fetchable from a public mirror. Astro's call, 2026-08-22.
+#              Everything else in prometheus/ IS backed up: the corpus is
+#              "re-fetchable in theory", and a module that exists for the night
+#              the lights go out should not rely on theory.
+#
+# NOTE the *.db excludes above apply to DATA_DIR and V2DATA_DIR only. Prometheus'
+# index.db lives under "$PH3B3_DIR/prometheus" and is therefore INCLUDED — which
+# is deliberate. It is rebuildable from the corpus by ingest.py, but rebuilding
+# needs a working Python and a spare hour, and the whole point of this module is
+# the moment when you have neither.
 "$RESTIC_BIN" backup --tag nightly --exclude-caches \
   --exclude "$DATA_DIR"/'*.db' --exclude "$DATA_DIR"/'*.db-wal' --exclude "$DATA_DIR"/'*.db-shm' \
   --exclude "$V2DATA_DIR"/'*.db' --exclude "$V2DATA_DIR"/'*.db-wal' --exclude "$V2DATA_DIR"/'*.db-shm' \
@@ -88,12 +99,14 @@ log "restic backup..."
   --exclude "$DATA_DIR/RecipeNLG_license.png" \
   --exclude "$DATA_DIR/edit_scratch" \
   --exclude "$DATA_DIR/voices" \
+  --exclude "$PH3B3_DIR/prometheus/corpus/zim/wikipedia_en_all_nopic.zim" \
   "$DATA_DIR" \
   "$V2DATA_DIR" \
   "$PH3B3_DIR/.env" \
   "$PH3B3_DIR/soul" \
   "$PH3B3_DIR/config" \
   "$PH3B3_DIR/deploy" \
+  "$PH3B3_DIR/prometheus" \
   ${ARCHIVE_PATHS[@]+"${ARCHIVE_PATHS[@]}"} \
   ${SYS_PATHS[@]+"${SYS_PATHS[@]}"} \
   || fail "restic backup failed"

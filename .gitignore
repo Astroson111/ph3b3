@@ -37,6 +37,17 @@ FUTURE.md
 # generator. Keep them on the machine; run them before touching the floor.
 tests/floor_*_probe.py
 
+# Prometheus corpus and index — LOCAL ONLY, and large.
+# The manifest IS committed (it is the reviewable shelf); the documents are not.
+# Several are third-party works whose licences permit a private local copy but
+# not redistribution — the Red Cross manual most clearly — so committing the
+# corpus to a public repo would be republishing them. Everything here is
+# reproducible with ./fetch.sh from the manifest.
+prometheus/corpus/
+prometheus/index.db
+prometheus/index.db-wal
+prometheus/index.db-shm
+
 # Security audit — LOCAL ONLY. Documents open findings on a live, internet-
 # reachable host; publishing it hands over a current vulnerability map.
 docs/security_audit_*.md

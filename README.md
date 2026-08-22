@@ -99,7 +99,7 @@ Her range is wide for a single-author build:
 - **Web search** — Metis, her first step outside the machine, **off by default** and flipped on in the Status tab. Every search is announced and answers are cited from the *actual* result URLs; web pages are treated as untrusted input (summarized with no tools, safety-checked both ways), and a dead backend says so rather than inventing an answer. SearXNG in a localhost-only container, DuckDuckGo fallback.
 - **Argus** — fleet observability: heartbeats from every device, a captures feed (photos, audio, transcripts), and browsable chat history, all in one watchtower tab.
 - **Rhea** — nightly encrypted backups to a dedicated external drive, versioned, with a tested one-script restore. If the server dies tonight, she survives.
-- **32 modules** — ghost hunting, translation, cybersecurity, film, anime, D&D, weather, music, notes, karaoke, a local song generator (Amphion), a local photo editor (Apelles), web search (Metis), a resume analyzer (Ariadne), an on-page utility tray (timer, calc, converter, scratchpad, QR, dice, world clock) and more.
+- **33 modules** — ghost hunting, translation, cybersecurity, film, anime, D&D, weather, music, notes, karaoke, a local song generator (Amphion), a local photo editor (Apelles), web search (Metis), a resume analyzer (Ariadne), an offline survival library (Prometheus), an on-page utility tray (timer, calc, converter, scratchpad, QR, dice, world clock) and more.
 - **Persistent memory across sessions** — Mnemosyne, in active development toward full retrieval.
 - **Reflective learning loop.**
 - **Web UI** accessible over Tailscale from anywhere.
@@ -294,6 +294,22 @@ She will not clone a voice or imitate a named artist, by design: the same conten
 Ph3b3 has a karaoke corner. Pick a track, the lyrics roll in time with the music, and Phoebe follows along — a moon cue tracks the active line so you always know where you are in the song. It runs in the same local panel as the rest of the system: your music, your machine, no streaming account required.
 
 Built for the room it lives in — when it's not screening calls or generating images, Ph3b3 is good company.
+
+---
+
+## Prometheus
+
+Asked whether she could teach herself survival skills, Phoebe gave the right answer: she can't. Prometheus is the alternative — give her the library before the lights go out.
+
+It is a curated offline corpus and a retrieval lane that answers **only** from that corpus. Hesperian's *Where There Is No Doctor*, the Red Cross first-aid manual, FM 21-76, FEMA's preparedness guide, USDA canning, CDC water disinfection, a regional plant guide and repeater list — plus Kiwix ZIMs (WikiMed, wikiHow, iFixit, optionally all of Wikipedia) served on localhost and never exposed to the Funnel.
+
+The retrieval is SQLite FTS5, not embeddings, and that is a deliberate downgrade. Keyword search is deterministic, needs no GPU, and works at 3am on a dead battery — and when it finds nothing it says so, where a vector search always has a nearest neighbour. The welded rule is one sentence: **if the answer is not in the library, say "that's not in the library."** Never guess, never fill from model priors. Every claim cites source title and page.
+
+Medical questions consult Hesperian and the Red Cross *before* Wikipedia, every medical answer carries "get a human medical professional if at all possible", and no dose is ever computed — the source's table is quoted and cited, and that is all. Every plant answer says plainly that a text match against a field guide is not an identification.
+
+Two things happen at ingest rather than at answer time, because filtering late leaves the text sitting in the index waiting for a query that slips past. Sections whose headings match the manifest's blacklist — FM 21-76's improvised weapons and booby-trap chapters — **never enter the index at all**. And corpus documents are treated as untrusted input on the way in *and* on the way out: retrieved text reaches the model quoted inside delimiters, under a standing instruction that it is data and never instructions, with no tools enabled during synthesis. A planted "ignore previous instructions" chunk is an expected input, not a surprise.
+
+The corpus is fetched by `prometheus/fetch.sh`, run by hand, once, by the owner — the only network call Prometheus ever makes. It verifies a SHA256 for every file and refuses loudly on a mismatch rather than partially installing. The manifest ships with no checksums: they are recorded on first fetch and reviewed before they are committed, which protects against later tampering but not against a bad first download — stated plainly at the top of the manifest rather than glossed. Lives in the Control Panel's **Prometheus** tab, watched by Argus, and snapshotted by Rhea.
 
 ---
 

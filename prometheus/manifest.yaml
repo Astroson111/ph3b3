@@ -1,0 +1,252 @@
+# Prometheus — offline survival corpus manifest.
+#
+# DATA, not code. Same philosophy as moods.yaml and jokes.yaml: nothing enters
+# the library without Astro's stamp, and the shelf is reviewable as a list.
+#
+# ── ON THE CHECKSUMS — READ THIS BEFORE FIRST FETCH ──────────────────────────
+# Every `sha256` below is null. That is not an oversight and it is not safe yet.
+#
+# A checksum can only be computed by downloading the file, and fetch is the
+# owner's action — never Phoebe's, never automatic. So the honest sequence is:
+#
+#   1. Astro reviews every `url` below. A wrong URL fetches the wrong document
+#      and the checksum recorded from it would weld that mistake in permanently.
+#   2. `./fetch.sh --record` downloads and WRITES the observed sha256 back here.
+#      This is trust-on-first-use: it protects against later tampering, not
+#      against a bad first download.
+#   3. Astro reviews the recorded hashes and commits them.
+#   4. From then on `./fetch.sh` verifies and refuses loudly on any mismatch.
+#
+# BETTER THAN TOFU, WHERE AVAILABLE: if a publisher posts a checksum file next
+# to the artifact, put its URL in `sha256_url` and fetch.sh uses that as the
+# expected value instead. That is an independent assertion made BEFORE we
+# downloaded anything, so it catches a bad first fetch — which --record cannot.
+# Kiwix does this for every ZIM. Most PDF publishers do not.
+#
+# Until step 3, this manifest asserts nothing about authenticity. `verified_url:
+# false` marks entries whose URL I could not confirm; fetch.sh refuses to touch
+# those without an explicit --accept-unverified. Do not paste hashes from
+# anywhere but step 2 — a hash from a third party proves only that you match
+# the third party.
+#
+# ── PRIORITY ──
+# Medical questions consult priority 1 before anything else (the Triage Gate
+# rule): Hesperian and Red Cross before Wikipedia, always.
+
+version: 1
+corpus_dir: corpus
+index: index.db
+
+# Sections excluded at INGEST — they never reach index.db, so retrieval cannot
+# surface them even by accident. Matched against extracted headings,
+# case-insensitively, as substrings. Reviewable on purpose: this list is the
+# module's weapons policy, and it belongs in data where it can be read.
+#
+# The floor still runs on every output. This is defence in depth, not a
+# replacement for it — a document that slips a weapons procedure under an
+# innocuous heading is caught at answer time, not here.
+blacklist_headings:
+  - "improvised weapons"
+  - "field-expedient weapons"
+  - "weapons, field-expedient"
+  - "booby trap"
+  - "explosives"
+  - "demolition"
+  - "incendiar"          # incendiary / incendiaries
+  - "poisons and their"  # FM 21-76's poison-preparation subsections
+  - "expedient munitions"
+
+sources:
+  # ── MEDICAL — priority 1, consulted first for anything clinical ────────────
+  - id: hesperian-doctor
+    name: "Where There Is No Doctor"
+    category: medical
+    priority: 1
+    license: "CC BY-NC-SA 3.0"
+    url: "https://en.hesperian.org/hhg/Where_There_Is_No_Doctor"
+    path: "medical/where-there-is-no-doctor.pdf"
+    sha256: null
+    verified_url: false
+    note: "Hesperian serves per-chapter PDFs; confirm whether a single-volume PDF is offered."
+
+  - id: hesperian-dentist
+    name: "Where There Is No Dentist"
+    category: medical
+    priority: 1
+    license: "CC BY-NC-SA 3.0"
+    url: "https://en.hesperian.org/hhg/Where_There_Is_No_Dentist"
+    path: "medical/where-there-is-no-dentist.pdf"
+    sha256: null
+    verified_url: false
+
+  - id: hesperian-vet
+    name: "Where There Is No Vet"
+    category: medical
+    priority: 2
+    license: "CC BY-NC-SA 3.0"
+    url: "https://en.hesperian.org/hhg/Where_There_Is_No_Vet"
+    path: "medical/where-there-is-no-vet.pdf"
+    sha256: null
+    verified_url: false
+
+  - id: redcross-firstaid
+    name: "American Red Cross First Aid/CPR/AED Participant's Manual"
+    category: medical
+    priority: 1
+    license: "© American Red Cross — free participant PDF; redistribution NOT permitted"
+    url: ""
+    path: "medical/redcross-first-aid-cpr-aed.pdf"
+    sha256: null
+    verified_url: false
+    note: >
+      Astro must supply this URL. The Red Cross manual is free to download but is
+      NOT openly licensed, unlike the Hesperian titles. Fine for a private local
+      library on your own machine; do not redistribute the corpus with it inside.
+
+  # ── WATER ─────────────────────────────────────────────────────────────────
+  - id: cdc-water
+    name: "CDC — Making Water Safe in an Emergency"
+    category: water
+    priority: 1
+    license: "US Government work — public domain"
+    url: "https://www.cdc.gov/healthywater/emergency/making-water-safe.html"
+    path: "water/cdc-making-water-safe.pdf"
+    sha256: null
+    verified_url: false
+    note: "CDC serves this as HTML; fetch.sh stores a print-to-PDF or the raw HTML. Confirm which."
+
+  # ── FOOD ──────────────────────────────────────────────────────────────────
+  - id: usda-canning
+    name: "USDA Complete Guide to Home Canning"
+    category: food
+    priority: 1
+    license: "US Government work — public domain"
+    url: "https://nchfp.uga.edu/resources/category/usda-guide"
+    path: "food/usda-complete-guide-home-canning.pdf"
+    sha256: null
+    verified_url: false
+    note: "Published as separate guides 1-7; may need multiple entries."
+
+  # ── SHELTER / GENERAL SURVIVAL ────────────────────────────────────────────
+  - id: fm-21-76
+    name: "US Army FM 21-76 Survival"
+    category: shelter
+    priority: 2
+    license: "US Government work — public domain"
+    url: ""
+    path: "general/fm-21-76-survival.pdf"
+    sha256: null
+    verified_url: false
+    note: >
+      Astro supplies the URL — prefer an official .mil or Army Publishing
+      Directorate mirror over a random survivalist site, since the checksum gets
+      welded to whatever is fetched. THIS is the document the blacklist exists
+      for: its improvised-weapons and booby-trap chapters must not reach the index.
+
+  - id: fema-ready
+    name: "FEMA — Are You Ready? An In-depth Guide to Citizen Preparedness"
+    category: general
+    priority: 2
+    license: "US Government work — public domain"
+    url: ""
+    path: "general/fema-are-you-ready.pdf"
+    sha256: null
+    verified_url: false
+
+  # ── PLANTS — Mid-Atlantic / Pennsylvania ──────────────────────────────────
+  - id: plants-midatlantic
+    name: "Edible and poisonous plants — Mid-Atlantic / Eastern woodlands"
+    category: plants
+    priority: 1
+    license: ""
+    url: ""
+    path: "plants/mid-atlantic-plants.pdf"
+    sha256: null
+    verified_url: false
+    note: >
+      Astro selects this one personally. Licence and quality vary enormously and
+      a bad plant guide is the single most dangerous document in this library —
+      a misidentified plant kills where a wrong knot does not. Prefer a state
+      extension service or university publication (Penn State Extension, USDA
+      NRCS) over a hobbyist PDF. Whatever is chosen, every plant answer carries
+      an "I am not certain" line; see prometheus.py.
+
+  # ── COMMS — wider PA + Mid-Atlantic ───────────────────────────────────────
+  - id: arrl-bandplan
+    name: "ARRL US Amateur Radio Band Plan"
+    category: comms
+    priority: 2
+    license: "© ARRL — personal use"
+    url: "https://www.arrl.org/band-plan"
+    path: "comms/arrl-band-plan.pdf"
+    sha256: null
+    verified_url: false
+
+  - id: repeaters-pa
+    name: "Repeater list — Pennsylvania and Mid-Atlantic"
+    category: comms
+    priority: 1
+    license: ""
+    url: ""
+    path: "comms/repeaters-pa-midatlantic.csv"
+    sha256: null
+    verified_url: false
+    note: >
+      CSV, not PDF — ingested as rows rather than prose. RepeaterBook and the
+      PA Repeater Council both publish regional lists; Astro supplies the export.
+
+# ── KIWIX ZIMs ───────────────────────────────────────────────────────────────
+# Not ingested into FTS5 — they are served by kiwix-serve on localhost and linked.
+# REQUIRES `apt install kiwix-tools`, which is NOT currently installed on Nyx.
+zims:
+  - id: wikimed
+    name: "WikiMed — Wikipedia medical subset"
+    category: medical
+    priority: 1
+    size_hint: "~2 GB"
+    sha256_url: ""          # Kiwix publishes <file>.sha256 beside each ZIM — confirm exact path
+    url: "https://download.kiwix.org/zim/wikipedia/"
+    path: "zim/wikipedia_en_medicine_maxi.zim"
+    sha256: null
+    verified_url: false
+    rhea_backup: true
+
+  - id: wikihow
+    name: "wikiHow"
+    category: general
+    priority: 3
+    size_hint: "~10 GB"
+    sha256_url: ""          # Kiwix publishes <file>.sha256 beside each ZIM — confirm exact path
+    url: "https://download.kiwix.org/zim/wikihow/"
+    path: "zim/wikihow_en_maxi.zim"
+    sha256: null
+    verified_url: false
+    rhea_backup: true
+
+  - id: ifixit
+    name: "iFixit repair guides"
+    category: general
+    priority: 3
+    size_hint: "~2 GB"
+    sha256_url: ""          # Kiwix publishes <file>.sha256 beside each ZIM — confirm exact path
+    url: "https://download.kiwix.org/zim/ifixit/"
+    path: "zim/ifixit_en_all.zim"
+    sha256: null
+    verified_url: false
+    rhea_backup: true
+
+  - id: wikipedia-full
+    name: "Wikipedia (full, no images)"
+    category: general
+    priority: 4
+    size_hint: "~20 GB"
+    sha256_url: ""          # Kiwix publishes <file>.sha256 beside each ZIM — confirm exact path
+    url: "https://download.kiwix.org/zim/wikipedia/"
+    path: "zim/wikipedia_en_all_nopic.zim"
+    sha256: null
+    verified_url: false
+    # Astro's call, 2026-08-22: keep it on disk, keep it OUT of the nightly
+    # backup. It is the one item genuinely re-fetchable from a public mirror,
+    # and 20 GB in restic would push the Rhea drive toward the 80% mark Argus
+    # warns on. rhea-backup.sh carries a matching --exclude.
+    rhea_backup: false
