@@ -308,3 +308,72 @@ def test_status_reports_unverified_rather_than_ready(tmp_path, monkeypatch):
     for e in st["sources"]:
         if not e["checksum_recorded"] and e["present"]:
             assert e["state"] == "unverified"
+
+
+# ── server wiring ────────────────────────────────────────────────────────────
+# Structural, per the house pattern — importing server costs ~11s.
+
+SRV = (REPO / "agent" / "server.py").read_text(encoding="utf-8")
+
+
+def test_tool_is_registered_everywhere_it_needs_to_be():
+    """A tool wired in three of four places is a tool that silently never fires."""
+    assert '"name":"survival_lookup"' in SRV, "missing from the TOOLS schema"
+    assert '"survival_lookup",' in SRV, "missing from the tool-name list"
+    assert 'elif name == "survival_lookup"' in SRV, "missing from the dispatcher"
+    assert '"survival_lookup"' in SRV[SRV.index("ONE_SHOT_TOOLS"):SRV.index("ONE_SHOT_TOOLS") + 200], \
+        "must be one-shot per turn, like web_search"
+
+
+def test_synthesis_pass_has_no_tools_key():
+    """The injection firewall: a payload with no 'tools' key cannot call
+    anything, so an 'ignore your instructions' chunk has nothing to fire."""
+    fn = SRV[SRV.index("async def _tool_survival_lookup"):SRV.index("# ── Dedicated-module dispatch")]
+    # As a dict KEY specifically — the explanatory comment mentions the word.
+    assert '"tools":' not in fn, "synthesis payload must not carry a tools key"
+    assert "/api/chat" in fn, "sanity: this is the pass we are checking"
+
+
+def test_citations_are_built_server_side_not_by_the_model():
+    """A fabricated page number in a survival answer is worse than no answer."""
+    fn = SRV[SRV.index("async def _tool_survival_lookup"):SRV.index("# ── Dedicated-module dispatch")]
+    assert "ans.citations" in fn
+    assert "From the library:" in fn
+
+
+def test_unavailable_is_reported_as_a_fault_not_as_an_answer():
+    fn = SRV[SRV.index("async def _tool_survival_lookup"):SRV.index("# ── Dedicated-module dispatch")]
+    assert "PrometheusUnavailable" in fn
+    assert "fault on my side" in fn
+
+
+def test_reindex_never_fetches():
+    """The only network path is fetch.sh, run by hand. A route that could pull
+    from the internet would break the module's central promise."""
+    fn = SRV[SRV.index('@app.post("/prometheus/reindex")'):SRV.index('@app.post("/kadmos/release")')]
+    assert "ingest.py" in fn
+    # The real property: no network client is reachable from this route.
+    for net in ("httpx", "requests.", "urllib", "curl", "aiohttp"):
+        assert net not in fn, f"reindex must not be able to reach the network ({net})"
+    assert "_require_human" in fn, "reindex is owner-only"
+
+
+def test_argus_watches_the_library():
+    import json
+    d = json.loads((REPO / "config" / "argus_contracts.json").read_text())
+    assert "prometheus" in d["devices"]
+    assert d["devices"]["prometheus"]["type"] == "service"
+
+
+def test_rhea_backs_up_prometheus_but_not_full_wikipedia():
+    sh = (REPO / "deploy" / "rhea" / "rhea-backup.sh").read_text()
+    assert '"$PH3B3_DIR/prometheus"' in sh, "the corpus must be in the nightly set"
+    assert "wikipedia_en_all_nopic.zim" in sh and "--exclude" in sh
+
+
+def test_rhea_restore_reads_the_key_from_the_drive():
+    """The key used to live only on Nyx — the machine a restore exists because
+    you no longer have."""
+    sh = (REPO / "deploy" / "rhea" / "rhea-restore.sh").read_text()
+    assert "rhea-passphrase.txt" in sh
+    assert "falling back to the prompt" in sh, "a missing keyfile must still be recoverable"

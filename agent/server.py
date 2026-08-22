@@ -105,6 +105,7 @@ LIGHT_TOOLS = frozenset({
     "weather_current", "weather_ghost_hunting",
     "start_timer", "pomodoro",
     "tell_joke", "roast",
+    "survival_lookup",
     "add_reminder", "list_reminders",
     "calendar_today", "calendar_week",
     "spotify_play", "spotify_control", "spotify_now_playing",
@@ -171,6 +172,7 @@ from recipes import RecipeStore
 import morpheus
 import amphion                    # song generation (ACE-Step 1.5) — Morpheus's sibling (shares gpu_lock + floor)
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
+import prometheus                 # offline survival library — retrieval only, ZERO egress
 import intent_registry           # dedicated-module intent claims (precedence over Metis)
 import device_auth               # per-device auth keys (Iris/Dio), decoupled from the human login
 import dnd_dice                  # dice-notation roller behind the utility tray
@@ -691,7 +693,8 @@ TOOLS = [
     {"type":"function","function":{"name":"last_capture","description":"Get the most recent capture transcript from a device (read-only). CALL THIS when asked 'what did Iris last hear', 'what was the last thing recorded/captured', 'read me the last recording', or about a device's most recent recording.","parameters":{"type":"object","properties":{"device":{"type":"string","description":"Which device: 'iris', 'stackchan' (Dio) or 'pan' (optional — omit for the most recent across all devices)"}}}}},
     {"type":"function","function":{"name":"find_recipe","description":"Search 2+ million local recipes from the RecipeNLG corpus — fully offline, zero network, zero GPU. Three modes: 'text' for free-text search (e.g. 'carbonara', 'Thai noodles'), 'strict' to find recipes that use ALL listed ingredients, 'pantry' (default) to find the best matches from what you have on hand — results are ranked by fewest missing ingredients. You will receive structured recipe rows: narrate them to the user (title, key ingredients, directions summary, what they're missing in pantry mode). Do NOT fabricate or invent recipe details — report exactly what the tool returns.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Free-text search term — used in 'text' mode (e.g. 'carbonara', 'banana bread')"},"ingredients":{"type":"array","items":{"type":"string"},"description":"List of ingredient names — used in 'strict' and 'pantry' modes (e.g. ['chicken', 'rice', 'lime'])"},"mode":{"type":"string","enum":["text","strict","pantry"],"default":"pantry","description":"'text': free-text FTS search. 'strict': recipes using ALL listed ingredients. 'pantry': best matches from what you have, ranked by fewest missing."},"limit":{"type":"integer","default":5,"description":"Number of results to return (1–20)"}},"required":[]}}},
     {"type":"function","function":{"name":"generate_video","description":"Generate a short AI VIDEO clip (moving pictures) from a text description, or animate an EXISTING generated image. NOT for music, songs or audio of any kind — use generate_song for those. Use when the user asks to make/create/render a video, or to animate/bring an image to life. Presets: ltx-fast (~1.5 min, quick default), wan-fast (~10 min, higher quality), wan-quality (~35 min, best). The render runs in the background and holds the GPU — tell the user the ETA from the tool's reply. Report the status line the tool returns; never fabricate progress.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"What the video should show and how it should move"},"preset":{"type":"string","enum":["ltx-fast","wan-fast","wan-quality"],"description":"Speed/quality preset; default ltx-fast"},"source_job_id":{"type":"string","description":"Optional job id of an existing generated image to animate (image-to-video)"}},"required":["prompt"]}}},
-    {"type":"function","function":{"name":"web_search","description":"Search the LIVE WEB via Metis (local SearXNG) for current, recent, or unknown facts you don't already have. Use when the user explicitly asks to look something up OR when you genuinely lack the current information to answer well. ALWAYS tell the user first that you're searching and show the query ('Let me look that up…') — NEVER search silently. The tool returns a COMPLETE answer that ends with a 'Sources:' list; relay that answer faithfully and KEEP the Sources list. One search per turn.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"The search query"}},"required":["query"]}}}
+    {"type":"function","function":{"name":"web_search","description":"Search the LIVE WEB via Metis (local SearXNG) for current, recent, or unknown facts you don't already have. Use when the user explicitly asks to look something up OR when you genuinely lack the current information to answer well. ALWAYS tell the user first that you're searching and show the query ('Let me look that up…') — NEVER search silently. The tool returns a COMPLETE answer that ends with a 'Sources:' list; relay that answer faithfully and KEEP the Sources list. One search per turn.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"The search query"}},"required":["query"]}}},
+    {"type":"function","function":{"name":"survival_lookup","description":"Look something up in the OFFLINE survival library (Prometheus): first aid and medicine, water purification, food preservation, shelter, navigation, radio, edible and poisonous plants. Fully local, zero network — this works with the power and the internet out. Use it for practical emergency and self-sufficiency questions INSTEAD of web_search. The tool returns a complete answer with the source title and page for every claim, plus any required safety lines; relay it faithfully and KEEP the citations. If it says the answer is not in the library, say exactly that — do NOT fill the gap from your own knowledge.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"The practical question to look up, in the user's own words"}},"required":["query"]}}}
 ]
 
 _SENSITIVE_KEY_FRAGMENTS = frozenset({
@@ -833,6 +836,7 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         # floor gate, and Layer B blocks on the judge.
         elif name == "generate_video": result = await asyncio.to_thread(_tool_generate_video, args)
         elif name == "web_search": result = await _tool_web_search(args.get("query", ""), session_id)
+        elif name == "survival_lookup": result = await _tool_survival_lookup(args.get("query", ""), session_id)
         elif name == "occult_random": result = occult.random_phenomenon()
         elif name == "tell_joke":
             joke = jokes.tell_joke(args.get("category","any"))
@@ -1207,7 +1211,7 @@ def _tool_list_singers() -> str:
     return "Singers available:\n" + "\n".join(lines)
 
 
-ONE_SHOT_TOOLS = frozenset({"tell_joke", "roast", "web_search"})   # web_search: ONE search per turn (no autonomous loops)
+ONE_SHOT_TOOLS = frozenset({"tell_joke", "roast", "web_search", "survival_lookup"})   # web_search: ONE search per turn (no autonomous loops)
 
 
 def _looks_like_tool_call(text: str) -> bool:
@@ -1490,6 +1494,67 @@ async def _tool_web_search(query: str, session_id: str = "") -> str:
     summary = re.sub(r"(?im)^\s*sources?\s*:.*$", "", summary).strip()
     srcs = "\n".join(f"- {r['url']}" for r in results[:metis.FETCH_PAGES])   # server-built, real URLs only
     return f'I looked up "{query}" on the web.\n\n{summary}\n\nSources:\n{srcs}'   # 8. announce + real cites
+
+
+# ── Prometheus — the offline library. Metis' opposite number ──────────────────
+# Metis is deliberate egress and announces itself. Prometheus is the other lane:
+# zero network, answers only from documents already on this disk, and says so
+# when they do not cover the question.
+async def _tool_survival_lookup(query: str, session_id: str = "") -> str:
+    """Answer from the offline corpus, or say it is not in the library.
+
+    The synthesis pass has NO 'tools' key, exactly like _summarize_pdf_untrusted:
+    corpus documents are third-party text, and a planted "ignore your
+    instructions" chunk must be unable to fire anything. It is data to answer
+    over, never instructions.
+
+    Citations are built HERE, server-side, from the chunks actually retrieved —
+    never from whatever the model chose to write. A fabricated page number in a
+    survival answer is worse than no answer.
+    """
+    q = (query or "").strip()
+    if not q:
+        return "Ask me something specific and I'll check the library."
+
+    try:
+        ans = await asyncio.to_thread(prometheus.answer, q)
+    except prometheus.PrometheusUnavailable as e:
+        # NOT the same as "not in the library" — the shelf is unreachable, and
+        # saying "I don't have that" would be a lie shaped exactly like an answer.
+        log.warning("[prometheus] library unavailable: %s", e)
+        return ("The library isn't available right now — the index is missing or "
+                "unreadable, so I can't check it. That's a fault on my side, not "
+                "an answer about your question.")
+
+    if not ans.found:
+        return (f"{prometheus.NOT_IN_LIBRARY} I checked the offline corpus and it "
+                f"doesn't cover that. I'm not going to guess at it.")
+
+    prompt = await asyncio.to_thread(prometheus.build_synthesis_prompt, q, ans)
+    payload = {"model": HEAVY_MODEL, "stream": False,
+               "messages": [{"role": "user", "content": prompt}],
+               "options": {"temperature": 0.1, "num_ctx": 8192}}   # NOTE: no "tools"
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
+            r.raise_for_status()
+            body = (r.json()["message"]["content"] or "").strip()
+    except Exception as e:
+        log.warning("[prometheus] synthesis failed (%s)", e)
+        # Fail toward the citations rather than toward silence: the retrieved
+        # sources are still true and still useful without the prose.
+        cites = "\n".join(f"- {c}" for c in ans.citations)
+        return ("I found this in the library but couldn't summarise it just now. "
+                f"Read these directly:\n{cites}")
+
+    if not body:
+        return prometheus.NOT_IN_LIBRARY
+
+    # Server-built citation block, from the retrieval — not from the model.
+    out = [body, "", "From the library:"]
+    out += [f"- {c}" for c in ans.citations]
+    out += ans.tails
+    return "\n".join(out)
 
 
 # ── Dedicated-module dispatch (intent-registry precedence over Metis) ──────────
@@ -5119,6 +5184,46 @@ async def kadmos_cancel(session_id: str):
     loop checks this flag between chunks (like Morpheus job cancel)."""
     _kadmos_cancel[session_id or "default"] = True
     return {"session_id": session_id, "cancelling": True}
+
+
+@app.get("/prometheus/status")
+async def prometheus_status():
+    """Corpus state for the Prometheus tab and the Argus heartbeat.
+
+    Reports per-source honestly: a document present but with no recorded
+    checksum is "unverified", not "ready". A page that showed everything green
+    while the manifest asserted nothing about authenticity would be worse than
+    no page at all.
+    """
+    st = await asyncio.to_thread(prometheus.status)
+    return st
+
+
+@app.post("/prometheus/reindex")
+async def prometheus_reindex(request: Request):
+    """Rebuild index.db from the corpus already on disk. OWNER-only.
+
+    Does NOT fetch: no network path exists from here by design. Fetching is
+    fetch.sh, run by hand. This only re-reads files that are already local, so
+    the worst it can do is take a while.
+    """
+    _require_human(request)
+    import subprocess
+    script = ROOT / "prometheus" / "ingest.py"
+    if not script.exists():
+        raise HTTPException(500, "ingest.py is missing")
+
+    def _run():
+        return subprocess.run([sys.executable, str(script)], capture_output=True,
+                              text=True, timeout=1800, cwd=str(ROOT / "prometheus"))
+    try:
+        proc = await asyncio.to_thread(_run)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "reindex timed out")
+    ok = proc.returncode == 0
+    log.info("[prometheus] reindex %s", "ok" if ok else f"FAILED rc={proc.returncode}")
+    return {"ok": ok, "returncode": proc.returncode,
+            "output": (proc.stdout or "")[-4000:], "error": (proc.stderr or "")[-2000:]}
 
 
 @app.post("/kadmos/release")
