@@ -7,25 +7,35 @@
 # every snapshot on the drive became permanently unreadable — Rhea defeated by
 # Rhea's own key management.
 #
-# This copies the key onto the RHEA drive beside the repo it opens, so
-# rhea-restore.sh needs nothing but the drive, and prints a paper copy so the key
-# survives losing the drive as well.
+# This puts the key somewhere a restore can reach WITHOUT Nyx: on paper by
+# default, on the Flipper via rhea-make-badusb.sh, and — only if you ask — on the
+# drive itself.
 #
-#   sudo ./rhea-seed-key.sh            copy the key to the drive, show the paper copy
-#   sudo ./rhea-seed-key.sh --check    report where the key exists, change nothing
+#   sudo ./rhea-seed-key.sh --check      report where the key exists, change nothing
+#   sudo ./rhea-seed-key.sh --print      show the paper copy, touch nothing
+#   sudo ./rhea-seed-key.sh --on-drive   ALSO put the key on the drive (see below)
 #
-# BE CLEAR ABOUT THE TRADE: with the key on the drive, encryption no longer
-# protects you against someone taking the drive. It still covers an RMA, a
-# resale, or an image taken in passing — and the repo stays encrypted, so this
-# is reversible by deleting the keyfile.
+# DEFAULT IS: PRINT, DO NOT PLACE. The key belongs somewhere that is not the
+# drive it opens — on paper, and on the Flipper via rhea-make-badusb.sh. A key
+# stored beside the repo means whoever picks up the drive has everything, and
+# the encryption is decoration.
+#
+# --on-drive exists because there is a real case for it: if the drive lives in a
+# safe and the threat you actually face is Nyx dying rather than burglary, a
+# self-opening drive is the fastest restore there is. Choose it deliberately.
 set -euo pipefail
 
 RHEA_MNT="${RHEA_MNT:-/mnt/rhea}"
 PASSFILE="${PASSFILE:-/home/astroson/.config/rhea/passphrase}"
 KEYFILE="$RHEA_MNT/rhea-passphrase.txt"
 
-CHECK=0
-[ "${1:-}" = "--check" ] && CHECK=1
+CHECK=0; ONDRIVE=0; PRINTONLY=0
+case "${1:---print}" in
+  --check)    CHECK=1 ;;
+  --print)    PRINTONLY=1 ;;
+  --on-drive) ONDRIVE=1 ;;
+  *) echo "usage: $0 [--check|--print|--on-drive]" >&2; exit 2 ;;
+esac
 
 echo "── Rhea key placement ───────────────────────────────────────────"
 
@@ -56,12 +66,35 @@ if [ "$CHECK" = 1 ]; then
     fi
     echo "  OK — a restore from this drive needs nothing else."
   else
-    echo "  NOT plug and play yet: run without --check to place the key."
+    echo "  The drive does not self-open. That is the default and usually right:"
+    echo "    ./rhea-make-badusb.sh     Flipper types the key at the prompt"
+    echo "    sudo $0 --print           paper copy (the durable one)"
+    echo "    sudo $0 --on-drive        self-opening drive (weaker, deliberate)"
   fi
   exit 0
 fi
 
 [ "$have_source" = 1 ] || { echo "FATAL: no passphrase at $PASSFILE to copy" >&2; exit 1; }
+
+if [ "$PRINTONLY" = 1 ]; then
+  cat <<BANNER
+
+══════════════════════════════════════════════════════════════════════
+  PRINT THIS AND PUT IT SOMEWHERE PHYSICAL.
+
+  This is the copy that survives losing Nyx, the drive, AND the Flipper.
+  A go-bag, a fireproof box, taped inside something that stays home.
+
+      RHEA passphrase:  $(cat "$PASSFILE")
+
+  Convenient copy:  ./rhea-make-badusb.sh   (Flipper types it at the prompt)
+  Self-opening drive (weaker):  sudo $0 --on-drive
+══════════════════════════════════════════════════════════════════════
+
+BANNER
+  exit 0
+fi
+
 [ "$mounted" = 1 ]     || { echo "FATAL: plug in the RHEA drive first" >&2; exit 1; }
 
 if [ -r "$KEYFILE" ] && ! diff -q <(tr -d '\r\n' < "$PASSFILE") <(tr -d '\r\n' < "$KEYFILE") >/dev/null; then

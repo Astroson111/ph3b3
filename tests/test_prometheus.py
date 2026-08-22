@@ -377,3 +377,61 @@ def test_rhea_restore_reads_the_key_from_the_drive():
     sh = (REPO / "deploy" / "rhea" / "rhea-restore.sh").read_text()
     assert "rhea-passphrase.txt" in sh
     assert "falling back to the prompt" in sh, "a missing keyfile must still be recoverable"
+
+
+# ── Rhea key handling ────────────────────────────────────────────────────────
+# Split out from Prometheus proper: same commit, different subject. These guard
+# the property that the key must not live only on the machine it protects.
+
+RHEA = REPO / "deploy" / "rhea"
+
+
+def test_seed_key_does_not_place_the_key_on_the_drive_by_default():
+    """A key beside the repo it opens means whoever takes the drive has
+    everything. Placing it must be an explicit, deliberate flag."""
+    sh = (RHEA / "rhea-seed-key.sh").read_text()
+    assert "--on-drive" in sh
+    assert '--print)    PRINTONLY=1' in sh
+    assert 'case "${1:---print}"' in sh, "default must be print-only, not place"
+
+
+def test_badusb_generator_refuses_untypeable_passphrases():
+    """A passphrase that types WRONG is worse than one that does not type: you
+    are told the repo cannot be opened and have no idea why."""
+    sh = (RHEA / "rhea-make-badusb.sh").read_text()
+    assert "non-printable or non-ASCII" in sh
+    assert "x20-\\x7e" in sh or "\\x20-\\x7e" in sh
+
+
+def test_badusb_script_is_written_owner_only():
+    sh = (RHEA / "rhea-make-badusb.sh").read_text()
+    assert "umask 077" in sh and "chmod 600" in sh
+
+
+def test_restore_still_works_without_the_flipper():
+    """Flipper is the convenient copy; the prompt is the fallback that makes a
+    printed key sufficient. Removing it would make one lost object fatal."""
+    sh = (RHEA / "rhea-restore.sh").read_text()
+    assert "falling back to the prompt" in sh
+    assert "read -r -s -p" in sh
+
+
+def test_key_scripts_are_executable():
+    for name in ("rhea-seed-key.sh", "rhea-make-badusb.sh", "rhea-restore.sh"):
+        assert (RHEA / name).stat().st_mode & 0o111, f"{name} is not executable"
+
+
+def test_rhea_setup_reports_all_checks_before_exiting():
+    """set -e would abort the report at the first missing thing, which is the
+    opposite of useful when you are standing at a dead machine."""
+    sh = (RHEA / "rhea-setup.sh").read_text()
+    assert "set -uo pipefail" in sh and "set -euo" not in sh
+    assert "NOT -e" in sh, "the reason must be written down or it gets 'fixed' later"
+
+
+def test_rhea_setup_accepts_any_one_key_path():
+    """Drive keyfile, machine keyfile, Flipper, or paper — any one is enough."""
+    sh = (RHEA / "rhea-setup.sh").read_text()
+    assert "rhea-passphrase.txt" in sh
+    assert ".config/rhea/passphrase" in sh
+    assert "Flipper" in sh
