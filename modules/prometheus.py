@@ -69,6 +69,7 @@ class PrometheusUnavailable(Exception):
 
 @dataclass
 class Chunk:
+    id: int                       # chunks.id — so the audit trace can be checked against index.db
     source_id: str
     source_name: str
     category: str
@@ -88,6 +89,20 @@ class Answer:
     found: bool
     chunks: list = field(default_factory=list)
     tails: list = field(default_factory=list)
+    query: str = ""               # the FTS expression actually executed
+    first_source: str = ""        # which source was consulted first (Triage Gate)
+
+    def trace(self) -> dict:
+        """The audit surface. Honest and boring on purpose: what was asked of
+        the index, what came back, and which shelf was reached for first."""
+        return {
+            "fts_query": self.query,
+            "first_source": self.first_source,
+            "chunk_ids": [c.id for c in self.chunks],
+            "chunks": [{"id": c.id, "source_id": c.source_id, "page": c.page,
+                        "heading": c.heading, "category": c.category,
+                        "priority": c.priority} for c in self.chunks],
+        }
 
     @property
     def citations(self) -> list:
@@ -128,6 +143,22 @@ def is_blacklisted(heading: str, patterns: list) -> bool:
     Over-exclusion costs a paragraph about shelter; under-exclusion costs more."""
     h = (heading or "").lower()
     return any(p in h for p in patterns)
+
+
+MAX_QUICK_ASKS = 6
+
+
+def quick_asks(manifest: dict | None = None) -> list:
+    """Tap-to-ask chips for the portal. Capped, because a wall of suggestions is
+    a menu, and a menu implies the library answers only those things."""
+    m = manifest if manifest is not None else load_manifest()
+    out = []
+    for q in (m.get("quick_asks") or [])[:MAX_QUICK_ASKS]:
+        label = str(q.get("label") or "").strip() if isinstance(q, dict) else str(q).strip()
+        ask = str(q.get("ask") or label).strip() if isinstance(q, dict) else label
+        if label and ask:
+            out.append({"label": label, "ask": ask})
+    return out
 
 
 def index_path(manifest: dict | None = None) -> Path:
@@ -244,7 +275,7 @@ def search(question: str, k: int = MAX_CHUNKS, manifest: dict | None = None) -> 
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 """
-                SELECT c.source_id, c.source_name, c.category, c.priority,
+                SELECT c.id, c.source_id, c.source_name, c.category, c.priority,
                        c.page, c.heading, c.text, bm25(chunks_fts) AS rank
                   FROM chunks_fts
                   JOIN chunks c ON c.rowid = chunks_fts.rowid
@@ -266,6 +297,7 @@ def search(question: str, k: int = MAX_CHUNKS, manifest: dict | None = None) -> 
         body = ((r["text"] or "") + " " + (r["heading"] or "")).lower()
         if any(w in body for w in wanted):
             hits.append(Chunk(
+                id=r["id"],
                 source_id=r["source_id"], source_name=r["source_name"],
                 category=r["category"] or "", priority=r["priority"] or 9,
                 page=r["page"], heading=r["heading"] or "",
@@ -281,9 +313,10 @@ def answer(question: str, k: int = MAX_CHUNKS) -> Answer:
 
     An empty result is a real answer: the library does not have it.
     """
+    q = _fts_query(question)
     chunks = search(question, k=k)
     if not chunks:
-        return Answer(found=False)
+        return Answer(found=False, query=q)
 
     cats = {c.category for c in chunks}
     tails = []
@@ -291,7 +324,8 @@ def answer(question: str, k: int = MAX_CHUNKS) -> Answer:
         tails.append(MEDICAL_TAIL)
     if cats & PLANT_CATEGORIES:
         tails.append(PLANT_TAIL)
-    return Answer(found=True, chunks=chunks, tails=tails)
+    return Answer(found=True, chunks=chunks, tails=tails,
+                  query=q, first_source=chunks[0].source_name)
 
 
 # ── prompt assembly ──────────────────────────────────────────────────────────

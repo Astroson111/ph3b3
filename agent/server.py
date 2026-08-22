@@ -1500,40 +1500,31 @@ async def _tool_web_search(query: str, session_id: str = "") -> str:
 # Metis is deliberate egress and announces itself. Prometheus is the other lane:
 # zero network, answers only from documents already on this disk, and says so
 # when they do not cover the question.
-async def _tool_survival_lookup(query: str, session_id: str = "") -> str:
-    """Answer from the offline corpus, or say it is not in the library.
+async def _prometheus_ask(query: str) -> dict:
+    """The single library lane. Both callers go through here — the Hermes tool
+    and the portal's Ask-the-Library panel — so there is one retrieval path, one
+    synthesis pass, and one refusal rule to audit rather than two that drift.
 
-    The synthesis pass has NO 'tools' key, exactly like _summarize_pdf_untrusted:
-    corpus documents are third-party text, and a planted "ignore your
-    instructions" chunk must be unable to fire anything. It is data to answer
-    over, never instructions.
-
-    Citations are built HERE, server-side, from the chunks actually retrieved —
-    never from whatever the model chose to write. A fabricated page number in a
-    survival answer is worse than no answer.
+    Returns a dict; the tool flattens it to prose, the panel renders it as UI.
     """
     q = (query or "").strip()
     if not q:
-        return "Ask me something specific and I'll check the library."
+        return {"state": "empty"}
 
     try:
         ans = await asyncio.to_thread(prometheus.answer, q)
     except prometheus.PrometheusUnavailable as e:
-        # NOT the same as "not in the library" — the shelf is unreachable, and
-        # saying "I don't have that" would be a lie shaped exactly like an answer.
         log.warning("[prometheus] library unavailable: %s", e)
-        return ("The library isn't available right now — the index is missing or "
-                "unreadable, so I can't check it. That's a fault on my side, not "
-                "an answer about your question.")
+        return {"state": "unavailable", "reason": str(e)}
 
     if not ans.found:
-        return (f"{prometheus.NOT_IN_LIBRARY} I checked the offline corpus and it "
-                f"doesn't cover that. I'm not going to guess at it.")
+        return {"state": "not_in_library", "trace": ans.trace()}
 
     prompt = await asyncio.to_thread(prometheus.build_synthesis_prompt, q, ans)
     payload = {"model": HEAVY_MODEL, "stream": False,
                "messages": [{"role": "user", "content": prompt}],
-               "options": {"temperature": 0.1, "num_ctx": 8192}}   # NOTE: no "tools"
+               "options": {"temperature": 0.1, "num_ctx": 8192}}   # NOTE: no tool key
+    body = ""
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             r = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
@@ -1541,19 +1532,61 @@ async def _tool_survival_lookup(query: str, session_id: str = "") -> str:
             body = (r.json()["message"]["content"] or "").strip()
     except Exception as e:
         log.warning("[prometheus] synthesis failed (%s)", e)
-        # Fail toward the citations rather than toward silence: the retrieved
-        # sources are still true and still useful without the prose.
-        cites = "\n".join(f"- {c}" for c in ans.citations)
+        return {"state": "sources_only", "citations": ans.citations,
+                "sources": _prom_sources(ans), "tails": ans.tails, "trace": ans.trace()}
+
+    if not body:
+        return {"state": "not_in_library", "trace": ans.trace()}
+
+    return {"state": "answered", "answer": body,
+            "citations": ans.citations, "sources": _prom_sources(ans),
+            "tails": ans.tails, "medical": prometheus.MEDICAL_TAIL in ans.tails,
+            "trace": ans.trace()}
+
+
+def _prom_sources(ans) -> list:
+    """Citations as STRUCTURE, not prose — the panel renders them as fixed UI so
+    a citation cannot be something the model merely wrote."""
+    seen, out = set(), []
+    for c in ans.chunks:
+        key = (c.source_id, c.page)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"source_id": c.source_id, "title": c.source_name,
+                    "page": c.page, "category": c.category})
+    return out
+
+
+async def _tool_survival_lookup(query: str, session_id: str = "") -> str:
+    """Hermes-facing wrapper: the same lane the portal uses, flattened to prose.
+
+    Citations are appended HERE from the retrieval, never taken from whatever the
+    model wrote. A fabricated page number in a survival answer is worse than no
+    answer at all.
+    """
+    d = await _prometheus_ask(query)
+    st = d.get("state")
+
+    if st == "empty":
+        return "Ask me something specific and I'll check the library."
+    if st == "unavailable":
+        # NOT the same as "not in the library" — the shelf is unreachable, and
+        # saying "I don't have that" would be a lie shaped like an answer.
+        return ("The library isn't available right now — the index is missing or "
+                "unreadable, so I can't check it. That's a fault on my side, not "
+                "an answer about your question.")
+    if st == "not_in_library":
+        return (f"{prometheus.NOT_IN_LIBRARY} I checked the offline corpus and it "
+                f"doesn't cover that. I'm not going to guess at it.")
+    if st == "sources_only":
+        cites = "\n".join(f"- {c}" for c in d.get("citations", []))
         return ("I found this in the library but couldn't summarise it just now. "
                 f"Read these directly:\n{cites}")
 
-    if not body:
-        return prometheus.NOT_IN_LIBRARY
-
-    # Server-built citation block, from the retrieval — not from the model.
-    out = [body, "", "From the library:"]
-    out += [f"- {c}" for c in ans.citations]
-    out += ans.tails
+    out = [d.get("answer", ""), "", "From the library:"]
+    out += [f"- {c}" for c in d.get("citations", [])]
+    out += d.get("tails", [])
     return "\n".join(out)
 
 
@@ -5196,7 +5229,47 @@ async def prometheus_status():
     no page at all.
     """
     st = await asyncio.to_thread(prometheus.status)
+    st["quick_asks"] = await asyncio.to_thread(prometheus.quick_asks)
     return st
+
+
+@app.post("/prometheus/ask")
+async def prometheus_ask(body: dict):
+    """Ask the library from the portal. Same handler as the Hermes tool, same
+    floor, same refusal — this is a second FRONT END, not a second lane.
+
+    No query log: nothing about what was asked is written to disk. A record of
+    what someone looked up in a survival library is exactly the kind of thing
+    that should not exist.
+    """
+    return await _prometheus_ask(str(body.get("query") or ""))
+
+
+@app.get("/prometheus/source/{source_id}")
+async def prometheus_source(source_id: str, page: int = 0):
+    """Open a corpus document. Resolved by MANIFEST ID ONLY — the caller never
+    supplies a path, so there is no traversal surface here at all; an id that is
+    not in the manifest simply does not resolve.
+
+    The page anchor is applied client-side (#page=N), which is what PDF viewers
+    honour; nothing here re-renders the file.
+    """
+    m = await asyncio.to_thread(prometheus.load_manifest)
+    entry = next((s for s in (m.get("sources") or []) + (m.get("zims") or [])
+                  if s.get("id") == source_id), None)
+    if not entry:
+        raise HTTPException(404, "no such source in the manifest")
+    path = (prometheus.ROOT / str(m.get("corpus_dir") or "corpus") / str(entry.get("path") or "")).resolve()
+    corpus_root = (prometheus.ROOT / str(m.get("corpus_dir") or "corpus")).resolve()
+    # Belt and braces: even a manifest edited to point outside the corpus is refused.
+    if corpus_root not in path.parents:
+        log.warning("[prometheus] manifest entry %s points outside the corpus — refusing", source_id)
+        raise HTTPException(403, "source is outside the corpus directory")
+    if not path.exists():
+        raise HTTPException(404, "that source isn't fetched yet")
+    mime = {".pdf": "application/pdf", ".csv": "text/csv",
+            ".txt": "text/plain"}.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(str(path), media_type=mime, filename=path.name)
 
 
 @app.post("/prometheus/reindex")

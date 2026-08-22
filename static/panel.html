@@ -2069,6 +2069,66 @@
 </main>
 
 
+<section id="panePrometheus" class="pane">
+
+  <div class="card">
+    <div class="card-title">Prometheus — the offline library</div>
+    <div class="ari-note">
+      A curated shelf of survival and medical references, and a lane that answers
+      <b>only</b> from it. Fully local — this works with the power and the internet out.
+      If the corpus doesn't cover a question, Phoebe says <b>"that's not in the library"</b>
+      rather than guessing.
+    </div>
+    <div id="promSummary" class="ari-hint" style="margin-top:8px">loading&hellip;</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Corpus</div>
+    <div class="ari-note">
+      <b>ready</b> means present and checksum-verified. <b>unverified</b> means the file is
+      here but the manifest asserts nothing about it yet — checksums are recorded on first
+      fetch and reviewed before they're committed.
+    </div>
+    <div id="promSources" style="margin-top:10px">loading&hellip;</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Ask the library</div>
+    <div class="ari-note">
+      Every question here goes to the corpus and nowhere else — there is no general-chat
+      fallback on this tab. That is the difference between a library and a bluff.
+    </div>
+
+    <div id="promOffline" class="ari-hint" hidden
+         style="margin-top:8px;padding:8px;border:1px solid #c05a5a;border-radius:6px;color:#c05a5a"></div>
+
+    <div id="promChips" style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:10px"></div>
+
+    <div id="promLog" style="margin-top:12px;max-height:46vh;overflow:auto"></div>
+
+    <div style="display:flex;gap:.5rem;margin-top:10px">
+      <input class="cin" id="promIn" type="text" autocomplete="off"
+             placeholder="Ask the library…" style="flex:1">
+      <button type="button" id="promSend">Ask</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Index</div>
+    <div id="promIndex" class="ari-hint">loading&hellip;</div>
+    <div style="margin-top:10px">
+      <button type="button" id="promReindex">Rebuild index</button>
+      <button type="button" id="promKiwix">Open Kiwix</button>
+    </div>
+    <div class="ari-note" style="margin-top:8px">
+      Rebuilding re-reads files already on this disk — it never fetches. Getting the
+      corpus is <code>prometheus/fetch.sh</code>, run by hand, and it is the only network
+      call Prometheus ever makes.
+    </div>
+    <pre id="promOut" class="quote" style="margin-top:10px;display:none;max-height:40vh;overflow:auto"></pre>
+  </div>
+
+</section>
 <section id="paneApelles" class="pane">
 
   <div class="card">
@@ -2260,6 +2320,10 @@
     <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
     <span data-i18n="tab.ariadne">Ariadne</span>
   </button>
+  <button class="tab" data-pane="Prometheus">
+    <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+    <span data-i18n="tab.prometheus">Prometheus</span>
+  </button>
 </nav>
 
 <!-- Vendored QR encoder: qrcode-generator 1.4.4 (Kazuhiko Arase, MIT). Bundled locally for the utility tray's QR tool — no CDN/runtime network. -->
@@ -2337,7 +2401,226 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   if (t.dataset.pane === 'Status') { wgRefresh(); egressRefresh(); langInit(); acctInit(); dgInit(); }
   if (t.dataset.pane === 'Amphion') { ampRefreshLibrary(); }
   if (t.dataset.pane === 'Apelles') { apInit(); }
+  if (t.dataset.pane === 'Prometheus') { promInit(); }
 }));
+
+
+// ── Prometheus — the offline library ──────────────────────────────────────────
+// State is rendered FROM THE SERVER, never assumed here. A source that is present
+// but unverified must not read as ready: the manifest asserts nothing about it
+// until a checksum has been recorded and reviewed, and a page showing green while
+// that is untrue would be worse than no page.
+let promInit;
+(function(){
+  const $ = id => document.getElementById(id);
+  const STATE_COLOR = { ready: '#6b8f5b', unverified: '#e0a33a', missing: '#c05a5a' };
+  let busy = false;
+
+  function fmtBytes(n) {
+    if (!n) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(0) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(1) + ' GB';
+  }
+
+  function render(d) {
+    $('promSummary').innerHTML =
+      '<b>' + esc(d.summary || '') + '</b>' +
+      (d.index_present
+        ? ' &middot; ' + (d.total_chunks || 0).toLocaleString() + ' passages indexed'
+        : ' &middot; <span style="color:#c05a5a">no index — Phoebe will say the library is unavailable</span>');
+
+    const rows = (d.sources || []).map(function(s){
+      const col = STATE_COLOR[s.state] || '#8A7FA6';
+      const chunks = (d.chunks_by_source || {})[s.id];
+      const bits = [];
+      if (s.bytes) bits.push(fmtBytes(s.bytes));
+      if (chunks) bits.push(chunks.toLocaleString() + ' passages');
+      if (s.present && !s.checksum_recorded) bits.push('no checksum recorded');
+      if (!s.url_verified) bits.push('url unreviewed');
+      return '<div style="display:flex;gap:.6rem;align-items:baseline;padding:.35rem 0;border-bottom:1px solid #2E2148">'
+           +   '<span style="color:' + col + ';min-width:5.5rem;font-weight:600">' + esc(s.state) + '</span>'
+           +   '<span style="flex:1">' + esc(s.name || s.id) + '</span>'
+           +   '<span class="ari-hint" style="text-align:right">' + esc(s.category || '') + '</span>'
+           +   (bits.length ? '<span class="ari-hint" style="text-align:right;min-width:12rem">' + esc(bits.join(' · ')) + '</span>' : '')
+           + '</div>';
+    });
+    $('promSources').innerHTML = rows.length ? rows.join('')
+      : '<div class="dev-empty">No sources in the manifest.</div>';
+
+    $('promIndex').innerHTML = d.index_present
+      ? esc(d.index_path) + ' &middot; ' + (d.total_chunks || 0).toLocaleString() + ' passages'
+      : '<span style="color:#c05a5a">not built.</span> Fetch the corpus, then rebuild.';
+
+    // Offline gate: no index means no library. Disable the input and say WHY —
+    // never a spinner that lies about work that cannot happen.
+    const usable = d.index_present && (d.total_chunks || 0) > 0;
+    $('promIn').disabled = !usable;
+    $('promSend').disabled = !usable;
+    $('promOffline').hidden = usable;
+    if (!usable) {
+      $('promOffline').textContent = d.index_present
+        ? 'The index is empty — the corpus is fetched but not ingested. Rebuild the index below.'
+        : 'The library is unavailable: no index has been built yet. Fetch the corpus with '
+          + 'prometheus/fetch.sh, then rebuild the index below.';
+    }
+
+    const chips = (d.quick_asks || []).map(function(q){
+      return '<button type="button" class="prom-chip" data-ask="' + esc(q.ask) + '">'
+           + esc(q.label) + '</button>';
+    }).join('');
+    $('promChips').innerHTML = chips;
+    $('promChips').querySelectorAll('.prom-chip').forEach(function(b){
+      b.disabled = !usable;
+      b.addEventListener('click', function(){ ask(b.dataset.ask); });
+    });
+  }
+
+  promInit = async function(){
+    try {
+      const r = await fetch('/prometheus/status');
+      if (!r.ok) throw new Error('status ' + r.status);
+      render(await r.json());
+    } catch (e) {
+      $('promSummary').innerHTML = '<span style="color:#c05a5a">Could not read the library status: '
+        + esc(e.message) + '</span>';
+      $('promSources').textContent = '';
+      $('promIndex').textContent = '';
+    }
+  };
+
+  $('promReindex').addEventListener('click', async function(){
+    if (busy) return;
+    busy = true;
+    $('promReindex').disabled = true;
+    const out = $('promOut');
+    out.style.display = 'block';
+    out.textContent = 'rebuilding — re-reading files already on this disk, no network…';
+    try {
+      const r = await fetch('/prometheus/reindex', { method: 'POST' });
+      const d = await r.json().catch(function(){ return {}; });
+      out.textContent = (d.output || '') + (d.error ? '\n' + d.error : '')
+        || ('reindex returned ' + r.status);
+      await promInit();
+    } catch (e) {
+      out.textContent = 'reindex failed: ' + e.message;
+    } finally {
+      busy = false;
+      $('promReindex').disabled = false;
+    }
+  });
+
+  // Kiwix serves the ZIMs on localhost only and is never Funnel-exposed, so this
+  // is a plain link rather than anything proxied through Ph3b3.
+  $('promKiwix').addEventListener('click', function(){
+    window.open('http://localhost:8080/', '_blank', 'noopener');
+  });
+
+  // ── Ask the library ────────────────────────────────────────────────────────
+  let asking = false;
+
+  function bubble(cls, html) {
+    const d = document.createElement('div');
+    d.style.cssText = 'margin:.5rem 0;padding:.6rem .75rem;border-radius:8px;'
+      + (cls === 'you' ? 'background:rgba(43,15,95,.55);' : 'border:1px solid #2E2148;');
+    d.innerHTML = html;
+    $('promLog').appendChild(d);
+    $('promLog').scrollTop = $('promLog').scrollHeight;
+    return d;
+  }
+
+  // Citations are rendered from STRUCTURE the server returned, never parsed out
+  // of the model's prose. A citation that is only text is a citation the model
+  // could have invented.
+  function citeBlock(sources) {
+    if (!sources || !sources.length) return '';
+    const rows = sources.map(function(s){
+      const page = s.page ? ' &middot; p. ' + s.page : '';
+      const href = '/prometheus/source/' + encodeURIComponent(s.source_id)
+                 + (s.page ? '#page=' + s.page : '');
+      return '<div style="display:flex;gap:.5rem;align-items:baseline;margin-top:.25rem">'
+           +   '<span style="flex:1">' + esc(s.title || s.source_id) + page + '</span>'
+           +   '<a href="' + href + '" target="_blank" rel="noopener">open source</a>'
+           + '</div>';
+    }).join('');
+    return '<div style="margin-top:.6rem;padding-top:.5rem;border-top:1px solid #2E2148">'
+         + '<div class="ari-hint" style="margin-bottom:.2rem">From the library</div>'
+         + rows + '</div>';
+  }
+
+  function traceBlock(trace) {
+    if (!trace) return '';
+    const ids = (trace.chunk_ids || []).join(', ') || '—';
+    return '<details style="margin-top:.5rem">'
+         + '<summary class="ari-hint" style="cursor:pointer">show retrieval</summary>'
+         + '<div class="ari-hint" style="margin-top:.4rem">'
+         +   '<div>FTS query: <code>' + esc(trace.fts_query || '—') + '</code></div>'
+         +   '<div>consulted first: ' + esc(trace.first_source || '—') + '</div>'
+         +   '<div>chunk ids: <code>' + esc(ids) + '</code></div>'
+         + '</div></details>';
+  }
+
+  async function ask(q) {
+    q = (q || '').trim();
+    if (!q || asking) return;
+    asking = true;
+    $('promSend').disabled = true;
+    $('promIn').value = '';
+    bubble('you', esc(q));
+    const pending = bubble('lib', '<span class="ari-hint">checking the library…</span>');
+    try {
+      const r = await fetch('/prometheus/ask', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q }),
+      });
+      const d = await r.json().catch(function(){ return {}; });
+      if (!r.ok) { pending.innerHTML = '<span style="color:#c05a5a">The library returned ' + r.status + '.</span>'; return; }
+
+      if (d.state === 'unavailable') {
+        pending.innerHTML = '<span style="color:#c05a5a">The library isn\'t available — the index is '
+          + 'missing or unreadable. That\'s a fault on my side, not an answer about your question.</span>';
+      } else if (d.state === 'not_in_library') {
+        // The welded line, verbatim, plus a route out. No guess, ever.
+        pending.innerHTML = '<b>That\'s not in the library.</b><div class="ari-hint" style="margin-top:.35rem">'
+          + 'The corpus doesn\'t cover that, so I\'m not going to guess. For general conversation, '
+          + 'use the <a href="#" data-goto-chat="1">Chat tab</a>.</div>' + traceBlock(d.trace);
+        const link = pending.querySelector('[data-goto-chat]');
+        if (link) link.addEventListener('click', function(e){
+          e.preventDefault();
+          document.querySelector('.tab[data-pane="Chat"]').click();
+        });
+      } else if (d.state === 'sources_only') {
+        pending.innerHTML = '<span class="ari-hint">Found it, but couldn\'t summarise just now — '
+          + 'read these directly.</span>' + citeBlock(d.sources) + traceBlock(d.trace);
+      } else if (d.state === 'empty') {
+        pending.innerHTML = '<span class="ari-hint">Ask something specific and I\'ll check.</span>';
+      } else {
+        // Medical banner is FIXED UI, not model prose — it cannot be omitted by
+        // a model having an off day.
+        const banner = d.medical
+          ? '<div style="margin-bottom:.5rem;padding:.45rem .6rem;border:1px solid #e0a33a;'
+            + 'border-radius:6px;color:#e0a33a">Get a human medical professional if at all possible.</div>'
+          : '';
+        const others = (d.tails || []).filter(function(t){ return t.indexOf('medical professional') === -1; });
+        pending.innerHTML = banner + esc(d.answer).replace(/\n/g, '<br>')
+          + citeBlock(d.sources)
+          + (others.length ? '<div class="ari-hint" style="margin-top:.5rem">' + esc(others.join(' ')) + '</div>' : '')
+          + traceBlock(d.trace);
+      }
+    } catch (e) {
+      pending.innerHTML = '<span style="color:#c05a5a">Couldn\'t reach the library: ' + esc(e.message) + '</span>';
+    } finally {
+      asking = false;
+      $('promSend').disabled = false;
+    }
+  }
+
+  $('promSend').addEventListener('click', function(){ ask($('promIn').value); });
+  $('promIn').addEventListener('keydown', function(e){
+    if (e.key === 'Enter') { e.preventDefault(); ask($('promIn').value); }
+  });
+})();
 
 
 // ── Apelles — photo editor ────────────────────────────────────────────────────

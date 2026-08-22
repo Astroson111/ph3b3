@@ -182,5 +182,6 @@
   "status.shelf": "Shelf",
   "status.shelf.note": "Permanent works. Read-only — they are part of Ph3b3, not something she generated.",
   "status.shelf.empty": "Nothing on the shelf yet.",
-  "status.shelf.err": "Could not open that"
+  "status.shelf.err": "Could not open that",
+  "tab.prometheus": "Prometheus"
 }

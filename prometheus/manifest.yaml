@@ -56,6 +56,23 @@ blacklist_headings:
   - "poisons and their"  # FM 21-76's poison-preparation subsections
   - "expedient munitions"
 
+# Tap-to-ask chips on the Prometheus tab. Six maximum, and the cap is the point:
+# a wall of suggestions reads as a menu, and a menu implies the library answers
+# only those things. Edit freely — `label` is the chip, `ask` is what gets asked.
+quick_asks:
+  - label: "Water"
+    ask: "how do I make water safe to drink"
+  - label: "Bleeding"
+    ask: "how do I stop severe bleeding"
+  - label: "Hypothermia"
+    ask: "how do I treat hypothermia"
+  - label: "Food preservation"
+    ask: "how do I safely can food at home"
+  - label: "Repeaters"
+    ask: "what repeater frequencies are near me"
+  - label: "Shelter"
+    ask: "how do I build an emergency shelter"
+
 sources:
   # ── MEDICAL — priority 1, consulted first for anything clinical ────────────
   - id: hesperian-doctor
