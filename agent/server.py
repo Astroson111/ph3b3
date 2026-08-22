@@ -53,7 +53,32 @@ elif not AUTH_PASS:
 
 _SESSION_COOKIE = "ph3b3_session"
 _SESSION_MAX_AGE = 86400 * 7          # 7 days
-_sessions: dict[str, str] = {}        # token → username (in-memory; resets on restart)
+# token → {"user": str, "exp": float}. In-memory; resets on restart.
+#
+# The cookie carries max_age, but that is a hint to the browser and nothing more:
+# a token lifted out of one stays valid as long as the SERVER remembers it, and
+# until now the server remembered forever. The expiry has to live here to mean
+# anything.
+_sessions: dict[str, dict] = {}
+
+
+def _session_user(token: str) -> str | None:
+    """Username for a live session token, or None. Expired tokens are dropped on
+    the way past, so the map self-cleans on the traffic it already serves."""
+    if not token:
+        return None
+    st = _sessions.get(token)
+    if not st:
+        return None
+    if time.time() >= st.get("exp", 0):
+        _sessions.pop(token, None)
+        log.info("[auth] session expired for %r", st.get("user", "?"))
+        return None
+    return st.get("user")
+
+
+def _session_start(token: str, user: str) -> None:
+    _sessions[token] = {"user": user, "exp": time.time() + _SESSION_MAX_AGE}
 
 OLLAMA_HOST  = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 HEAVY_MODEL  = os.getenv("PH3B3_HEAVY_MODEL", os.getenv("PH3B3_MODEL", "hermes3:latest"))
@@ -317,19 +342,23 @@ _auth_blocked: dict[str, float] = {}
 def _auth_client_key(request: Request) -> str:
     """Identify the caller for throttling.
 
-    Behind the Funnel every request arrives from 127.0.0.1, so the peer address
-    alone would pool the entire internet into one bucket — one attacker would
-    throttle every real user. X-Forwarded-For carries the true client, but it is
-    caller-supplied and trivially forged, so it is honoured ONLY when the
-    connection itself came from loopback (i.e. from the Funnel proxy). From
-    anywhere else the peer address is the truth and the header is ignored.
+    request.client.host is already the real client: uvicorn runs with
+    proxy_headers=True and forwarded_allow_ips="127.0.0.1" (both passed
+    explicitly at the bottom of this file), so its ProxyHeadersMiddleware has
+    resolved X-Forwarded-For to the rightmost untrusted hop before any of this
+    runs. Behind the Funnel that is the internet client; on the LAN, where the
+    peer is not a trusted proxy, the header is ignored and the peer address
+    stands.
+
+    This function used to inspect X-Forwarded-For itself, honouring it only when
+    the peer was loopback. That branch was unreachable — by the time it ran,
+    uvicorn had already replaced the peer with the header's value, so the peer
+    was never loopback when a header was present. It looked like the protection
+    and was not; the protection is uvicorn's forwarded_allow_ips, which is why
+    that setting is now spelled out at the call site rather than left to a
+    default that could change under us.
     """
-    peer = (request.client.host if request.client else "") or "?"
-    if peer in ("127.0.0.1", "::1"):
-        xff = request.headers.get("X-Forwarded-For", "")
-        if xff:
-            return "fwd:" + xff.split(",")[0].strip()[:45]
-    return "peer:" + peer
+    return "peer:" + ((request.client.host if request.client else "") or "?")
 
 
 def _auth_note_failure(key: str, path: str, device: str) -> None:
@@ -343,6 +372,13 @@ def _auth_note_failure(key: str, path: str, device: str) -> None:
         if len(_auth_fails) > _AUTH_TRACK_MAX:
             _auth_fails.clear()          # last resort; better than unbounded growth
             log.warning("[auth] failure table cleared under pressure")
+        # _auth_blocked was left out of this sweep and grew without limit: entries
+        # are otherwise pruned only when that exact key is looked up again, and a
+        # blocked caller that never returns is never looked up. Costlier to fill
+        # than the failure table — ten failures buys one entry — but the omission
+        # was an oversight, not a decision.
+        for k in [k for k, until in _auth_blocked.items() if until <= now]:
+            _auth_blocked.pop(k, None)
 
     hits = [t for t in _auth_fails.get(key, []) if t > now - _AUTH_FAIL_WINDOW_S]
     hits.append(now)
@@ -418,7 +454,7 @@ async def basic_auth(request: Request, call_next):
 
     # 1. Session cookie — browser clients that went through /login. (human)
     token = request.cookies.get(_SESSION_COOKIE, "")
-    if token and token in _sessions:
+    if token and _session_user(token):
         authed, auth_kind = True, "human"
 
     # 2. Device key — a KNOWN device presenting ITS own key as the Basic password,
@@ -3784,7 +3820,7 @@ async def setup_submit(request: Request):
 async def login_page(request: Request):
     # Already logged in → go straight to panel.
     token = request.cookies.get(_SESSION_COOKIE, "")
-    if token and token in _sessions:
+    if token and _session_user(token):
         return RedirectResponse(url="/panel", status_code=303)
     return HTMLResponse(content=_login_html())
 
@@ -3807,7 +3843,7 @@ async def login_submit(request: Request):
         _auth_fails.pop(_ckey, None)
         _auth_blocked.pop(_ckey, None)
         token = secrets.token_hex(32)
-        _sessions[token] = user
+        _session_start(token, user)
         resp = RedirectResponse(url="/panel", status_code=303)
         resp.set_cookie(
             _SESSION_COOKIE, token,
@@ -3893,7 +3929,7 @@ async def change_credentials(request: Request):
     #    caller so they stay signed in instead of bouncing to /login.
     _sessions.clear()
     token = secrets.token_hex(32)
-    _sessions[token] = new_user
+    _session_start(token, new_user)
     resp = JSONResponse({"ok": True, "username": new_user, "password_changed": changing_pw})
     resp.set_cookie(_SESSION_COOKIE, token, max_age=_SESSION_MAX_AGE,
                     httponly=True, secure=bool(SSL_CERT), samesite="lax")
@@ -4809,7 +4845,7 @@ def _edit_session_key(request: Request) -> str:
     """Stable per-caller key for edit rate-limiting: panel session cookie if the
     caller logged in via /login, else the Basic-auth user, else the client host."""
     tok = request.cookies.get(_SESSION_COOKIE, "")
-    if tok and tok in _sessions:
+    if tok and _session_user(tok):
         return "sess:" + tok
     if request.headers.get("Authorization", "").startswith("Basic "):
         return "basic:" + AUTH_USER
@@ -6751,5 +6787,12 @@ if __name__ == "__main__":
     if SSL_CERT and SSL_KEY:
         ssl_kwargs = {"ssl_certfile": SSL_CERT, "ssl_keyfile": SSL_KEY}
         log.info(f"HTTPS enabled — cert: {SSL_CERT}")
+    # proxy_headers/forwarded_allow_ips are uvicorn's defaults, spelled out
+    # because the failed-auth throttle depends on them. They are what turns
+    # X-Forwarded-For into request.client.host for Funnel traffic (and what
+    # makes the header ignorable from anywhere that is not a trusted proxy).
+    # Turn proxy_headers off and every request through the Funnel collapses into
+    # one throttle bucket, where a single attacker locks out every real user.
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning",
-                timeout_keep_alive=30, **ssl_kwargs)
+                timeout_keep_alive=30, proxy_headers=True,
+                forwarded_allow_ips="127.0.0.1", **ssl_kwargs)

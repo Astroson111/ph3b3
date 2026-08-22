@@ -1,3 +1,7 @@
+# The loose spec — what Ph3b3 needs. Every pin here is `>=`, so two installs a
+# month apart can resolve differently. For a reproducible install (the exact set
+# known to work), use requirements.lock.txt instead:
+#     pip install -r requirements.lock.txt
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 httpx>=0.27.0
