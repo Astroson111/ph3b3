@@ -38,6 +38,32 @@ ROOT = Path(__file__).resolve().parents[1] / "prometheus"
 MANIFEST_PATH = ROOT / "manifest.yaml"
 
 MAX_CHUNKS = 6                    # K, per the brief
+
+# Source priority → score weight. bm25() is NEGATIVE and lower is better, so
+# multiplying by a smaller weight pulls a score toward zero, i.e. demotes it.
+#   1 quick cards and civilian guides   2 Army field manuals   3 technical/reference
+PRIORITY_WEIGHT = {1: 1.0, 2: 0.7, 3: 0.4}
+DEFAULT_WEIGHT = 0.4
+
+# Relevance floor, on the RAW bm25 score — deliberately NOT the weighted one.
+# A chunk that merely mentions the words is not an answer, and six mediocre
+# chunks read as more authoritative than one good one. Never pad to K.
+#
+# Applying the floor to the weighted score double-penalised low-priority sources:
+# demoted by the weight, then rejected by the floor, so FCC Part 97 (priority 3)
+# stopped answering radio questions it was the only source for. The two knobs
+# answer different questions — the floor asks "is this relevant at all", the
+# weight asks "which of the relevant ones wins" — and mixing them broke the rule
+# that a priority-3 source still surfaces when it is the only match.
+#
+# TUNED TO -5.0, NOT to the value that drops "how do I decontaminate". The brief
+# asked for a floor where the safe-room chunk passes and the decon chunk does
+# not. That is not achievable, and should not be: by bm25 the decon chunks score
+# BETTER than the purify-water ones, because they are genuinely relevant — FEMA
+# p.159 on chemical exposure, FM 4-25.11 p.170 on decontaminating skin. Any floor
+# that drops them also drops "how do I purify water". Suppressing real guidance
+# the library holds is a worse failure than answering a question thinly.
+MIN_SCORE = -5.0
 SNIPPET_CHARS = 900               # per chunk handed to the model
 
 NOT_IN_LIBRARY = "That's not in the library."
@@ -177,8 +203,9 @@ def quick_asks(manifest: dict | None = None) -> list:
     for q in (m.get("quick_asks") or [])[:MAX_QUICK_ASKS]:
         label = str(q.get("label") or "").strip() if isinstance(q, dict) else str(q).strip()
         ask = str(q.get("ask") or label).strip() if isinstance(q, dict) else label
+        cat = str(q.get("category") or "").strip() if isinstance(q, dict) else ""
         if label and ask:
-            out.append({"label": label, "ask": ask})
+            out.append({"label": label, "ask": ask, "category": cat})
     return out
 
 
@@ -367,10 +394,13 @@ def search(question: str, k: int = MAX_CHUNKS, manifest: dict | None = None) -> 
                   FROM chunks_fts
                   JOIN chunks c ON c.rowid = chunks_fts.rowid
                  WHERE chunks_fts MATCH ?
-                 ORDER BY rank ASC, c.priority ASC
+                 ORDER BY rank ASC
                  LIMIT ?
                 """,
-                (q, max(1, int(k)) * 4),
+                # Wider pool than K: weighting and the relevance floor both
+                # reorder and discard, so the final K is chosen from candidates
+                # rather than from whatever the raw bm25 order happened to put first.
+                (q, max(1, int(k)) * 10),
             ).fetchall()
     except sqlite3.Error as e:
         raise PrometheusUnavailable(f"index unreadable: {e}") from e
@@ -395,16 +425,24 @@ def search(question: str, k: int = MAX_CHUNKS, manifest: dict | None = None) -> 
     for r in rows:
         body = ((r["text"] or "") + " " + (r["heading"] or "")).lower()
         matched = {w for w in wanted if re.search(rf"\b{re.escape(w)}\b", body)}
-        if len(matched) >= 2 or (matched & rare):
-            hits.append(Chunk(
-                id=r["id"],
-                source_id=r["source_id"], source_name=r["source_name"],
-                category=r["category"] or "", priority=r["priority"] or 9,
-                page=r["page"], heading=r["heading"] or "",
-                text=(r["text"] or "")[:SNIPPET_CHARS], rank=r["rank"]))
-        if len(hits) >= max(1, int(k)):
-            break
-    return hits
+        if not (len(matched) >= 2 or (matched & rare)):
+            continue
+        raw = r["rank"] or 0.0
+        if raw > MIN_SCORE:
+            continue          # below the relevance floor — a mention is not an answer
+        pri = r["priority"] or 3
+        weighted = raw * PRIORITY_WEIGHT.get(pri, DEFAULT_WEIGHT)
+        hits.append(Chunk(
+            id=r["id"], source_id=r["source_id"], source_name=r["source_name"],
+            category=r["category"] or "", priority=pri,
+            page=r["page"], heading=r["heading"] or "",
+            text=(r["text"] or "")[:SNIPPET_CHARS], rank=weighted))
+
+    # Sort by the WEIGHTED score, then take K. Answer from one chunk if one is
+    # all that clears the bar — six mediocre passages read as more authoritative
+    # than a single good one, which is the opposite of true.
+    hits.sort(key=lambda c: c.rank)
+    return hits[:max(1, int(k))]
 
 
 def answer(question: str, k: int = MAX_CHUNKS) -> Answer:

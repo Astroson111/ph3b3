@@ -121,6 +121,9 @@
       pointer-events: none; z-index: 0;
     }
     #panePrometheus > * { position: relative; z-index: 1; }
+    /* A chip whose category has nothing fetched: visible, obviously inert. The
+       gap in the shelf should be legible, not silently missing. */
+    .prom-chip-off { opacity: .45; cursor: not-allowed; }
     @media (prefers-reduced-motion: reduce) { #panePrometheus::before { opacity: .6; } }
 
     /* ── Card ── */
@@ -2501,12 +2504,23 @@ let promInit;
           + 'prometheus/fetch.sh, then rebuild the index below.';
     }
 
+    // A chip for a category with nothing fetched offers a question the library
+    // cannot answer. Dimmed and labelled rather than hidden, so the gap in the
+    // shelf is visible instead of silently absent.
+    const readyCats = new Set((d.sources || [])
+      .filter(function(s){ return s.state === 'ready'; })
+      .map(function(s){ return s.category; }));
     const chips = (d.quick_asks || []).map(function(q){
-      return '<button type="button" class="prom-chip" data-ask="' + esc(q.ask) + '">'
-           + esc(q.label) + '</button>';
+      const live = !q.category || readyCats.has(q.category);
+      return '<button type="button" class="prom-chip' + (live ? '' : ' prom-chip-off')
+           + '" data-ask="' + esc(q.ask) + '"' + (live ? '' : ' disabled')
+           + ' title="' + (live ? '' : 'no source fetched for this category yet') + '">'
+           + esc(q.label) + (live ? '' : ' <span style="opacity:.7">(not fetched)</span>')
+           + '</button>';
     }).join('');
     $('promChips').innerHTML = chips;
     $('promChips').querySelectorAll('.prom-chip').forEach(function(b){
+      if (b.classList.contains('prom-chip-off')) return;   // stays disabled
       b.disabled = !usable;
       b.addEventListener('click', function(){ ask(b.dataset.ask); });
     });

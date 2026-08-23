@@ -73,10 +73,19 @@ def library(tmp_path):
     con.close()
 
     manifest = {"index": db.name, "corpus_dir": "corpus"}
-    orig_root = P.ROOT
+    orig_root, orig_min = P.ROOT, P.MIN_SCORE
     P.ROOT = tmp_path
+    # MIN_SCORE is an ABSOLUTE bm25 value, and bm25 magnitudes depend on corpus
+    # statistics — a three-document fixture scores nothing like 2,300 chunks, so
+    # a floor tuned to the real shelf rejects everything here. These tests are
+    # about retrieval logic, not the floor, so it is disabled for them.
+    #
+    # That coupling is real and worth knowing: retune MIN_SCORE when the corpus
+    # changes size substantially. A relative floor (a fraction of the best score)
+    # would not have this problem, and is the better shape if it ever bites.
+    P.MIN_SCORE = 0
     yield {"db": db, "manifest": manifest, "skipped": skipped}
-    P.ROOT = orig_root
+    P.ROOT, P.MIN_SCORE = orig_root, orig_min
 
 
 # ── verify #2 — blacklisted sections are ABSENT from the index ───────────────
@@ -733,3 +742,64 @@ def test_new_question_supersedes_the_one_being_read():
     prom = PANEL[start:PANEL.index("// ── Apelles — photo editor", start)]
     i = prom.index("asking = true;")
     assert "promSpeakSeq++" in prom[i:i+200], "asking again must stop the previous answer"
+
+
+# ── Fix 6/7/8: priority weighting, relevance floor, chips ────────────────────
+
+def test_priority_weights_demote_by_pulling_toward_zero():
+    """bm25 is negative and lower is better, so a smaller weight makes a score
+    less negative — which demotes it. Getting the sign wrong would promote
+    exactly the sources meant to be demoted."""
+    assert P.PRIORITY_WEIGHT[1] > P.PRIORITY_WEIGHT[2] > P.PRIORITY_WEIGHT[3]
+    good = -10.0
+    assert good * P.PRIORITY_WEIGHT[1] < good * P.PRIORITY_WEIGHT[3]
+
+
+def test_relevance_floor_is_applied_to_the_raw_score_not_the_weighted_one():
+    """Applying it to the weighted score double-penalised low-priority sources:
+    demoted by the weight, then rejected by the floor. FCC Part 97 stopped
+    answering radio questions it was the only source for."""
+    src = (REPO / "modules" / "prometheus.py").read_text()
+    i = src.index("        raw = r[\"rank\"] or 0.0")
+    window = src[i:i + 400]
+    assert "if raw > MIN_SCORE" in window, "the floor must test the RAW score"
+    assert window.index("if raw > MIN_SCORE") < window.index("PRIORITY_WEIGHT"), \
+        "floor first, weighting after — they answer different questions"
+
+
+def test_results_are_not_padded_to_k():
+    """One good passage beats six mediocre ones."""
+    src = (REPO / "modules" / "prometheus.py").read_text()
+    assert "hits.sort(key=lambda c: c.rank)" in src
+    assert "return hits[:max(1, int(k))]" in src, "take up to K, never fill to K"
+
+
+def test_thin_answers_announce_themselves():
+    fn = SRV[SRV.index("async def _prometheus_ask"):SRV.index("def _prom_sources")]
+    assert "thin = len(ans.chunks) <= 2" in fn
+    assert "one passage" in fn and "two passages" in fn
+    assert '"thin": thin' in fn
+
+
+def test_quick_asks_carry_a_category():
+    for q in P.quick_asks():
+        assert q["category"], f"{q['label']} has no category to check against the shelf"
+
+
+def test_chips_are_gated_on_a_ready_source_in_that_category():
+    """Never offer a question the library cannot answer."""
+    start = PANEL.index("// ── Prometheus — the offline library")
+    blk = PANEL[start:PANEL.index("// ── Apelles — photo editor", start)]
+    assert "readyCats" in blk
+    assert "s.state === 'ready'" in blk
+    assert "prom-chip-off" in blk and "(not fetched)" in blk
+    assert ".prom-chip-off" in PANEL, "the dimmed state needs a style"
+
+
+def test_a_chip_exists_for_the_empty_plants_category():
+    """The gap in the shelf should be legible rather than silently absent."""
+    labels = {q["category"] for q in P.quick_asks()}
+    assert "plants" in labels
+    m = P.load_manifest()
+    plants = [s for s in m["sources"] if s["category"] == "plants"]
+    assert plants and not plants[0]["url"], "still unsourced — the chip should show as not fetched"

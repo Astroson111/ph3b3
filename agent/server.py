@@ -1550,11 +1550,19 @@ async def _prometheus_ask(query: str) -> dict:
     # retrieved a first-aid page alongside is not a medical answer, and stamping
     # a clinical banner on it trains people to ignore the banner.
     tails = prometheus.tails_for(ans, body)
+    # Say when the shelf is thin. Never pad to K — one good passage beats six
+    # mediocre ones — but a one-passage answer should announce itself rather than
+    # read with the same confidence as six.
+    thin = len(ans.chunks) <= 2
+    if thin:
+        n = len(ans.chunks)
+        tails = [f"The library has {'one passage' if n == 1 else 'two passages'} "
+                 f"on this — that is all I am working from."] + tails
     spoken = prometheus.spoken_text(body, tails)
     return {"state": "answered", "answer": body, "spoken": spoken,
             "citations": ans.citations, "sources": _prom_sources(ans),
             "tails": tails, "medical": prometheus.MEDICAL_TAIL in tails,
-            "category": ans.category, "trace": ans.trace()}
+            "thin": thin, "category": ans.category, "trace": ans.trace()}
 
 
 def _prom_sources(ans) -> list:

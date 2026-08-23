@@ -61,15 +61,23 @@ blacklist_headings:
 # only those things. Edit freely — `label` is the chip, `ask` is what gets asked.
 quick_asks:
   - label: "Water"
+    category: water
     ask: "how do I make water safe to drink"
   - label: "Bleeding"
+    category: medical
     ask: "how do I stop severe bleeding"
   - label: "Hypothermia"
+    category: medical
     ask: "how do I treat hypothermia"
   - label: "Food preservation"
+    category: food
     ask: "how do I safely can food at home"
   - label: "Shelter"
+    category: general
     ask: "how do I build an emergency shelter"
+  - label: "Plants"
+    category: plants
+    ask: "which wild plants are safe to eat"
 
 sources:
   # REBUILT 2026-08-22 on Astro's rule: open-source or public-domain routes only,
@@ -82,7 +90,7 @@ sources:
   - id: army-first-aid
     name: "US Army FM 4-25.11 First Aid"
     category: medical
-    priority: 1
+    priority: 2
     license: "US Government work — public domain"
     url: "https://archive.org/download/fm-4-25.11-first-aid/FM%204-25.11%20First%20Aid.pdf"
     path: "medical/army-fm-4-25-11-first-aid.pdf"
@@ -108,7 +116,7 @@ sources:
   - id: fema-ready
     name: "FEMA — Are You Ready? A Guide to Citizen Preparedness"
     category: general
-    priority: 2
+    priority: 1
     license: "US Government work — public domain (item states CC public domain)"
     url: "https://archive.org/download/FemaEmergencyHandbook-areYouReady/FemaEmergencyHandbook-areYouReady.pdf"
     path: "general/fema-are-you-ready.pdf"
@@ -144,7 +152,7 @@ sources:
   - id: fcc-part97
     name: "FCC Part 97 — Amateur Radio Service (47 CFR Part 97)"
     category: comms
-    priority: 2
+    priority: 3
     license: "US Government work (govinfo) — public domain"
     url: "https://www.govinfo.gov/content/pkg/CFR-2024-title47-vol5/pdf/CFR-2024-title47-vol5-part97.pdf"
     path: "comms/fcc-part-97.pdf"
@@ -181,7 +189,7 @@ sources:
   - id: water-treatment
     name: "TB MED 577 — Sanitary Control and Surveillance of Field Water Supplies"
     category: water
-    priority: 1
+    priority: 3
     license: "US Government work (US Army) — public domain"
     url: "https://archive.org/download/ost-military-medical-tbmed577/tbmed577.pdf"
     path: "water/tb-med-577-field-water.pdf"
@@ -225,7 +233,7 @@ zims:
     name: "WikiMed — Wikipedia medical subset"
     license: "CC BY-SA (Wikipedia) — free/open"
     category: medical
-    priority: 1
+    priority: 3
     size_hint: "2.1 GB"
     sha256_url: "https://download.kiwix.org/zim/wikipedia/wikipedia_en_medicine_maxi_2026-04.zim.sha256"          # Kiwix publishes <file>.sha256 beside each ZIM — confirm exact path
     url: "https://download.kiwix.org/zim/wikipedia/wikipedia_en_medicine_maxi_2026-04.zim"
@@ -254,7 +262,7 @@ zims:
     name: "Wikipedia (full, no images)"
     license: "CC BY-SA (Wikipedia) — free/open"
     category: general
-    priority: 4
+    priority: 3
     size_hint: "~49 GB — measured, not the 20 GB the brief assumed"
     sha256_url: "https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_2026-06.zim.sha256"          # Kiwix publishes <file>.sha256 beside each ZIM — confirm exact path
     url: "https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_2026-06.zim"
