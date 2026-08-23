@@ -1,0 +1,15 @@
+[Unit]
+Description=Weekly ComfyUI restart timer
+Documentation=https://github.com/Astroson111/ph3b3
+
+[Timer]
+# Sunday 04:20 — after Rhea's 03:30 backup has finished, and at an hour when a
+# skipped render costs nobody anything.
+OnCalendar=Sun *-*-* 04:20:00
+# A missed week (machine off) runs on next boot rather than waiting seven days.
+Persistent=true
+# Spread the wakeup so it never lands exactly on another timer.
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

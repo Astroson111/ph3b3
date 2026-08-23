@@ -1,0 +1,14 @@
+[Unit]
+Description=Weekly ComfyUI restart (bounded uptime — reclaims host RAM)
+Documentation=https://github.com/Astroson111/ph3b3
+After=comfyui.service
+Wants=comfyui.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/astroson/Desktop/ph3b3_v2/deploy/comfyui-restart-guard.sh
+# The guard refuses to act when ComfyUI is busy or unreachable and exits 0, so a
+# skipped week is a success, not a failure. Only a restart that actually broke
+# should show red in systemctl --failed.
+StandardOutput=journal
+StandardError=journal
