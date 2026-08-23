@@ -103,13 +103,29 @@ check("resolved default written back into params",
       morpheus.build_workflow({"positive": "x", "seed": 1}).get("7") is not None)
 
 # ── 3. Endpoint accepts a clean request carrying a negative ───────────────────
-r = client.post("/image/generate", headers=HEADERS, json={
-    "positive": "product photography of a single decorative crescent moon",
-    "negative_prompt": "thin wires, floating parts, intricate filigree",
-})
-check("clean request with negative_prompt accepted (job queued)",
-      r.status_code == 200 and "job_id" in r.json(),
-      extra=f"{r.status_code} {r.text[:80]}")
+# Layer B is stubbed to a clean verdict for THIS check only. It is a live Ollama
+# call, and when a render or another test has evicted the model it raises
+# SafetyCheckUnavailable -> 503, so an unstubbed accept case measures which model
+# happened to be resident rather than whether the endpoint accepts a negative.
+# That made this file pass alone and fail inside the suite. Same fix, and same
+# reason, as the stub in test_edit_floor.
+#
+# Scoped, not global: the floor checks below must keep using the real thing.
+_real_sem = morpheus.semantic_minor_check
+_real_person = morpheus.real_person_compromised
+morpheus.semantic_minor_check = lambda text: False
+morpheus.real_person_compromised = lambda text: False
+try:
+    r = client.post("/image/generate", headers=HEADERS, json={
+        "positive": "product photography of a single decorative crescent moon",
+        "negative_prompt": "thin wires, floating parts, intricate filigree",
+    })
+    check("clean request with negative_prompt accepted (job queued)",
+          r.status_code == 200 and "job_id" in r.json(),
+          extra=f"{r.status_code} {r.text[:80]}")
+finally:
+    morpheus.semantic_minor_check = _real_sem
+    morpheus.real_person_compromised = _real_person
 
 # ── 4/5/6. FLOOR routing — sentinel in each field must hard-block (403) ────────
 # floor_check is stubbed to fire only on SENTINEL; this proves the endpoint runs
