@@ -1771,11 +1771,61 @@ async def health():
     return {"status": "alive"}
 
 
+# ── Memory pressure ──────────────────────────────────────────────────────────
+# Added after 2026-08-23, when swap sat at 8.0/8.0 GB, the status page reported
+# every service down, and all four were running with zero restarts. The fleet was
+# fine; the dashboard stalled and called it an outage. Telling the truth about
+# slowness beats a false DOWN, so the portal now has something honest to render.
+#
+# /proc/meminfo rather than psutil: no new dependency, and this must not be the
+# thing that fails under memory pressure.
+_SWAP_ALARM_PCT = 90.0
+_SWAP_ALARM_SUSTAIN_S = 300          # >90% for >5 min, not a momentary spike
+_swap_high_since: float | None = None
+
+
+def _memory_pressure() -> dict:
+    global _swap_high_since
+    try:
+        info = {}
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for line in f:
+                k, _, rest = line.partition(":")
+                info[k] = float(rest.strip().split()[0])      # kB
+    except OSError:
+        return {"ok": True, "unknown": True}
+
+    swap_total = info.get("SwapTotal", 0.0)
+    swap_free = info.get("SwapFree", 0.0)
+    swap_pct = 0.0 if swap_total <= 0 else (swap_total - swap_free) / swap_total * 100.0
+    mem_total = info.get("MemTotal", 1.0)
+    mem_avail = info.get("MemAvailable", mem_total)
+
+    now = time.time()
+    if swap_pct >= _SWAP_ALARM_PCT:
+        if _swap_high_since is None:
+            _swap_high_since = now
+    else:
+        _swap_high_since = None
+
+    sustained = (_swap_high_since is not None
+                 and now - _swap_high_since >= _SWAP_ALARM_SUSTAIN_S)
+    return {
+        "ok": not sustained,
+        "swap_pct": round(swap_pct, 1),
+        "mem_used_pct": round((mem_total - mem_avail) / mem_total * 100.0, 1),
+        "sustained_s": int(now - _swap_high_since) if _swap_high_since else 0,
+        "banner": ("memory pressure — the UI may lag; services are still running"
+                   if sustained else ""),
+    }
+
+
 @app.get("/ready")
 async def ready():
     # Richer status — only call this after startup is confirmed complete.
     return {
         "status": "alive",
+        "memory": _memory_pressure(),
         "model": MODEL,
         "soul": SOUL_FILE.exists(),
         "boot": memory.memory.get("boot_count", 0),

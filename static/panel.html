@@ -144,6 +144,18 @@
     }
     .ok  { background: rgba(74,222,128,.15); color: var(--ok);  border: 1px solid rgba(74,222,128,.3); }
     .err { background: rgba(248,113,113,.15); color: var(--err); border: 1px solid rgba(248,113,113,.3); }
+    /* Amber existed nowhere before 2026-08-23, which is WHY the status page could
+       only say green or red. A stall had no colour of its own, so it borrowed
+       red and reported an outage that was not happening. */
+    .warn { background: rgba(224,163,58,.15); color: #e0a33a; border: 1px solid rgba(224,163,58,.3); }
+    /* Memory-pressure banner: the fleet telling the truth about slowness beats a
+       false DOWN. */
+    .mem-banner {
+      display: none; margin: 0 .85rem; padding: .45rem .7rem;
+      border: 1px solid rgba(224,163,58,.45); border-radius: 8px;
+      background: rgba(224,163,58,.10); color: #e0a33a; font-size: .78rem;
+    }
+    .mem-banner.on { display: block; }
     .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
     .ts  { font-size: .68rem; color: var(--dim); text-align: right; padding: .3rem .1rem .5rem; }
 
@@ -2227,6 +2239,7 @@
 
 </section>
 
+<div class="mem-banner" id="memBanner"></div>
 <nav class="tabs">
   <button class="tab active" data-pane="Status">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -3607,9 +3620,36 @@ function badge(ok, label) {
 }
 
 // ── status ────────────────────────────────────────────────────────────────────
+// TIMEOUT IS NOT DOWN. This poller used to `catch {}` every failure into a red
+// "unreachable", with no timeout, no retry, and the error discarded unread. On
+// 2026-08-23 the machine was under memory pressure (swap 8/8 GB), /health stalled,
+// and the dashboard reported the whole fleet down while all four services were
+// running with zero restarts. The owner was told a lie by his own status page.
+//
+// Red is now reserved for a REFUSED connection or an error response. A stall
+// renders amber, and only after a retry.
+const STATUS_TIMEOUT_MS = 10_000;
+
+async function fetchWithTimeout(url, ms) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(url, { signal: ac.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function badgeSlow(label) {
+  return `<span class="badge warn"><span class="dot"></span>${label}</span>`;
+}
+
 async function refreshStatus() {
   try {
-    const [h, r] = await Promise.all([fetch('/health'), fetch('/ready')]);
+    const [h, r] = await Promise.all([
+      fetchWithTimeout('/health', STATUS_TIMEOUT_MS),
+      fetchWithTimeout('/ready', STATUS_TIMEOUT_MS),
+    ]);
     const hd = await h.json();
     const rd = await r.json();
     hPulse.className = 'hdr-pulse';
@@ -3622,10 +3662,39 @@ async function refreshStatus() {
       row('STT',  badge(rd.whisper && rd.whisper.toLowerCase().includes('ready'), rd.whisper || '—')) +
       row('Boot', '#' + (rd.boot || 0)) +
       row('Image engine', badge(true, 'SDXL'));
+    // Memory-pressure banner: visible on every pane, because a laggy UI that
+    // says why beats a dashboard that invents an outage.
+    const mb = document.getElementById('memBanner');
+    if (mb) {
+      const m = rd.memory || {};
+      if (m.banner) {
+        mb.textContent = m.banner + '  (swap ' + m.swap_pct + '%, RAM ' + m.mem_used_pct + '%)';
+        mb.classList.add('on');
+      } else {
+        mb.classList.remove('on');
+      }
+    }
     document.getElementById('statusTs').textContent = 'Updated ' + now();
-  } catch {
-    hPulse.className = 'hdr-pulse dead';
-    document.getElementById('healthRows').innerHTML = row('Status', badge(false, 'unreachable'));
+  } catch (e) {
+    // One retry before any state change — a single stalled poll is not an outage.
+    try {
+      const h2 = await fetchWithTimeout('/health', STATUS_TIMEOUT_MS);
+      const hd2 = await h2.json();
+      hPulse.className = 'hdr-pulse';
+      document.getElementById('healthRows').innerHTML =
+        row('Status', badge(hd2.status === 'alive', hd2.status));
+      document.getElementById('statusTs').textContent = 'Updated ' + now() + ' (retried)';
+      return;
+    } catch (e2) {
+      // A timeout/abort means SLOW, not DOWN. Only a refused connection or an
+      // error response earns red — and either way, say which.
+      const timedOut = (e2 && (e2.name === 'AbortError' || e2.name === 'TimeoutError'));
+      hPulse.className = timedOut ? 'hdr-pulse' : 'hdr-pulse dead';
+      document.getElementById('healthRows').innerHTML = timedOut
+        ? row('Status', badgeSlow('slow / unreachable (timeout)'))
+        : row('Status', badge(false, 'unreachable — ' + ((e2 && e2.message) || 'connection refused')));
+      console.warn('[Ph3b3] status poll failed:', e2);
+    }
   }
 }
 refreshStatus();
@@ -3722,13 +3791,34 @@ async function send() {
         reading_instruction: (readInstr && readInstr.value.trim()) || '',
         doc_mode: (docType && docType.value) || 'auto'}),
     });
-    const data = await res.json();
     hint.remove();
-    addMsg('asst', data.response || '(no response)');
+    // res.ok was never checked: a 503 returns valid JSON with no `response`, so
+    // it rendered as "(no response)" — a silent nothing, and the owner had to
+    // guess what "won't send" meant. Name the failure instead.
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).detail || ''; } catch (_) { detail = await res.text().catch(()=>''); }
+      const why = res.status === 503 ? 'the model or a safety check is unavailable right now'
+                : res.status === 429 ? 'too many requests — wait a moment'
+                : res.status === 401 ? 'you are signed out'
+                : 'the server returned ' + res.status;
+      addMsg('asst', 'Couldn\'t send: ' + why + (detail ? ' — ' + detail : '') + '.');
+      return;
+    }
+    const data = await res.json();
+    if (!data.response) {
+      addMsg('asst', 'Couldn\'t send: the server answered but with no text. '
+                   + (data.text_only ? '(text-only language is set)' : ''));
+      return;
+    }
+    addMsg('asst', data.response);
     playAudio(data.audio); // fire-and-forget — don't block next message
   } catch(e) {
     hint.remove();
-    addMsg('asst', 'Error: ' + e.message);
+    const why = (e && (e.name === 'AbortError' || e.name === 'TimeoutError'))
+      ? 'the request timed out — the machine may be under load'
+      : (e && e.message) || 'network error';
+    addMsg('asst', 'Couldn\'t send: ' + why + '.');
   } finally {
     chatBusy = false;
     sendBtn.disabled = false;
