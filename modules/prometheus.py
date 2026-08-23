@@ -449,6 +449,41 @@ def tails_for(ans: "Answer", answer_text: str = "") -> list:
     return out
 
 
+# ── speech ───────────────────────────────────────────────────────────────────
+# Citations are indispensable on screen and unbearable aloud. "Apply firm
+# pressure, US Army FM 4-25.11 First Aid, page forty" is not how anyone reads a
+# procedure to someone who is bleeding. The words stay on screen; the voice gets
+# the instructions.
+
+_CITE_PAREN = re.compile(r"\s*\((?=[^)]*?\b(?:p\.|pp\.|page)\s*\d)[^)]*\)")
+_CITE_BRACKET = re.compile(r"\s*\[[^\]]*\]")
+_CITE_TRAILING = re.compile(r"^\s*(?:from the library|sources?)\s*:.*$",
+                            re.IGNORECASE | re.MULTILINE)
+_BULLET_CITE = re.compile(r"^\s*[-*]\s*[^\n]*?,\s*p\.\s*\d+\s*$",
+                          re.IGNORECASE | re.MULTILINE)
+
+
+def spoken_text(answer_body: str, tails: list | None = None) -> str:
+    """What Alba reads: the answer, then any banner. Never the citations.
+
+    Strips parenthetical page references, bracketed notes like [Ibid], the
+    "From the library" block and bare citation bullets. Deliberately conservative
+    — a parenthesis without a page number is prose and is kept, because removing
+    real content to be tidy is worse than reading one stray bracket.
+    """
+    t = answer_body or ""
+    t = _CITE_TRAILING.sub("", t)
+    t = _BULLET_CITE.sub("", t)
+    t = _CITE_PAREN.sub("", t)
+    t = _CITE_BRACKET.sub("", t)
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    for tail in (tails or []):
+        if tail and tail not in t:
+            t = f"{t}\n\n{tail}" if t else tail
+    return t.strip()
+
+
 # ── prompt assembly ──────────────────────────────────────────────────────────
 
 _DELIM_OPEN = "<<<LIBRARY_EXCERPT>>>"

@@ -675,3 +675,61 @@ def test_index_and_corpus_are_collapsed_by_default():
 
 def test_newest_answer_renders_on_top():
     assert "$('promLog').prepend(d)" in PANEL
+
+
+# ── Fix 5: Alba reads the answer, never the citations ────────────────────────
+
+@pytest.mark.parametrize("body,gone", [
+    ("Apply pressure (US Army FM 4-25.11 First Aid, p. 40).", "p. 40"),
+    ("Boil it [Ibid].", "Ibid"),
+    ("Do this (see p. 12) then that.", "p. 12"),
+    ("Steps here.\n\nFrom the library:\n- TB MED 577, p. 39", "From the library"),
+    ("Steps.\n- US Army FM 4-25.11 First Aid, p. 40", "p. 40"),
+])
+def test_spoken_text_strips_citations(body, gone):
+    """'Apply firm pressure, FM 4-25.11, page forty' is not how you read a
+    procedure to someone who is bleeding."""
+    assert gone not in P.spoken_text(body)
+
+
+def test_spoken_text_keeps_prose_parentheses():
+    """Conservative on purpose: a parenthesis with no page number is content, and
+    removing real instructions to be tidy is worse than reading a stray bracket."""
+    out = P.spoken_text("Warm the trunk first (not the limbs) to avoid afterdrop.")
+    assert "(not the limbs)" in out
+
+
+def test_spoken_text_appends_the_banner_last():
+    out = P.spoken_text("Do the thing.", [P.MEDICAL_TAIL])
+    assert out.rstrip().endswith(P.MEDICAL_TAIL)
+    assert out.count(P.MEDICAL_TAIL) == 1, "must not double up if already present"
+    assert P.spoken_text(f"Do it. {P.MEDICAL_TAIL}", [P.MEDICAL_TAIL]).count(P.MEDICAL_TAIL) == 1
+
+
+def test_refusal_is_spoken_verbatim_and_alone():
+    """Verify 10: nothing else — no apology, no elaboration."""
+    fn = SRV[SRV.index("async def _prometheus_ask"):SRV.index("def _prom_sources")]
+    assert '"spoken": prometheus.NOT_IN_LIBRARY' in fn
+
+
+def test_speech_uses_the_same_chunker_as_long_stories():
+    fn = SRV[SRV.index('@app.post("/prometheus/ask")'):SRV.index('@app.get("/prometheus/source/')]
+    assert "split_for_tts(spoken)" in fn, "same chunking as chat, no mid-answer cutoff"
+    assert "_tts_stream_new" in fn and "_tts_chunk_b64" in fn
+    assert 'plan["text_only"]' in fn, "voices remains the single on/off authority"
+    assert "spoken" in fn and "d.get(\"citations\")" not in fn
+
+
+def test_panel_reuses_the_chat_stop_button_not_a_second_control():
+    start = PANEL.index("// ── Ask the library")
+    prom = PANEL[start:PANEL.index("// ── Apelles — photo editor", start)]
+    assert "speakStopBtn" in prom, "the existing stop button must stop library speech too"
+    assert "promSpeakSeq++" in prom, "stopping must also cancel the queued chunks"
+    assert "playAudio(" in prom, "same playback path as chat"
+
+
+def test_new_question_supersedes_the_one_being_read():
+    start = PANEL.index("// ── Ask the library")
+    prom = PANEL[start:PANEL.index("// ── Apelles — photo editor", start)]
+    i = prom.index("asking = true;")
+    assert "promSpeakSeq++" in prom[i:i+200], "asking again must stop the previous answer"

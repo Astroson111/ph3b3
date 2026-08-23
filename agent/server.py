@@ -1518,7 +1518,9 @@ async def _prometheus_ask(query: str) -> dict:
         return {"state": "unavailable", "reason": str(e)}
 
     if not ans.found:
-        return {"state": "not_in_library", "trace": ans.trace()}
+        # Spoken verbatim, and nothing else — no apology, no elaboration.
+        return {"state": "not_in_library", "spoken": prometheus.NOT_IN_LIBRARY,
+                "trace": ans.trace()}
 
 
     prompt = await asyncio.to_thread(prometheus.build_synthesis_prompt, q, ans)
@@ -1548,7 +1550,8 @@ async def _prometheus_ask(query: str) -> dict:
     # retrieved a first-aid page alongside is not a medical answer, and stamping
     # a clinical banner on it trains people to ignore the banner.
     tails = prometheus.tails_for(ans, body)
-    return {"state": "answered", "answer": body,
+    spoken = prometheus.spoken_text(body, tails)
+    return {"state": "answered", "answer": body, "spoken": spoken,
             "citations": ans.citations, "sources": _prom_sources(ans),
             "tails": tails, "medical": prometheus.MEDICAL_TAIL in tails,
             "category": ans.category, "trace": ans.trace()}
@@ -1594,6 +1597,9 @@ async def _tool_survival_lookup(query: str, session_id: str = "") -> str:
         return ("I found this in the library but couldn't summarise it just now. "
                 f"Read these directly:\n{cites}")
 
+    # Devices (Iris/Dio) speak whatever this returns, so the citation block would
+    # be read aloud. Kept for the chat transcript, but the spoken form is carried
+    # separately in d["spoken"] for callers that voice it.
     out = [d.get("answer", ""), "", "From the library:"]
     out += [f"- {c}" for c in d.get("citations", [])]
     out += d.get("tails", [])
@@ -5252,7 +5258,27 @@ async def prometheus_ask(body: dict):
     what someone looked up in a survival library is exactly the kind of thing
     that should not exist.
     """
-    return await _prometheus_ask(str(body.get("query") or ""))
+    d = await _prometheus_ask(str(body.get("query") or ""))
+
+    # Speech uses the SAME path as chat: voices decides text-only, split_for_tts
+    # does the chunking that keeps a long answer from becoming one enormous WAV,
+    # and the client plays chunks in order. Citations are already stripped by
+    # prometheus.spoken_text — they belong on screen, not in the ear.
+    spoken = (d.get("spoken") or "").strip()
+    if spoken and body.get("speak", True):
+        plan = voices.output_for_response()
+        if plan["text_only"]:
+            d["text_only"] = True
+        else:
+            chunks = split_for_tts(spoken)
+            if chunks:
+                sid = _tts_stream_new(chunks, plan["voice"], *_speech_delivery(spoken))
+                d["stream_id"] = sid
+                d["chunk_count"] = len(chunks)
+                d["audio"] = await _tts_chunk_b64(sid, 0) or ""
+                if len(chunks) > 1:
+                    asyncio.create_task(_tts_chunk_b64(sid, 1))   # read-ahead
+    return d
 
 
 @app.get("/prometheus/source/{source_id}")
