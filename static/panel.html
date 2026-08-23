@@ -2664,7 +2664,14 @@ let promInit;
       const d = await r.json().catch(function(){ return {}; });
       if (!r.ok) { pending.innerHTML = '<span style="color:#c05a5a">The library returned ' + r.status + '.</span>'; return; }
 
-      if (d.state === 'unavailable') {
+      if (d.state === 'refused') {
+        // Floor block, not a coverage gap — say which, plainly. Conflating the
+        // two would teach people the library is thin when it is actually a rule.
+        pending.innerHTML = '<b>I can\'t answer that one.</b>'
+          + '<div class="ari-hint" style="margin-top:.35rem">That\'s outside what I\'m '
+          + 'allowed to relay' + (d.category ? ' (' + esc(d.category) + ')' : '') + '. '
+          + 'It isn\'t a gap in the library.</div>';
+      } else if (d.state === 'unavailable') {
         pending.innerHTML = '<span style="color:#c05a5a">The library isn\'t available — the index is '
           + 'missing or unreadable. That\'s a fault on my side, not an answer about your question.</span>';
       } else if (d.state === 'not_in_library') {

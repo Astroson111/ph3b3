@@ -1511,6 +1511,17 @@ async def _prometheus_ask(query: str) -> dict:
     if not q:
         return {"state": "empty"}
 
+    # ── Six-category floor, on the QUESTION ──────────────────────────────────
+    # Required by the brief and previously missing. Its absence was invisible
+    # because the corpus happens to contain nothing that would trip it, so
+    # "how do I make gunpowder" refused as not-in-library rather than as a floor
+    # block — the right answer by luck, from the wrong mechanism. A source added
+    # later that DID carry such content would have gone straight through.
+    _cat = await asyncio.to_thread(morpheus.floor_check, q)
+    if _cat:
+        log.warning("[prometheus] floor-blocked question — category: %s", _cat)
+        return {"state": "refused", "category": _cat}
+
     try:
         ans = await asyncio.to_thread(prometheus.answer, q)
     except prometheus.PrometheusUnavailable as e:
@@ -1549,6 +1560,15 @@ async def _prometheus_ask(query: str) -> dict:
     # cites — never from the question's wording. A comms answer that merely
     # retrieved a first-aid page alongside is not a medical answer, and stamping
     # a clinical banner on it trains people to ignore the banner.
+    # ── Floor again, on the ANSWER ───────────────────────────────────────────
+    # The question passing says nothing about what the corpus returned. Third-
+    # party documents are untrusted on the way out as well as in, and this is the
+    # last point before the words reach a person.
+    _cat_out = await asyncio.to_thread(morpheus.floor_check, body)
+    if _cat_out:
+        log.warning("[prometheus] floor-blocked ANSWER — category: %s", _cat_out)
+        return {"state": "refused", "category": _cat_out}
+
     tails = prometheus.tails_for(ans, body)
     # Say when the shelf is thin. Never pad to K — one good passage beats six
     # mediocre ones — but a one-passage answer should announce itself rather than
@@ -1597,6 +1617,8 @@ async def _tool_survival_lookup(query: str, session_id: str = "") -> str:
         return ("The library isn't available right now — the index is missing or "
                 "unreadable, so I can't check it. That's a fault on my side, not "
                 "an answer about your question.")
+    if st == "refused":
+        return "I can't answer that one — it's outside what I'm allowed to relay."
     if st == "not_in_library":
         return (f"{prometheus.NOT_IN_LIBRARY} I checked the offline corpus and it "
                 f"doesn't cover that. I'm not going to guess at it.")
