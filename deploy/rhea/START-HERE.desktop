@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=RHEA — start here
+Comment=Check whether this drive can restore Phoebe onto this machine
+Icon=drive-harddisk
+Terminal=true
+Exec=bash -c 'cd "$(dirname "%k")" && ./rhea-setup.sh; echo; read -rp "press enter to close "'
+Categories=System;

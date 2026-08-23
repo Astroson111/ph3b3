@@ -41,7 +41,31 @@ read -r -p "Type YES to proceed: " ok; [ "$ok" = "YES" ] || { echo "aborted"; ex
 [ -n "$RESTIC_BIN" ] && [ -x "$RESTIC_BIN" ] || { echo "FATAL: no restic binary (expected $SELF_DIR/bin/restic)"; exit 1; }
 [ -d "$RESTIC_REPO" ] || { echo "FATAL: restic repo not found at $RESTIC_REPO"; exit 1; }
 export RESTIC_REPOSITORY="$RESTIC_REPO"
-read -r -s -p "RHEA passphrase: " RESTIC_PASSWORD; echo; export RESTIC_PASSWORD
+
+# ── Passphrase: keyfile on the drive, prompt only as a fallback ───────────────
+# This used to prompt, always. The passphrase lived at
+# ~/.config/rhea/passphrase on NYX — the machine this restore exists because you
+# no longer have. Nyx's disk dying took the only copy of the key with it, and
+# every snapshot on this drive became permanently unreadable. That is the exact
+# failure Rhea was built to prevent, achieved by Rhea's own key management.
+#
+# So the key now travels WITH the repo it opens. Be clear-eyed about the
+# trade: with the key beside the lock, encryption no longer protects you against
+# someone walking off with this drive. It protects against the drive being
+# imaged in passing, an RMA, or a resale — and it keeps the repo format
+# encrypted so the choice can be revisited without rebuilding.
+#
+# The printed copy is the real redundancy: it survives losing the drive too.
+KEYFILE="$SELF_DIR/rhea-passphrase.txt"
+if [ -r "$KEYFILE" ]; then
+  RESTIC_PASSWORD="$(tr -d '\r\n' < "$KEYFILE")"
+  export RESTIC_PASSWORD
+  echo "using the passphrase stored on this drive ($KEYFILE)"
+else
+  echo "No keyfile on this drive — falling back to the prompt."
+  echo "If you have the printed copy, type it now."
+  read -r -s -p "RHEA passphrase: " RESTIC_PASSWORD; echo; export RESTIC_PASSWORD
+fi
 
 echo "── snapshots in the repo ──"
 "$RESTIC_BIN" snapshots --compact || { echo "FATAL: cannot open repo (wrong passphrase?)"; exit 1; }
