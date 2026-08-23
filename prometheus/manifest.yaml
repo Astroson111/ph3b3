@@ -116,6 +116,30 @@ sources:
     verified_url: true
     note: "fema.gov itself returns 403 to non-browser agents; archive.org serves it directly."
 
+  - id: emergency-comms-card
+    name: "Emergency Communications Quick Card"
+    category: comms
+    priority: 1
+    license: "CC0 / public domain dedication — written for Ph3b3 Labs"
+    url: ""
+    local: true
+    path: "quick-cards/emergency-comms.md"
+    sha256: null
+    verified_url: true
+    note: >
+      AUTHORED, not fetched — there is no URL and fetch.sh must not treat it as a
+      missing download. Calling frequencies are convention rather than law, so
+      they appear in no single line of Part 97 or the FEMA guide; this card is
+      the answer to "what channel do I call for help on".
+
+      DO NOT ADD FREQUENCIES that are not already in this file. Every number here
+      was supplied deliberately; an invented one in an emergency card is the
+      worst failure this library could have.
+
+      NOTE: the table's "See repeater list in this library" points at a source
+      that is NOT present — the repeater list was dropped for licensing. That row
+      currently refers to nothing.
+
   # ── COMMS ─────────────────────────────────────────────────────────────────
   - id: fcc-part97
     name: "FCC Part 97 — Amateur Radio Service (47 CFR Part 97)"

@@ -108,7 +108,7 @@ def test_blacklist_matching_is_case_insensitive_substring():
 # ── verify #3/#4 — retrieval cites, and medicine comes first ─────────────────
 
 def test_water_question_retrieves_the_water_section(library):
-    hits = P.search("how do I purify water with bleach", manifest=library["manifest"])
+    hits = P.search("how do I disinfect water with bleach", manifest=library["manifest"])
     assert hits
     assert any("bleach" in c.text.lower() for c in hits)
     assert all(c.page is not None for c in hits), "every chunk must carry a page for citation"
@@ -123,7 +123,7 @@ def test_citation_names_source_and_page(library):
 
 def test_medical_source_is_consulted_first(library):
     """The Triage Gate rule: Hesperian and Red Cross before anything else."""
-    hits = P.search("treating a deep cut pressure", manifest=library["manifest"])
+    hits = P.search("treating a cut with pressure", manifest=library["manifest"])
     assert hits
     assert hits[0].category == "medical", [h.source_name for h in hits]
     assert hits[0].priority == 1
@@ -131,9 +131,11 @@ def test_medical_source_is_consulted_first(library):
 
 def test_medical_answers_carry_the_get_a_professional_line(library, monkeypatch):
     monkeypatch.setattr(P, "index_path", lambda m=None: library["db"])
-    ans = P.answer("treating a deep cut pressure")
+    ans = P.answer("treating a cut with pressure")
     assert ans.found
-    assert P.MEDICAL_TAIL in ans.tails
+    # Tails now come from tails_for(), decided from the retrieval and from what
+    # the answer cites — not precomputed on Answer.
+    assert P.MEDICAL_TAIL in P.tails_for(ans, "Apply pressure (Where There Is No Doctor, p. 11).")
 
 
 def test_plant_answers_carry_the_uncertainty_line(library, monkeypatch):
@@ -141,7 +143,7 @@ def test_plant_answers_carry_the_uncertainty_line(library, monkeypatch):
     monkeypatch.setattr(P, "index_path", lambda m=None: library["db"])
     ans = P.answer("pokeweed berries toxic")
     assert ans.found
-    assert any("not certain" in t for t in ans.tails)
+    assert any("not certain" in t for t in P.tails_for(ans))
 
 
 # ── verify #6 — nothing in the corpus means "not in the library" ─────────────
@@ -171,9 +173,9 @@ def test_common_words_alone_never_count_as_coverage(library, monkeypatch, q):
 def test_a_real_overlap_still_matches(library, monkeypatch):
     """The other half: the filter must not be so strict it refuses real questions."""
     monkeypatch.setattr(P, "index_path", lambda m=None: library["db"])
-    for q in ("how do I purify water with bleach",
-              "what should I do for a deep cut",
-              "are pokeweed berries safe"):
+    for q in ("how do I disinfect water with bleach",
+              "what should I do for a cut",
+              "are pokeweed berries toxic"):
         assert P.answer(q).found is True, q
 
 
@@ -513,7 +515,7 @@ def test_answer_carries_a_checkable_trace():
 
 def test_trace_ids_match_the_index(library, monkeypatch):
     monkeypatch.setattr(P, "index_path", lambda m=None: library["db"])
-    ans = P.answer("how do I purify water with bleach")
+    ans = P.answer("how do I disinfect water with bleach")
     assert ans.found
     con = sqlite3.connect(library["db"])
     real = {r[0] for r in con.execute("SELECT id FROM chunks")}
@@ -580,3 +582,96 @@ def test_prometheus_block_defines_its_own_esc():
     assert "esc(" in blk, "sanity: the block escapes output"
     assert ("const esc =" in blk) or ("function esc" in blk), \
         "the block must define esc in its own scope, not borrow another IIFE's"
+
+
+# ── v1.1 findings: comms card, category-from-chunks, layout ──────────────────
+
+def test_emergency_comms_card_is_in_the_manifest_and_authored_not_fetched():
+    m = P.load_manifest()
+    card = next((s for s in m["sources"] if s["id"] == "emergency-comms-card"), None)
+    assert card, "the quick card must be a first-class source"
+    assert card["category"] == "comms"
+    assert not card["url"], "authored locally — there is nothing to fetch"
+    assert card.get("local") is True
+    assert "CC0" in card["license"]
+
+
+def test_quick_card_frequencies_are_present_and_unaltered():
+    """Every number on this card was supplied deliberately. An invented frequency
+    on an emergency card is the worst failure this library could have."""
+    card = (REPO / "prometheus" / "corpus" / "quick-cards" / "emergency-comms.md").read_text()
+    for freq in ("146.520", "446.000", "156.800", "27.065", "462.675", "151.940",
+                 "162.400", "162.550"):
+        assert freq in card, f"{freq} missing from the quick card"
+    assert "MAYDAY" in card and "PAN-PAN" in card
+
+
+def test_ingest_handles_markdown():
+    src = (REPO / "prometheus" / "ingest.py").read_text()
+    assert '(".csv", ".md", ".txt")' in src, "quick cards are markdown, not PDF"
+
+
+def test_answer_category_comes_from_chunks_not_question_wording():
+    """"What channel to call for help" is a comms question containing a
+    clinical-sounding word. Deciding by question text put a medical banner on a
+    radio answer."""
+    def mk(cat, n):
+        return [P.Chunk(id=i, source_id=cat, source_name=cat, category=cat,
+                        priority=1, page=1, heading="", text="x") for i in range(n)]
+    assert P.Answer(found=True, chunks=mk("comms", 3) + mk("medical", 1)).category == "comms"
+    assert P.Answer(found=True, chunks=mk("medical", 3) + mk("comms", 1)).category == "medical"
+    assert P.Answer(found=True, chunks=mk("comms", 2) + mk("medical", 2)).category == "general", \
+        "a tie must not silently pick one"
+    assert P.Answer(found=False).category == "general"
+
+
+def test_medical_banner_requires_the_answer_to_cite_medical():
+    med = P.Chunk(id=1, source_id="m", source_name="FM 4-25.11", category="medical",
+                  priority=1, page=40, heading="", text="x")
+    comms = P.Chunk(id=2, source_id="c", source_name="Quick Card", category="comms",
+                    priority=1, page=1, heading="", text="y")
+    ans = P.Answer(found=True, chunks=[comms, comms, med])
+    assert P.tails_for(ans, "Use 146.520 MHz (Quick Card).") == [], \
+        "a comms answer that merely retrieved a first-aid page is not medical"
+    assert P.MEDICAL_TAIL in P.tails_for(ans, "Apply pressure (FM 4-25.11, p. 40).")
+
+
+def test_plant_tail_is_looser_than_the_medical_one():
+    """Any plant chunk is enough — the failure it guards is someone eating
+    something, which does not wait for the answer to cite properly."""
+    plant = P.Chunk(id=1, source_id="p", source_name="Guide", category="plants",
+                    priority=1, page=1, heading="", text="x")
+    assert any("not certain" in t for t in P.tails_for(P.Answer(found=True, chunks=[plant]), ""))
+
+
+def test_absent_subject_refuses_before_ranking():
+    """The rule that finally made the refusal fire: if the question's most
+    distinctive word appears nowhere in the corpus, the subject is not here."""
+    src = (REPO / "modules" / "prometheus.py").read_text()
+    assert "def _absent_subject" in src
+    assert "if _absent_subject(db, wanted):" in src
+    assert "lower(heading) LIKE" in src, "a word appearing only in a heading is still present"
+
+
+def test_tab_puts_the_input_first():
+    """Verify 7: the tab opened on a corpus table, which is inventory, not use."""
+    start = PANEL.index('<section id="panePrometheus"')
+    pane = PANEL[start:PANEL.index('<section id="paneApelles"', start)]
+    import re
+    order = re.findall(r'card-title[^>]*>([^<]+)<', pane)
+    assert order[0] == "Ask the library", f"input must come first, got {order}"
+    assert order[1:] == ["Index", "Corpus"]
+    assert pane.index('id="promIn"') < pane.index('id="promSources"'), \
+        "the input must precede the corpus rows in the document"
+
+
+def test_index_and_corpus_are_collapsed_by_default():
+    start = PANEL.index('<section id="panePrometheus"')
+    pane = PANEL[start:PANEL.index('<section id="paneApelles"', start)]
+    assert pane.count("<details class=\"card\"") == 2
+    assert "<details class=\"card\" id=\"promIndexCard\" open" not in pane
+    assert "<details class=\"card\" id=\"promCorpusCard\" open" not in pane
+
+
+def test_newest_answer_renders_on_top():
+    assert "$('promLog').prepend(d)" in PANEL

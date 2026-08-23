@@ -143,7 +143,10 @@ def extract_pages(path: Path):
     CSV is handled directly — a repeater list is rows, not prose, and running it
     through a PDF text extractor would produce nothing useful.
     """
-    if path.suffix.lower() == ".csv":
+    # Text formats are read directly. Markdown especially: the quick cards are
+    # authored here, and running hand-written tables through a PDF extractor
+    # would be both pointless and lossy.
+    if path.suffix.lower() in (".csv", ".md", ".txt"):
         return [(None, path.read_text(encoding="utf-8", errors="replace"))]
     try:
         import fitz

@@ -92,12 +92,33 @@ class Answer:
     query: str = ""               # the FTS expression actually executed
     first_source: str = ""        # which source was consulted first (Triage Gate)
 
+    @property
+    def category(self) -> str:
+        """Majority category of the retrieved chunks; ties go to general.
+
+        The ANSWER's category comes from what was actually retrieved, never from
+        the question's wording. "What channel do I call for help on" is a comms
+        question that happens to contain a clinical-sounding word, and deciding
+        by question text would have put a medical banner on a radio answer.
+        """
+        if not self.chunks:
+            return "general"
+        from collections import Counter
+        counts = Counter(c.category or "general" for c in self.chunks)
+        top = max(counts.values())
+        winners = sorted(k for k, v in counts.items() if v == top)
+        return winners[0] if len(winners) == 1 else "general"
+
+    def chunks_in(self, category: str) -> list:
+        return [c for c in self.chunks if c.category == category]
+
     def trace(self) -> dict:
         """The audit surface. Honest and boring on purpose: what was asked of
         the index, what came back, and which shelf was reached for first."""
         return {
             "fts_query": self.query,
             "first_source": self.first_source,
+            "category": self.category,
             "chunk_ids": [c.id for c in self.chunks],
             "chunks": [{"id": c.id, "source_id": c.source_id, "page": c.page,
                         "heading": c.heading, "category": c.category,
@@ -258,6 +279,60 @@ def _fts_query(question: str) -> str:
     return " OR ".join(f'"{w}"' for w in words[:24])
 
 
+_RARE_FRACTION = 0.02          # in under 2% of chunks = distinctive
+
+
+def _absent_subject(db, words: list) -> str | None:
+    """The question's most distinctive word, if the corpus has never seen it.
+
+    Rarity alone was not enough: "tune" is rare in this corpus (FEMA says "tune
+    in to a radio") but a piano question is still not covered, so a single rare
+    match let it through. What actually separates "how do I tune a piano" from
+    "how do I treat a wound" is that PIANO appears zero times — the library has
+    never heard of the subject.
+
+    Refusing on an absent subject errs toward "not in the library", which is the
+    safe direction for this module: a typo or an unusual synonym costs a refusal,
+    where the opposite costs a confident answer about the wrong thing.
+    """
+    counts = {}
+    for w in words:
+        try:
+            counts[w] = db.execute(
+                "SELECT COUNT(*) FROM chunks WHERE lower(text) LIKE ? OR lower(heading) LIKE ?",
+                (f"%{w}%", f"%{w}%")).fetchone()[0]
+        except sqlite3.Error:
+            return None
+    if not counts:
+        return None
+    rarest = min(counts, key=lambda w: counts[w])
+    return rarest if counts[rarest] == 0 else None
+
+
+def _rare_words(db, words: list) -> set:
+    """Content words rare enough that a single match is real evidence.
+
+    Measured against this corpus rather than assumed: "hypothermia" is rare in a
+    survival library and "water" is not, and which is which depends entirely on
+    what is on the shelf.
+    """
+    try:
+        total = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] or 1
+    except sqlite3.Error:
+        return set()
+    out = set()
+    for w in words:
+        try:
+            n = db.execute(
+                "SELECT COUNT(*) FROM chunks WHERE lower(text) LIKE ? OR lower(heading) LIKE ?",
+                (f"%{w}%", f"%{w}%")).fetchone()[0]
+        except sqlite3.Error:
+            continue
+        if 0 < n <= max(1, int(total * _RARE_FRACTION)):
+            out.add(w)
+    return out
+
+
 def search(question: str, k: int = MAX_CHUNKS, manifest: dict | None = None) -> list:
     """Top-k chunks, medical priority first. Raises PrometheusUnavailable if the
     library cannot be consulted at all."""
@@ -279,6 +354,12 @@ def search(question: str, k: int = MAX_CHUNKS, manifest: dict | None = None) -> 
     try:
         with sqlite3.connect(f"file:{idx}?mode=ro", uri=True) as db:
             db.row_factory = sqlite3.Row
+            wanted = _content_words(question)
+            # If the question's most distinctive word is absent from the corpus,
+            # the subject is not here at all — stop before ranking anything.
+            if _absent_subject(db, wanted):
+                return []
+            rare = _rare_words(db, wanted)      # inside the connection, by necessity
             rows = db.execute(
                 """
                 SELECT c.id, c.source_id, c.source_name, c.category, c.priority,
@@ -302,17 +383,19 @@ def search(question: str, k: int = MAX_CHUNKS, manifest: dict | None = None) -> 
     # "fixture" and "affix", so on a real 2,300-chunk corpus "how do I fix a
     # Tesla" matched the water manual and the refusal never fired. A synthetic
     # fixture is too small to show this; the real corpus showed it immediately.
-    # And require TWO distinct content words where the question has two. One
-    # common word is not coverage: "how do I fix a Tesla" matched the water
-    # manual because it happens to contain "fix". A single-word question still
-    # needs only its one word, so "hypothermia" still works.
-    wanted = _content_words(question)
-    need = min(2, len(wanted))
+    # How much evidence counts as coverage. Two distinct content words, OR one
+    # word that is RARE in this corpus.
+    #
+    # Counting alone was wrong in both directions: one common word let "how do I
+    # fix a Tesla" match the water manual (it contains "fix"), while demanding
+    # two rejected "hypothermia" and other single-concept questions. Rarity is
+    # the honest discriminator — a word appearing in a handful of chunks is
+    # about something, a word appearing everywhere is not.
     hits = []
     for r in rows:
         body = ((r["text"] or "") + " " + (r["heading"] or "")).lower()
-        found = sum(1 for w in wanted if re.search(rf"\b{re.escape(w)}\b", body))
-        if found >= need:
+        matched = {w for w in wanted if re.search(rf"\b{re.escape(w)}\b", body)}
+        if len(matched) >= 2 or (matched & rare):
             hits.append(Chunk(
                 id=r["id"],
                 source_id=r["source_id"], source_name=r["source_name"],
@@ -335,14 +418,35 @@ def answer(question: str, k: int = MAX_CHUNKS) -> Answer:
     if not chunks:
         return Answer(found=False, query=q)
 
-    cats = {c.category for c in chunks}
-    tails = []
-    if cats & MEDICAL_CATEGORIES:
-        tails.append(MEDICAL_TAIL)
-    if cats & PLANT_CATEGORIES:
-        tails.append(PLANT_TAIL)
-    return Answer(found=True, chunks=chunks, tails=tails,
-                  query=q, first_source=chunks[0].source_name)
+    # Tails are NOT set here any more. Whether the medical line belongs depends
+    # on whether the answer actually leans on a medical source, and that cannot
+    # be known until the answer exists — see tails_for() below, called by the
+    # caller after synthesis.
+    return Answer(found=True, chunks=chunks, query=q,
+                  first_source=chunks[0].source_name)
+
+
+def tails_for(ans: "Answer", answer_text: str = "") -> list:
+    """Fixed lines that must accompany an answer, decided from the RETRIEVAL and
+    from what the answer actually cites — never from the question's wording.
+
+    The medical line requires both a medical chunk AND the answer citing one. A
+    radio answer that merely retrieved a first-aid page alongside is not a
+    medical answer, and stamping it with a clinical banner trains people to
+    ignore the banner.
+
+    The plant line is deliberately looser: any plant chunk is enough, because
+    the failure it guards against is someone eating something.
+    """
+    out = []
+    med = ans.chunks_in("medical")
+    if med and (not answer_text or any(
+            c.source_name in answer_text or (c.page and f"p. {c.page}" in answer_text)
+            for c in med)):
+        out.append(MEDICAL_TAIL)
+    if ans.chunks_in("plants"):
+        out.append(PLANT_TAIL)
+    return out
 
 
 # ── prompt assembly ──────────────────────────────────────────────────────────

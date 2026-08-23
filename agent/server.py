@@ -1520,6 +1520,7 @@ async def _prometheus_ask(query: str) -> dict:
     if not ans.found:
         return {"state": "not_in_library", "trace": ans.trace()}
 
+
     prompt = await asyncio.to_thread(prometheus.build_synthesis_prompt, q, ans)
     payload = {"model": HEAVY_MODEL, "stream": False,
                "messages": [{"role": "user", "content": prompt}],
@@ -1532,16 +1533,25 @@ async def _prometheus_ask(query: str) -> dict:
             body = (r.json()["message"]["content"] or "").strip()
     except Exception as e:
         log.warning("[prometheus] synthesis failed (%s)", e)
+        # No answer text to check citations against, so fall back to "any
+        # medical chunk" — with no prose there is nothing to under-warn about.
+        tails = prometheus.tails_for(ans)
         return {"state": "sources_only", "citations": ans.citations,
-                "sources": _prom_sources(ans), "tails": ans.tails, "trace": ans.trace()}
+                "sources": _prom_sources(ans), "tails": tails,
+                "category": ans.category, "trace": ans.trace()}
 
     if not body:
         return {"state": "not_in_library", "trace": ans.trace()}
 
+    # Tails are decided from the RETRIEVAL and from what the answer actually
+    # cites — never from the question's wording. A comms answer that merely
+    # retrieved a first-aid page alongside is not a medical answer, and stamping
+    # a clinical banner on it trains people to ignore the banner.
+    tails = prometheus.tails_for(ans, body)
     return {"state": "answered", "answer": body,
             "citations": ans.citations, "sources": _prom_sources(ans),
-            "tails": ans.tails, "medical": prometheus.MEDICAL_TAIL in ans.tails,
-            "trace": ans.trace()}
+            "tails": tails, "medical": prometheus.MEDICAL_TAIL in tails,
+            "category": ans.category, "trace": ans.trace()}
 
 
 def _prom_sources(ans) -> list:

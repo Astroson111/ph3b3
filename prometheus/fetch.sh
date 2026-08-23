@@ -90,8 +90,14 @@ while IFS=$'\x1f' read -r id url relpath sha verified shaurl; do
   dest="$CORPUS/$relpath"
 
   if [ -z "$url" ]; then
-    echo "  $id: NO URL in manifest — Astro must supply it. Skipping."
-    skipped=$((skipped+1)); continue
+    if [ -f "$CORPUS/$relpath" ]; then
+      # Authored locally (a quick card), not a download that failed.
+      echo "  $id: authored locally, present — nothing to fetch"
+    else
+      echo "  $id: NO URL in manifest — Astro must supply it. Skipping."
+      skipped=$((skipped+1))
+    fi
+    continue
   fi
 
   if [ "$verified" != "1" ] && [ "$ACCEPT_UNVERIFIED" != "1" ]; then
