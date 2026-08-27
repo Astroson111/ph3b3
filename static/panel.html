@@ -3330,7 +3330,18 @@ let apInit;
     $('ampJobState').textContent = 'Queued…';
     try {
       const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-      if (r.status === 403){ $('ampJobState').textContent = 'That prompt or lyrics can’t be generated (content policy).'; $('ampGenerate').disabled=false; setTimeout(()=>{$('ampJobCard').style.display='none';},4000); return; }
+      if (r.status === 403){
+        // Show the CATEGORY the server named. This branch used to print a fixed
+        // string and never read d.detail, so a category computed in morpheus.py
+        // and logged on Nyx was dropped one line before a human could see it.
+        // A refusal nobody can read is a refusal nobody can write around.
+        let why = 'Refused by the content floor.';
+        try { const d = await r.json(); if (d && d.detail) why = d.detail; } catch(e){}
+        $('ampJobState').textContent = why;
+        $('ampGenerate').disabled=false;
+        setTimeout(()=>{$('ampJobCard').style.display='none';}, 12000);
+        return;
+      }
       const d = await r.json();
       if (!r.ok){
         // A FAILED remix must not strand the user in remix mode. Previously the
