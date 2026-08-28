@@ -124,6 +124,28 @@ class ArgusStore:
                 c.execute("ALTER TABLE heartbeats ADD COLUMN charging INTEGER")
             # Argus's own liveness — its gap is visible here if the daemon dies.
             c.execute("CREATE TABLE IF NOT EXISTS argus_self (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL)")
+            # ── State transitions ────────────────────────────────────────────
+            # Argus has always DERIVED state correctly; what it never did was
+            # remember when state CHANGED. The RHEA drive read SILENT for eight
+            # consecutive nights (2026-08-21..28) and nothing recorded the moment
+            # it went quiet, so "how long has this been broken" could only be
+            # answered by reading the journal.
+            #
+            # Deliberately NOT pruned with the heartbeats. Heartbeats are a ring
+            # buffer — high volume, only the recent window is interesting.
+            # Transitions are rare and each one is the answer to a question you
+            # ask months later ("when did this last work?"). A retention policy
+            # that deletes them would delete exactly the history worth keeping.
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS state_changes (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id  TEXT    NOT NULL,
+                    ts         INTEGER NOT NULL,       -- unix epoch seconds (UTC)
+                    from_state TEXT,                   -- NULL on first ever observation
+                    to_state   TEXT    NOT NULL,
+                    reason     TEXT
+                )""")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_sc_device_ts ON state_changes(device_id, ts)")
 
     # ── writes ──
     def record_heartbeat(self, device_id: str, *, battery=None, rssi=None,
@@ -146,6 +168,7 @@ class ArgusStore:
         with self._conn() as c:
             n = c.execute("DELETE FROM heartbeats WHERE ts < ?", (cutoff,)).rowcount
             c.execute("DELETE FROM argus_self WHERE ts < ?", (cutoff,))
+            # state_changes is NOT pruned — see the schema note.
             return n
 
     # ── reads ──
@@ -166,6 +189,58 @@ class ArgusStore:
             rows = c.execute("SELECT * FROM heartbeats WHERE device_id=? ORDER BY ts DESC LIMIT ?",
                              (device_id, limit)).fetchall()
             return [dict(r) for r in rows]
+
+    def record_transitions(self, contracts: dict, now: Optional[float] = None) -> list:
+        """Compare every device's current state to its last recorded one, persist
+        the differences, and return them.
+
+        EDGE-TRIGGERED, not level-triggered, and that is the whole point. A drive
+        deliberately left unplugged for a fortnight should be reported ONCE, not
+        every tick for fourteen days — an alarm that repeats is an alarm people
+        learn to route around, and the floor work this month was one long lesson
+        in what happens when a signal stops being read.
+
+        The first ever observation of a device records from_state=NULL. That is a
+        real transition (nothing -> something) and it is worth having, but a
+        caller deciding whether to interrupt a human should treat a NULL origin
+        as a baseline rather than news.
+
+        Read-only with respect to the fleet: it observes and records, never acts.
+        """
+        now = now if now is not None else time.time()
+        changes = []
+        for ev in self.fleet(contracts, now=now):
+            dev, to_state = ev["device_id"], ev["state"]
+            prev = _last_state(self, dev)
+            if prev == to_state:
+                continue
+            row = {"device_id": dev, "ts": int(now), "from_state": prev,
+                   "to_state": to_state, "reason": ev.get("reason")}
+            with self._conn() as c:
+                c.execute("INSERT INTO state_changes(device_id,ts,from_state,to_state,reason) "
+                          "VALUES(?,?,?,?,?)",
+                          (dev, row["ts"], prev, to_state, row["reason"]))
+            changes.append(row)
+        return changes
+
+    def changes(self, limit: int = 50, device_id: Optional[str] = None) -> list:
+        """Most-recent-first transitions. The answer to 'when did this last work'."""
+        q = "SELECT * FROM state_changes"
+        args: list = []
+        if device_id:
+            q += " WHERE device_id=?"
+            args.append(device_id)
+        q += " ORDER BY ts DESC, id DESC LIMIT ?"
+        args.append(limit)
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(q, args).fetchall()]
+
+    def last_healthy(self, device_id: str) -> Optional[int]:
+        """When this device last entered a healthy state, or None if never."""
+        with self._conn() as c:
+            r = c.execute("SELECT ts FROM state_changes WHERE device_id=? AND to_state=? "
+                          "ORDER BY ts DESC LIMIT 1", (device_id, HEALTHY)).fetchone()
+            return r["ts"] if r else None
 
     def self_last(self) -> Optional[int]:
         with self._conn() as c:
@@ -222,6 +297,13 @@ class ArgusStore:
         now = now if now is not None else time.time()
         ids = list(dict.fromkeys(list(contracts.get("devices", {}).keys()) + self.known_devices()))
         return [self.evaluate(d, contracts, now) for d in ids]
+
+
+def _last_state(store, device_id: str) -> Optional[str]:
+    with store._conn() as c:
+        r = c.execute("SELECT to_state FROM state_changes WHERE device_id=? "
+                      "ORDER BY ts DESC, id DESC LIMIT 1", (device_id,)).fetchone()
+        return r["to_state"] if r else None
 
 
 def iso(ts: Optional[int]) -> Optional[str]:
