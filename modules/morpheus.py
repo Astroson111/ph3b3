@@ -282,6 +282,23 @@ _ESCALATE_CONTEXT: frozenset[str] = frozenset([
 # follow, and a list of every phrasing is what produced this hole once already.
 _RE_ORPHAN = re.compile(r"\borphan(?!age)")
 
+# Ordinal grade levels. The subject list named the INSTITUTION ("middle schooler",
+# "high schooler", "grade schooler", "elementary student") and not one ordinal, so
+# "an eighth grader" carried no Layer A signal on either surface — verified
+# 2026-08-27, it missed on the image path too. On the image path Layer B caught
+# it; on the text path Layer B is the only catch, and "eighth grader" sits close
+# enough to that judge's boundary that trailing style tags flipped the verdict.
+# A signal this unambiguous should not depend on a model call.
+#
+# Written as a rule rather than terms because the ordinal can be a word or a
+# numeral and the separator can be a space or a hyphen; enumerating 24 spellings
+# is how a list grows a hole. Bare "grader" is deliberately NOT matched — a road
+# grader is heavy machinery, and "grade" alone is a slope, a mark, or a rating.
+_RE_GRADE_LEVEL = re.compile(
+    r"\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
+    r"eleventh|twelfth|1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th|11th|12th)"
+    r"[\s\-]*grade(?:rs?|s)?\b")
+
 _STUDENT_RE = re.compile(r"\bstudents?\b")
 _STUDENT_ADULT_QUALIFIER = re.compile(
     r"\b(university|college|graduate|postgraduate|grad|medical|med|law|phd|"
@@ -364,7 +381,12 @@ _FLOOR_SEXUAL: frozenset[str] = frozenset([
     # alongside a real-person reference. "an adult woman in lingerie" is
     # ordinary and stays generatable — a test asserts it. The same words with a
     # real name attached are not.
-    "topless", "undressed", "stripping", "strip tease",
+    # "undress" not "undressed": _floor_re anchors the START of a word only, so
+    # the past tense matched nothing else — "undressing" carried no sexual signal
+    # at all. Found 2026-08-28 by the field-placement probe, on a case that had
+    # a minor signal ("high school") and was left entirely to the judge, which
+    # answered NO once a style tag followed it.
+    "topless", "undress", "stripping", "strip tease",
     "lingerie", "underwear", "panties", "in a bra",
     "cleavage", "seductive", "suggestive pose", "provocative pose",
     "onlyfans", "fansly",
@@ -935,6 +957,7 @@ def minor_subject_signal(text: str, surface: str = "image") -> bool:
         _RE_MINOR.search(norm) or _RE_MINOR_SUBJECT.search(norm)
         or _RE_MINOR_INTL.search(norm) or _RE_MINOR_CJK.search(norm)
         or _minor_age_signal(norm)
+        or _RE_GRADE_LEVEL.search(norm)
         or (_RE_SCALE_MINOR.search(norm) and _RE_SCALE_PERSON.search(norm))
         or _minor_term_in_folded(norm)
         or _de_ambiguous_minor(norm) or _de_ambiguous_minor(_evasion_fold(norm))
@@ -1350,6 +1373,7 @@ def explain_floor(text: str, surface: str = "image") -> dict | None:
             (_RE_MINOR_SUBJECT, "minor-subject-term", "child-depiction"),
             (_RE_MINOR_INTL, "minor-term-intl", "child-depiction"),
             (_RE_MINOR_CJK, "minor-term-cjk", "child-depiction"),
+            (_RE_GRADE_LEVEL, "grade-level-term", "child-depiction"),
         ]
     if not text_surface:
         rows += [(_RE_ORPHAN, "orphan-term", "child-depiction")]

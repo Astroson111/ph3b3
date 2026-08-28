@@ -33,7 +33,8 @@ MANIFEST = {
     "floor_multilingual_probe":   59,   # 49 refuse + 10 clean
     "floor_exception_probe":      27,   # every case across all groups
     "floor_body_diversity_probe": 37,   # 30 adult bodies + 7 minors
-    "floor_text_surface_probe":   36,   # 19 sexualized-minor + 17 ordinary songs
+    "floor_text_surface_probe":   41,   # 22 sexualized-minor + 19 ordinary songs,
+                                       # each run in BOTH field placements
     "test_amphion_floor":         50,   # the Amphion text surface + regression set
 }
 
@@ -133,3 +134,34 @@ def test_bare_pytest_run_actually_collects_the_probes():
             f"`pytest tests/` collects nothing from {modname}.py. It will report "
             f"success while {MANIFEST[modname]} adversarial cases never execute. "
             f"Check `python_files` in pytest.ini.")
+
+
+def test_the_suite_judges_with_the_model_the_service_uses():
+    """Guard the guard, again.
+
+    Every Layer B figure the floor suites report is only about the model they
+    actually asked. The service starts with EnvironmentFile=.env
+    (PH3B3_LIGHT_MODEL=ph3b3-chat:latest); pytest does not, so for as long as
+    these probes have existed they judged with morpheus's hermes3 fallback and
+    said nothing about production. conftest.py now imports the model keys; this
+    asserts it worked, because the failure is invisible — the suite stays green
+    either way, which is precisely the shape of bug this file exists to catch.
+    """
+    import morpheus
+
+    env_file = REPO / ".env"
+    if not env_file.exists():
+        pytest.skip(".env absent — cannot compare against the service's judge")
+    configured = {}
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, _, v = line.partition("=")
+            configured[k.strip()] = v.strip().strip('"').strip("'")
+    expected = (configured.get("PH3B3_FLOOR_MODEL")
+                or configured.get("PH3B3_LIGHT_MODEL"))
+    if not expected:
+        pytest.skip("no judge model configured in .env")
+    assert morpheus._LAYER_B_MODEL == expected, (
+        f"the suite judges with {morpheus._LAYER_B_MODEL!r} but the service uses "
+        f"{expected!r}. Every Layer B result in this run describes the wrong model.")
