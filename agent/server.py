@@ -609,7 +609,7 @@ kadmos = KadmosModule()   # PDF reader — extracted text is untrusted; summariz
 recipe_store = RecipeStore(RECIPE_DB_PATH)
 # Argus — read-only fleet observability. Ingest rides the verified check-in path
 # (this endpoint records; the argus-daemon writes self-heartbeats + prunes).
-from argus import ArgusStore, load_contracts, iso as _argus_iso
+from argus import ArgusStore, load_contracts, iso as _argus_iso, SILENT as _ARGUS_SILENT
 argus_store = ArgusStore()
 from captures import CapturesFeed, CAPTURES_DIR as _CAPTURES_DIR   # read-only artifact feed (Argus Part 2)
 captures_feed = CapturesFeed()
@@ -4144,6 +4144,14 @@ def _fleet_status_summary() -> str:
     for ev in argus_store.fleet(contracts):
         d, s = ev["device_id"], ev["state"]
         seen = _fleet_ago(ev.get("age_s"))
+        # For a SILENT device, WHEN it went quiet is the useful fact — "silent
+        # since Friday" is actionable where "silent" alone invites a shrug. Read
+        # from the transition log, so it survives heartbeat pruning.
+        since = ""
+        if s == _ARGUS_SILENT:
+            _ch = argus_store.changes(limit=1, device_id=d)
+            if _ch and _ch[0]["to_state"] == _ARGUS_SILENT:
+                since = f", since {_argus_iso(_ch[0]['ts'])}"
         batt = ev.get("battery")
         chg  = ev.get("charging")
         batt_s = ""
@@ -4152,7 +4160,7 @@ def _fleet_status_summary() -> str:
         if s == "SILENT":
             # Report last-known, clearly labelled STALE — never as a live number.
             last = f", last battery {batt}% (STALE)" if batt is not None else ""
-            lines.append(f"{d}: SILENT — last seen {seen}{last}")
+            lines.append(f"{d}: SILENT — last seen {seen}{since}{last}")
         else:
             extra = []
             if ev.get("rssi") is not None: extra.append(f"RSSI {ev['rssi']}dBm")
@@ -4243,6 +4251,23 @@ async def argus_heartbeat(request: Request):
         charging=(None if _c is None else (1 if _c else 0)),
     )
     return {"ok": True}
+
+@app.get("/argus/changes")
+async def argus_changes(limit: int = 50, device: str | None = None):
+    """State transitions, most recent first — the answer to "when did this last
+    work", which the heartbeat ring buffer cannot give because it is pruned.
+
+    Read-only. Contains no device secrets: id, timestamp, two state names and the
+    contract reason that produced them.
+    """
+    limit = max(1, min(int(limit or 50), 500))
+    rows = argus_store.changes(limit=limit, device_id=device)
+    for r in rows:
+        r["ts_iso"] = _argus_iso(r["ts"])
+    return {"changes": rows,
+            "last_healthy": {d: _argus_iso(argus_store.last_healthy(d))
+                             for d in load_contracts().get("devices", {})}}
+
 
 @app.get("/argus/fleet")
 async def argus_fleet():

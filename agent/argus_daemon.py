@@ -16,10 +16,19 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "modules"))
-from argus import ArgusStore, RETENTION_D   # noqa: E402
+from argus import ArgusStore, RETENTION_D, load_contracts, SILENT   # noqa: E402
 
 SELF_INTERVAL_S  = 30      # write our own heartbeat this often
 PRUNE_INTERVAL_S = 3600    # prune the ring buffer hourly
+CHANGE_INTERVAL_S = 60     # look for state transitions this often
+
+# A transition is announced ONCE, on the edge. The RHEA drive was SILENT for
+# eight consecutive nights and the only trace was a nightly systemd failure
+# nobody reads; repeating that hourly would not have helped, because an alarm
+# that fires every hour for a week is one people learn to ignore. So: told when
+# it breaks, told when it comes back, silent in between.
+#
+# NOT a level check. Deliberately edge-triggered — see ArgusStore.record_transitions.
 
 
 def _nyx_stats():
@@ -40,15 +49,43 @@ def _nyx_stats():
     return free, up
 
 
+def _announce(change: dict) -> None:
+    """One line per transition, on stdout, which systemd puts in the journal.
+
+    WARNING-shaped wording for anything entering SILENT so `journalctl -u argus
+    -p warning` shows only the things that went wrong. Recovery is logged too —
+    a fix you cannot see is as hard to trust as a failure you cannot see.
+    """
+    dev = change["device_id"]
+    frm = change["from_state"] or "unknown"
+    to = change["to_state"]
+    reason = change.get("reason") or ""
+    if change["from_state"] is None:
+        print(f"[argus-daemon] baseline: {dev} is {to} ({reason})", flush=True)
+    elif to == SILENT:
+        print(f"[argus-daemon] WENT SILENT: {dev} {frm} -> {to} ({reason})", flush=True)
+    elif frm == SILENT:
+        print(f"[argus-daemon] RECOVERED: {dev} {frm} -> {to} ({reason})", flush=True)
+    else:
+        print(f"[argus-daemon] state change: {dev} {frm} -> {to} ({reason})", flush=True)
+
+
 def main() -> None:
     store = ArgusStore()
     last_prune = 0.0
+    last_change = 0.0
     while True:
         now = time.time()
         try:
             store.record_self(ts=int(now))
             free, up = _nyx_stats()               # Nyx-local heartbeat (this host)
             store.record_heartbeat("nyx", free_heap=free, uptime=up, ts=int(now))
+            if now - last_change >= CHANGE_INTERVAL_S:
+                # Contracts are reloaded each pass so an edited cadence takes
+                # effect without restarting the daemon, matching the fleet read.
+                for ch in store.record_transitions(load_contracts(), now=now):
+                    _announce(ch)
+                last_change = now
             if now - last_prune >= PRUNE_INTERVAL_S:
                 store.prune(days=RETENTION_D, now=now)
                 last_prune = now
