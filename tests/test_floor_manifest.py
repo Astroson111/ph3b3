@@ -35,7 +35,7 @@ MANIFEST = {
     "floor_body_diversity_probe": 37,   # 30 adult bodies + 7 minors
     "floor_text_surface_probe":   41,   # 22 sexualized-minor + 19 ordinary songs,
                                        # each run in BOTH field placements
-    "test_amphion_floor":         53,   # the Amphion text surface + regression set
+    "test_amphion_floor":         58,   # the Amphion text surface + regression set
 }
 
 

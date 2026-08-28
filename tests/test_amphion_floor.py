@@ -365,3 +365,76 @@ def test_single_field_request_is_not_judged_twice(monkeypatch):
     assert r.status_code == 200
     minor_calls = [t for t in seen if "indie rock, guitars" in t]
     assert len(minor_calls) == 1, f"field judged {len(minor_calls)} times, want 1: {seen}"
+
+
+# ══ 9. F3 — the refusal says WHERE it arrived, and still says nothing else ════
+def _refusal_lines(caplog):
+    return [r.getMessage() for r in caplog.records
+            if r.getMessage().startswith("[safety] refusal — ")]
+
+
+def test_refusal_logs_route_method_and_client(monkeypatch, caplog, quiet_judge):
+    """Seven identical floor-block lines on 2026-08-27 could not be attributed to
+    a route: one gate serves generate, variations and remix, and the journal
+    records outbound calls only."""
+    SENTINEL = "zzsentinelzz"
+    monkeypatch.setattr(morpheus, "floor_check",
+                        lambda t, surface="image": "nonconsensual" if SENTINEL in t else None)
+    monkeypatch.setattr(morpheus, "explain_floor",
+                        lambda t, surface="image": {"rule": "sentinel", "matched": "zz"})
+    with caplog.at_level("WARNING", logger="ph3b3"):
+        r = _generate(f"indie rock, {SENTINEL}")
+    assert r.status_code == 403
+    lines = _refusal_lines(caplog)
+    assert len(lines) == 1, f"expected one refusal line, got {lines}"
+    line = lines[0]
+    assert "POST" in line
+    assert "/amphion/generate" in line
+    assert "client:" in line
+    assert "category-3" in line, f"category label missing: {line}"
+
+
+def test_refusal_log_carries_no_user_text_and_no_detail(monkeypatch, caplog, quiet_judge):
+    """No body, no prompt, no lyrics, no query string, no refusal detail.
+
+    The copyright refusal names the song and artist the local model identified,
+    which is DERIVED FROM the user's lyrics — logging the detail verbatim would
+    leak exactly what the no-logging rule protects. A label is logged instead.
+    """
+    CANARY = "zzcanaryzz"
+    monkeypatch.setattr(morpheus, "floor_check",
+                        lambda t, surface="image": "child-depiction" if CANARY in t else None)
+    monkeypatch.setattr(morpheus, "explain_floor",
+                        lambda t, surface="image": {"rule": "sentinel", "matched": "zz"})
+    with caplog.at_level("WARNING", logger="ph3b3"):
+        r = _generate("indie rock", f"a lyric holding {CANARY} inside it")
+    assert r.status_code == 403
+    line = _refusal_lines(caplog)[0]
+    assert CANARY not in line, "user text reached the refusal log"
+    assert "child sexualization" not in line, "refusal detail was logged verbatim"
+    assert "category-1" in line
+
+
+def test_scope_refusal_is_labelled_not_quoted(caplog, quiet_judge):
+    """A scope refusal explains itself to the user and logs only its label."""
+    with caplog.at_level("WARNING", logger="ph3b3"):
+        r = _generate("pop ballad, sung in Freddie Mercury's voice")
+    assert r.status_code == 403
+    line = _refusal_lines(caplog)[0]
+    assert "scope-voice-cloning" in line
+    assert "Mercury" not in line, "the named artist reached the log"
+
+
+def test_the_handler_does_not_change_the_response(quiet_judge):
+    """It adds a log line and nothing a client can observe."""
+    r = _generate("pop ballad, sung in Freddie Mercury's voice")
+    assert r.status_code == 403
+    assert r.headers["content-type"].startswith("application/json")
+    assert r.json()["detail"].startswith("Refused — scope: no voice cloning.")
+
+
+def test_a_successful_request_logs_no_refusal(caplog, quiet_judge):
+    with caplog.at_level("WARNING", logger="ph3b3"):
+        r = _generate("indie rock, guitars", "a verse about the weather")
+    assert r.status_code == 200
+    assert not _refusal_lines(caplog)

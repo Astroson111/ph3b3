@@ -24,6 +24,7 @@ import hashlib
 import uuid
 from io import BytesIO
 from PIL import Image  # Morpheus edit-mode upload validation / re-encode
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -319,6 +320,60 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
     allow_credentials=False,
 )
+
+
+# ── Inbound refusal log (F3, 2026-08-28) ─────────────────────────────────────
+# Until now a refusal logged WHAT fired and never WHERE it arrived. The journal
+# records outbound httpx calls only, so on 2026-08-27 seven identical
+# "amphion floor-blocked (tags)" lines could not be attributed to a route: the
+# same gate serves /amphion/generate, /amphion/variations and /amphion/remix, and
+# nothing distinguished them. A refusal you cannot place is a refusal you cannot
+# reproduce, and the surface a report arrives from is the first thing you need.
+#
+# ONE handler rather than eighteen call sites, so the routes cannot drift apart —
+# the same reason _amphion_floor_gate and _morpheus_floor_gate are each single
+# implementations.
+#
+# WHAT IS RECORDED: route template, method, client IP, and a CATEGORY LABEL.
+# WHAT IS NOT: no body, no prompt, no lyrics, no query string, no refusal detail.
+#
+# The label is derived from our own refusal strings, never passed through. That
+# distinction is load-bearing: the copyright refusal names the song and artist the
+# local model identified, which is derived from the user's lyrics, and logging it
+# would leak exactly the content the no-logging rule exists to protect. The route
+# TEMPLATE is used rather than the path so a path parameter cannot carry data into
+# the log either, and the query string is dropped for the same reason.
+def _refusal_label(detail: object) -> str:
+    """A stable label for a refusal, carrying nothing the user wrote."""
+    d = detail if isinstance(detail, str) else ""
+    if d.startswith("Refused — category "):
+        n = d[len("Refused — category "):].split(":", 1)[0].strip()
+        return f"category-{n}" if n.isdigit() else "category-unparsed"
+    if d.startswith("Refused — content profile"):
+        return "content-profile"
+    if d.startswith("Refused — scope: no voice cloning"):
+        return "scope-voice-cloning"
+    if d.startswith("Refused — scope: no copywork"):
+        return "scope-copywork"
+    if d.startswith("Refused — generator halted"):
+        return "generator-halted"
+    return "unclassified"
+
+
+@app.exception_handler(HTTPException)
+async def _log_inbound_refusal(request: Request, exc: HTTPException):
+    """Log 403s with their arrival context, then answer exactly as before.
+
+    Delegates to FastAPI's own handler so the response is byte-identical; this
+    adds a log line and changes nothing a client can observe.
+    """
+    if exc.status_code == 403:
+        route = request.scope.get("route")
+        where = getattr(route, "path", None) or request.url.path
+        client = (request.client.host if request.client else None) or "-"
+        log.warning("[safety] refusal — %s %s — client: %s — %s",
+                    request.method, where, client, _refusal_label(exc.detail))
+    return await http_exception_handler(request, exc)
 
 # ── Failed-auth throttle ─────────────────────────────────────────────────────
 # This server is published to the public internet through Tailscale Funnel, and
