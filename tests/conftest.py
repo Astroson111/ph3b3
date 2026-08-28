@@ -7,6 +7,7 @@ that constructs instantly. Nothing here touches ~/ph3b3_data/mnemosyne.db.
 
 Run:  .venv/bin/python -m pytest tests/test_memory_spine.py tests/test_recall_quality.py -v
 """
+import os
 import sys
 import time
 from pathlib import Path
@@ -18,6 +19,29 @@ sys.path.insert(0, str(REPO / "agent"))
 
 import memory_spine  # noqa: E402
 from sentence_transformers import SentenceTransformer  # noqa: E402
+
+# ── Judge the way production judges ──────────────────────────────────────────
+# The service starts with EnvironmentFile=.env, which sets
+# PH3B3_LIGHT_MODEL=ph3b3-chat:latest. pytest does not, so morpheus resolved
+# _LAYER_B_MODEL to its "hermes3:latest" fallback and EVERY Layer B number the
+# floor suites produced described a judge the service does not use. Found
+# 2026-08-28, and it is the same fault as the field-composition bug in
+# floor_text_surface_probe: a harness measuring a program nobody is running.
+#
+# Only the model-selection keys are imported, and only when not already set, so
+# a deliberate override on the command line still wins and no secret from .env
+# is pulled into the test process.
+_ENV_FILE = REPO / ".env"
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if not _line or _line.startswith("#") or "=" not in _line:
+            continue
+        _k, _, _v = _line.partition("=")
+        _k, _v = _k.strip(), _v.strip().strip('"').strip("'")
+        if _k in ("PH3B3_FLOOR_MODEL", "PH3B3_LIGHT_MODEL", "PH3B3_HEAVY_MODEL") \
+                and _k not in os.environ:
+            os.environ[_k] = _v
 
 # ── Silence the machine ──────────────────────────────────────────────────────
 # Several test files drive real FastAPI routes through TestClient, and some of

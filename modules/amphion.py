@@ -10,7 +10,8 @@ with a reproducibility sidecar (prompt, lyrics, model variant, seed) beside each
 track — including failures, so a bad result can be reproduced.
 
 SAFETY: the content floor is the Morpheus floor, reused (NOT re-authored), run on
-the prompt AND the lyrics before anything is queued. No LoRA / voice-clone path
+the prompt AND the lyrics before anything is queued — Layer A lexically, then
+Layer B semantically, both fail-closed, at the TEXT surface (see content_floor). No LoRA / voice-clone path
 exists here by construction — the workflow contains no LoRA loader and there is no
 training endpoint.
 """
@@ -100,11 +101,23 @@ def ready() -> bool:
 
 # ── Content floor — the Morpheus floor, reused, on prompt AND lyrics ─────────────
 def content_floor(tags: str, lyrics: str = "") -> str | None:
-    """Return a floor category string if the hard floor fires on the prompt OR the
-    lyrics, else None. Reuses morpheus.floor_check verbatim — never a parallel floor."""
+    """Return the floor RULE that fires on the prompt or the lyrics, else None.
+    Reuses morpheus.floor_check — never a parallel floor.
+
+    LAYER A ONLY. The full gate is server._amphion_floor_gate, which adds the
+    halt flag, both Layer B judges, the localhost interlock and the profile
+    check. Every dispatch path goes through that; this helper exists for callers
+    that want the cheap lexical answer without a model call, and it must not be
+    mistaken for the gate.
+
+    surface="text": Amphion renders no figure, so category 1 uses the 2026-07-28
+    text definition (sexualization or exploitation of a minor) rather than the
+    2026-07-31 image weld (a minor subject at all). See
+    morpheus.minor_subject_signal for why the weld does not transplant.
+    """
     for field in (tags or "", lyrics or ""):
         if field.strip():
-            cat = morpheus.floor_check(field)
+            cat = morpheus.floor_check(field, surface="text")
             if cat:
                 return cat
     return None
