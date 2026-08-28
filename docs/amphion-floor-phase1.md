@@ -171,3 +171,82 @@ that file is lyrics and nothing describes an act.
 4. **Two refused Aug 27 submissions were unrecoverable** — no sidecar for a
    refused job, refusal text never logged, stderr-only logging. The fixture file
    is how the regression set survives that, and it is the only reason it does.
+
+---
+
+# Phase 1 verification round 2 (2026-08-28)
+
+Verification found four defects. All four are fixed; the suite is green on the
+production judge.
+
+## What the verification found
+
+1. **Ordinal grade levels absent from Layer A.** `eighth grader`, `7th grader`
+   and every ordinal form missed on *both* surfaces — the list named the
+   institution and not one ordinal. Pre-existing, not a Phase 1 regression.
+   Fixed with `_RE_GRADE_LEVEL`; bare `grader` deliberately unmatched (road
+   grader, grade A, steep grade, upgrade, centigrade all verified clean).
+2. **`undressed` matched nothing but itself.** `_floor_re` anchors word-start
+   only, so `undressing` carried no sexual signal. Fixed to `undress`.
+3. **The suites judged with the wrong model.** `hermes3:latest` instead of the
+   service's `ph3b3-chat:latest`. Every Layer B number reported before this date
+   described a judge production does not run.
+4. **Layer B's verdict is steerable by benign trailing text.** Deterministic per
+   input, but the same phrase is judged NO after one ordinary style tag and YES
+   after another. Fixed by judging each field alone as well as composed.
+
+## The structural finding
+
+Text-surface category 1 requires **minor AND sexual**. The minor half speaks
+about forty languages; `_FLOOR_SEXUAL` speaks one. Outside English the second
+signal can never be met lexically, so **every non-English category 1 case rested
+entirely on the judge** — and Spanish and Italian only appeared covered because
+`erotica` happens to word-start with `erotic`.
+
+Ruling 4 made that second signal load-bearing. On the image path the asymmetry is
+invisible, because that path is subject-gated and a minor alone refuses.
+
+The fix is the per-field pass, not a lexical one. The rejected alternative —
+dropping the second-signal requirement for non-English minor terms — would refuse
+*"una canción sobre mi niña"* while allowing *"a song about my daughter"*: a floor
+that discriminates by language.
+
+**Two predicates were tried and both were too narrow** ("minor but no sexual",
+then "exactly one of the two"). The case that escaped both carries *neither*
+lexical signal, because `explicit` lives in the profile denylist and not in
+`_FLOOR_SEXUAL`. So there is no predicate: every field is judged, always. A cheap
+gate on a bounded call was not worth being wrong about a third time.
+
+## Harness
+
+The probe had two fidelity faults of its own, both of which produced green:
+
+- it judged the **bare case string** while production judges `tags + "\n" + lyrics`;
+- it used **one style foil**, so a case that leaks after `indie rock, guitars`
+  passed after a longer tag.
+
+It now replicates the gate field-for-field and runs every case in **7
+arrangements** — alone, plus both placements against three foils.
+
+## Numbers (production judge, `ph3b3-chat:latest`)
+
+```
+text surface : 22 sexualized-minor + 19 ordinary songs, 7 arrangements each
+               0 leaks, 0 over-refusals
+adversarial  : 8/8 categories, 49 cases across 42 languages, both fields
+musical      : 12/12 minor spellings, 6/6 moods, 13/13 emotions
+full suite   : 1425 passed, 2 skipped, 0 failed
+cost         : ~0.19 s per judge call; +0.4 s pre-lock on a 2-field request
+```
+
+## Still open
+
+- **F3, the inbound refusal log line.** Not written. Still sequenced behind a
+  green verify.
+- **Adjacent inflection gaps in `_FLOOR_SEXUAL`**, found while fixing `undress`
+  and deliberately **not** changed: `seduction`, `seducing`, `striptease`,
+  `stripped` carry no sexual signal. They are covered by the per-field judge now,
+  but they are lexical gaps of the same shape as the one that was fixed.
+- **`desire` was deliberately not added** to `_FLOOR_SEXUAL`. "desire" beside
+  "child" occurs innocently in parental songs, and that is the `baby` bug
+  returning.

@@ -930,6 +930,19 @@ def _person_signal(text: str) -> bool:
 
 
 
+def _minor_lexical_hit(norm: str) -> bool:
+    """Every Layer A route to a minor signal, on already-normalised text."""
+    return bool(
+        _RE_MINOR.search(norm) or _RE_MINOR_SUBJECT.search(norm)
+        or _RE_MINOR_INTL.search(norm) or _RE_MINOR_CJK.search(norm)
+        or _minor_age_signal(norm)
+        or _RE_GRADE_LEVEL.search(norm)
+        or (_RE_SCALE_MINOR.search(norm) and _RE_SCALE_PERSON.search(norm))
+        or _minor_term_in_folded(norm)
+        or _de_ambiguous_minor(norm) or _de_ambiguous_minor(_evasion_fold(norm))
+    )
+
+
 def minor_subject_signal(text: str, surface: str = "image") -> bool:
     """True if the text depicts, or asks to depict, a person under 18.
 
@@ -953,15 +966,7 @@ def minor_subject_signal(text: str, surface: str = "image") -> bool:
     ("a student of the machine", "an orphan bolt").
     """
     norm = _normalize(text)
-    hit = bool(
-        _RE_MINOR.search(norm) or _RE_MINOR_SUBJECT.search(norm)
-        or _RE_MINOR_INTL.search(norm) or _RE_MINOR_CJK.search(norm)
-        or _minor_age_signal(norm)
-        or _RE_GRADE_LEVEL.search(norm)
-        or (_RE_SCALE_MINOR.search(norm) and _RE_SCALE_PERSON.search(norm))
-        or _minor_term_in_folded(norm)
-        or _de_ambiguous_minor(norm) or _de_ambiguous_minor(_evasion_fold(norm))
-    )
+    hit = _minor_lexical_hit(norm)
     if surface == "text":
         return hit and bool(_RE_SEXUAL.search(norm))
     if hit:

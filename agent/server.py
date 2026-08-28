@@ -5795,6 +5795,38 @@ def _amphion_floor_gate(tags: str, lyrics: str, request: Request | None) -> None
                     "rule: layer-b-judge — matched: (semantic, no term; a judge timeout or "
                     "unreachable model also lands here, fail-closed)")
         raise HTTPException(403, detail=morpheus.refusal_text("child-depiction"))
+    # ── Layer B, per FIELD in isolation ──────────────────────────────────────
+    # The composed pass above is STEERABLE. The same phrase in tags is judged NO
+    # after "indie rock, guitars" and YES after "indie rock, live band, electric
+    # guitar, 120 bpm" — five runs each, deterministic per input. A benign style
+    # tag in the other field was deciding a child-safety question.
+    #
+    # So each field is also judged ALONE, where there is no trailing text to
+    # steer the answer. Unconditionally, with no predicate deciding when it is
+    # worth asking: two attempts at such a predicate ("minor signal but no sexual
+    # signal", then "exactly one of the two") were each too narrow, and the case
+    # that escaped both — "wanting someone too young to drive, explicit chorus" —
+    # carries NEITHER lexical signal, because "explicit" lives in the profile
+    # denylist and not in _FLOOR_SEXUAL. A cheap gate on an expensive-but-bounded
+    # call is not worth being wrong about a third time.
+    #
+    # This matters most outside English: text-surface category 1 needs a sexual
+    # signal, _FLOOR_SEXUAL is English-only, and the minor lists speak about
+    # forty languages — so for every non-English prompt the judge IS the floor.
+    #
+    # Runs after the composed pass, so an already-refused request never pays.
+    # Skipped when a field IS the composed text (nothing new to ask).
+    # Strictly additive: it can only ever add a refusal.
+    for field, which in fields:
+        f = (field or "").strip()
+        if not f or f == composed.strip():
+            continue
+        if morpheus.semantic_minor_check(field, surface="text"):
+            log.warning("[safety] amphion floor-blocked (%s, isolated) — category: "
+                        "child-depiction — rule: layer-b-judge-field — matched: "
+                        "(semantic, no term)", which)
+            raise HTTPException(403, detail=morpheus.refusal_text("child-depiction"))
+
     if morpheus.real_person_compromised(composed, surface="text"):
         log.warning("[safety] amphion floor-blocked (semantic) — category: "
                     "real-person-compromising — rule: layer-b-identity — matched: (semantic, no term)")
