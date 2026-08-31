@@ -15,7 +15,10 @@ named by source (dio_*.jpg vs webcam_*.jpg). Kill-switch: PH3B3_VISION_FALLBACK=
 restores strict Stack-Chan-only (Dio offline → offline, no webcam attempt).
 
 The fallback changes WHICH camera, never WHEN vision may run: prompt-only `look`
-(Phase 1) still holds, and the ghost-hunt monitoring path (set_baseline /
+(Phase 1) still holds. The PC webcam is PROMPT-ONLY (2026-08-31): the timed paths
+(capture / capture_and_describe, used by evening capture) pass allow_local=False
+and will use Dio or nothing — a timer is not a prompt, and that camera faces the
+room the user is sitting in. and the ghost-hunt monitoring path (set_baseline /
 check_anomaly / start_monitoring) is still gated to an active investigation by the
 server dispatch. Every captured frame — Dio or webcam — lands in
 ~/ph3b3_data/captures, the one and only photo store (the Desktop "Ph3b3_Captures"
@@ -55,22 +58,47 @@ PUSH_FRESH_S = float(os.getenv("PH3B3_PUSH_FRESH_S", "8"))
 DIO_VERIFY_COOLDOWN = float(os.getenv("PH3B3_DIO_VERIFY_COOLDOWN", "300"))
 
 
+def _audit(event: str, ok: bool, source: str = "-", reason: str = "-",
+           nbytes: int = 0) -> None:
+    """One greppable line per vision EVENT — never the frame, never the description.
+
+    The no-tracking rule stands: this records THAT a capture was attempted and how
+    it ended, not what was seen. It exists so "sight-claims vs captures returned"
+    is a countable number instead of a reconstruction from the captures folder —
+    which is how the 2026-08-31 hallucination had to be diagnosed after the fact.
+
+        grep '[vision-audit]' <log> | grep 'ok=True' | wc -l
+    """
+    log.info("[vision-audit] event=%s ok=%s source=%s bytes=%d reason=%s",
+             event, ok, source, nbytes, reason)
+
+
 def _truthy(v) -> bool:
     return str(v).strip().lower() not in ("0", "false", "no", "off", "")
 
 
 ANALYSIS_PROMPT = (
-    "You are Ph3b3, seeing through your camera right now. "
-    "Describe what you observe — people, objects, hardware, anything unusual. "
-    "Be direct and precise. Note anything that seems out of place."
+    # NO persona framing here on purpose. "You are Ph3b3, looking at..." made the
+    # VLM answer *as a character* — 1 in 5 runs it asked a question back instead of
+    # describing ("Can you describe your current visibility?"), which reaches the
+    # user as a non-answer to "can you see me". Plain instruction: 0/5 failures on
+    # the same frame. Phoebe supplies the voice when she relays it; the describer
+    # only has to be accurate.
+    "Describe what is visible in this photograph: people, objects, the room. "
+    "Be direct and precise, and note anything that seems out of place. "
+    "If something is unclear, partly hidden, or you are unsure what an object is, say so "
+    "('looks like', 'possibly', 'I can't tell') rather than guessing a specific object — "
+    "a confident wrong answer is worse than an uncertain right one. "
+    "If the image is dark, blurred or empty, say that plainly."
 )
 
 # Shorter prompt for the evening-capture narration: each frame is spoken aloud
 # on a timer, so keep it to a sentence or two rather than a full report.
 NARRATION_PROMPT = (
-    "You are Ph3b3, glancing through your camera. In ONE or two short sentences, "
-    "say what you see right now — people, objects, what's happening. Plain and brief. "
-    "If the frame is dark or empty, say that plainly — do not invent detail."
+    # Same reason as ANALYSIS_PROMPT: instruction, not persona.
+    "In ONE or two short sentences, say what is visible in this photograph — people, "
+    "objects, what is happening. Plain and brief. If the image is dark or empty, say "
+    "that plainly — do not invent detail."
 )
 
 # Every result names the source so the LLM tells the user which eyes it used.
@@ -83,6 +111,15 @@ _SRC_TAG = {
                   "the computer's camera was used). Vision SUCCEEDED — relay the description "
                   "above and mention you used the backup PC camera.]"),
 }
+
+
+class VisionModelDown(RuntimeError):
+    """The frame WAS captured but the describer failed. Never a description.
+
+    Split out from a plain error string so a model failure can never be relayed as
+    an observation — and so the audit counts it as a turn with NO description,
+    which is what "sight-claims == captures returned" actually means.
+    """
 
 
 class VisionModule:
@@ -153,10 +190,16 @@ class VisionModule:
         return path.name
 
     # ── source order: Stack-Chan first, then local webcam fallback ────────────
-    def _grab_frame(self):
+    def _grab_frame(self, allow_local: bool = True):
         """Return (jpeg_bytes, source) trying Dio first then a local camera.
         source is 'stackchan' | 'webcam' | None (both failed). BLOCKING — the
-        caller must run this off the event loop (server dispatch uses to_thread)."""
+        caller must run this off the event loop (server dispatch uses to_thread).
+
+        allow_local=False forbids the PC webcam for this grab. TIMED paths pass
+        False: the PC camera points at the room the user is sitting in, and it may
+        only be opened on a direct ask (Astro, 2026-08-31 — "only use camera when
+        prompted"). A timer is not a prompt. Dio is a different matter — she is a
+        robot the user placed deliberately, and timed capture through her stays."""
         # PUSH-primary: the native photo loop has Dio capture on-device and POST
         # the frame just before this call. If a fresh Dio push is already in hand,
         # use it directly and skip the :8080 pull entirely (pull is now fallback).
@@ -166,7 +209,7 @@ class VisionModule:
         jpeg = self._request_and_wait(DIO_WAIT)
         if jpeg is not None:
             return jpeg, "stackchan"
-        if self.fallback_enabled:
+        if allow_local and self.fallback_enabled:
             jpeg = self._local_capture()
             if jpeg is not None:
                 return jpeg, "webcam"
@@ -268,6 +311,47 @@ class VisionModule:
         return idxs or [0]
 
     # ── both sources dead → one clear message naming both failures ────────────
+    # ── why did a capture fail? name it, never a vague "unavailable" ──────────
+    def _device_holder(self) -> str | None:
+        """Process name currently holding a /dev/video* node, or None.
+
+        V4L2 is single-open: while OBS streams, every capture here fails. Saying
+        "the webcam isn't available" for that is the same silent-ish failure the
+        brief forbids — the user can act on "OBS has it", not on "unavailable".
+        Best-effort /proc scan; never raises.
+        """
+        try:
+            for pid in os.listdir("/proc"):
+                if not pid.isdigit():
+                    continue
+                fddir = f"/proc/{pid}/fd"
+                try:
+                    fds = os.listdir(fddir)
+                except OSError:
+                    continue                      # not ours / gone mid-scan
+                for fd in fds:
+                    try:
+                        if not os.readlink(f"{fddir}/{fd}").startswith("/dev/video"):
+                            continue
+                    except OSError:
+                        continue
+                    try:
+                        return open(f"/proc/{pid}/comm").read().strip() or f"pid {pid}"
+                    except OSError:
+                        return f"pid {pid}"
+        except Exception:
+            pass
+        return None
+
+    def _capture_failure_reason(self) -> str:
+        """A stated reason for a failed local capture — always specific."""
+        holder = self._device_holder()
+        if holder:
+            return f"the camera is in use by {holder}"
+        if not glob.glob("/dev/video*"):
+            return "no camera is connected"
+        return "the camera didn't return a frame"
+
     def _offline_msg(self) -> str:
         if self.fallback_enabled:
             return ("[I can't see right now — Stack-Chan's camera is offline AND no local PC "
@@ -280,7 +364,12 @@ class VisionModule:
         jpeg, src = self._grab_frame()
         if jpeg is None:
             return self._offline_msg()
-        desc = self._analyze(jpeg, prompt or ANALYSIS_PROMPT)
+        try:
+            desc = self._analyze(jpeg, prompt or ANALYSIS_PROMPT)
+        except VisionModelDown as e:
+            _audit("look", ok=False, source=src, reason=str(e))
+            return f"[I got a frame but couldn't describe it — {e}. I'm not guessing.]"
+        _audit("look", ok=True, source=src, nbytes=len(jpeg))
         return f"{desc}{_SRC_TAG[src]}"
 
     # ── explicit user-invoked webcam photo (take_photo / describe_view) ───────
@@ -289,32 +378,51 @@ class VisionModule:
     # audit trail. Never call these proactively. One frame per call — no burst.
     def take_photo(self):
         """Grab ONE webcam frame and save it (webcam_*.jpg → captures/Argus feed).
-        Returns a spoken confirmation, or a plain failure if no camera. No retry."""
+        Returns a spoken confirmation, or a NAMED failure. No retry, no guessing."""
         jpeg = self._local_capture()          # grabs + persists a webcam_*.jpg
         if jpeg is None:
-            return "The webcam isn't available right now, so I couldn't take the photo."
+            reason = self._capture_failure_reason()
+            _audit("take_photo", ok=False, reason=reason)
+            return f"I couldn't take the photo — {reason}."
+        _audit("take_photo", ok=True, source="webcam", nbytes=len(jpeg))
         return "Photo taken — saved to your captures."
 
     def describe_view(self):
-        """Grab ONE webcam frame, save it (captures/Argus feed), then describe it
-        with LLaVA. Returns the description, or a plain failure if no camera. The
-        frame is always on record so the description has its source image."""
+        """Grab ONE webcam frame, save it, then describe it with the VLM.
+
+        NO CLAIM OF SIGHT WITHOUT A CAPTURE THAT RETURNED. A failed grab returns a
+        named refusal, never a description — the 2026-08-31 transcript ("I can see
+        you are holding a book" with zero captures on disk) is what this prevents.
+        """
         jpeg = self._local_capture()
         if jpeg is None:
-            return "The webcam isn't available right now, so I can't see anything to describe."
-        desc = self._analyze(jpeg, ANALYSIS_PROMPT)
-        # Relay hint (same pattern as look's _SRC_TAG) — without it the weak model
-        # summarises the result away ("I received the analysis") instead of telling
-        # the user what's in view.
-        return (f"{desc}\n\n[This is what the computer's webcam sees right now. You DID "
-                f"see this — relay this description to the user as what you see.]")
+            reason = self._capture_failure_reason()
+            _audit("describe_view", ok=False, reason=reason)
+            return f"[I can't see anything right now — {reason}. I'm not guessing.]"
+        try:
+            desc = self._analyze(jpeg, ANALYSIS_PROMPT)
+        except VisionModelDown as e:
+            # Capture succeeded, description did not. That is NOT a sight-claim,
+            # so it is not logged as one — the frame stays on disk as the record.
+            _audit("describe_view", ok=False, source="webcam",
+                   nbytes=len(jpeg), reason=str(e))
+            return (f"[I took a frame but couldn't describe it — {e}. "
+                    f"I'm not guessing at what's in it.]")
+        _audit("describe_view", ok=True, source="webcam", nbytes=len(jpeg))
+        # Relay hint: the weak model otherwise summarises the result away. It used
+        # to say "You DID see this", which also licensed upgrading a hedge into a
+        # certainty — so it now asserts the CAPTURE, not the confidence.
+        return (f"{desc}\n\n[This came from ONE still frame captured just now. Relay it "
+                f"as an observation and keep its uncertainty exactly as written — do not "
+                f"turn 'looks like' into 'I can see that'. You take single stills when "
+                f"asked; you do not watch continuously.]")
 
     # ── timed capture (evening capture): pull + persist a frame, no analysis ──
     def capture(self) -> bool:
         """Pull one frame (Dio, else webcam fallback) and persist it to
         CAPTURE_DIR. Returns True if a frame landed, False if both sources fail.
         The frame is named by source (dio_/webcam_); _grab_frame does the save."""
-        jpeg, _src = self._grab_frame()
+        jpeg, _src = self._grab_frame(allow_local=False)   # timer: Dio only
         return jpeg is not None
 
     # ── timed capture WITH per-frame narration (evening capture) ──────────────
@@ -324,10 +432,14 @@ class VisionModule:
         speaks this straight through TTS), or None if no frame arrived. When the
         webcam fallback is used, the source is said plainly so it never passes as
         Dio's eyes."""
-        jpeg, src = self._grab_frame()
+        jpeg, src = self._grab_frame(allow_local=False)   # timer: Dio only
         if jpeg is None:
             return None
-        desc = self._analyze(jpeg, NARRATION_PROMPT)
+        try:
+            desc = self._analyze(jpeg, NARRATION_PROMPT)
+        except VisionModelDown as e:
+            _audit("capture_and_describe", ok=False, source=src, reason=str(e))
+            return None
         return f"Through the backup PC camera, {desc}" if src == "webcam" else desc
 
     # ── ghost-hunt: baseline / anomaly (gated to an investigation in dispatch) ─
@@ -345,12 +457,16 @@ class VisionModule:
         jpeg, src = self._grab_frame()
         if jpeg is None:
             return self._offline_msg()
-        analysis = self._analyze(
+        try:
+            analysis = self._analyze(
             jpeg,
             "This is a live frame from a ghost-hunt camera whose scene was empty/normal at "
             "baseline. Report ONLY what is new, moved, or unusual — if nothing stands out, "
             "say so plainly."
-        )
+            )
+        except VisionModelDown as e:
+            _audit("check_anomaly", ok=False, source=src, reason=str(e))
+            return f"[I got a frame but couldn't analyse it — {e}. I'm not guessing.]"
         if self.memory:
             self.memory.log_anomaly(description=analysis[:200], source="camera")
         return f"{analysis}{_SRC_TAG[src]}"
@@ -381,16 +497,37 @@ class VisionModule:
 
     # ── LLaVA ─────────────────────────────────────────────────────────────────
     def _analyze(self, jpeg: bytes, prompt: str) -> str:
-        try:
-            payload = {
-                "model":  VISION_MODEL,
-                "prompt": prompt,
-                "images": [base64.b64encode(jpeg).decode("ascii")],
-                "stream": False,
-            }
-            r = requests.post(OLLAMA_API_URL, json=payload, timeout=60)
-            if r.status_code == 200:
-                return r.json().get("response", "No response from vision model.")
-            return f"Vision model error: {r.status_code}"
-        except Exception as e:
-            return f"Vision error: {e}"
+        """Describe a frame, or raise VisionModelDown. Never returns prose on failure.
+
+        Returning "Vision model error: 500" as if it were a description put an
+        error string where an observation belongs — one relay away from being read
+        aloud as what she sees. Failures raise; the caller states them.
+
+        Retries ONCE. The observed failure is a VRAM race: ollama tries to load the
+        vision model while the chat model is still resident, the runner dies
+        ("llama runner terminated, exit status 2" → HTTP 500), and that crash frees
+        the memory — so the second attempt usually succeeds. One retry, not a loop.
+        """
+        last = ""
+        for attempt in (1, 2):
+            try:
+                r = requests.post(OLLAMA_API_URL, json={
+                    "model": VISION_MODEL,
+                    "prompt": prompt,
+                    "images": [base64.b64encode(jpeg).decode("ascii")],
+                    "stream": False,
+                }, timeout=90)
+                if r.status_code == 200:
+                    text = (r.json().get("response") or "").strip()
+                    if text:
+                        return text
+                    last = "the vision model returned nothing"
+                else:
+                    last = f"the vision model failed (HTTP {r.status_code})"
+            except Exception as e:
+                last = f"the vision model is unreachable ({type(e).__name__})"
+            if attempt == 1:
+                log.warning("vision model attempt 1 failed (%s) — retrying once", last)
+                time.sleep(2.0)
+        raise VisionModelDown(last)
+

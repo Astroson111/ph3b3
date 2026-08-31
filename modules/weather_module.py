@@ -8,7 +8,45 @@ try:
 except ImportError:
     from modules import intent_registry
 
+try:
+    import metis
+except ImportError:
+    try:
+        from modules import metis
+    except ImportError:
+        metis = None
+
 log = logging.getLogger("ph3b3.weather")
+
+
+# ── Egress gate ───────────────────────────────────────────────────────────────
+# wttr.in is a network fetch, so it answers to the SAME master switch as Metis.
+# It did not, until now: the toggle sat on the Status card next to web search
+# while weather shelled out to curl regardless, which made the switch a claim
+# the system did not keep.
+#
+# The gate lives HERE, in the two methods that open the socket, and NOT in the
+# callers. Three paths reach this code — the _answer_weather intent dispatch,
+# the weather_current tool, and weather_ghost_hunting (via self.current) — and a
+# gate per caller is a gate that drifts; the fourth caller added later is the one
+# that forgets. Same reason _amphion_floor_gate is one shared implementation.
+#
+# Fails CLOSED. An unreadable or missing switch means no packets, not "probably
+# fine": that is the posture the toggle exists to guarantee.
+_EGRESS_OFF = ("Web access is off, so I can't fetch live conditions. Turn it on in the "
+               "Status tab and ask me again.")
+
+
+def _egress_ok() -> bool:
+    """True only when the shared egress switch is verifiably ON."""
+    if metis is None:
+        log.warning("[weather] egress switch unreadable (metis unavailable) — refusing fetch")
+        return False
+    try:
+        return bool(metis.egress_enabled())
+    except Exception as e:                       # unreadable switch == off
+        log.warning("[weather] egress switch unreadable (%s) — refusing fetch", e)
+        return False
 
 # ── Intent claim (precedence over Metis forced search) ────────────────────────
 # The weather module OWNS weather/forecast/temperature phrasing. A claimed turn is
@@ -110,6 +148,8 @@ class WeatherModule:
         return "Weather exists. You're in it."
 
     def current(self, location=None):
+        if not _egress_ok():                     # master switch, before any socket
+            return _EGRESS_OFF
         loc = location or DEFAULT_LOCATION
         if not loc:
             return "I don't know your location — tell me where you are, or set PH3B3_DEFAULT_LOCATION in .env."
@@ -127,6 +167,8 @@ class WeatherModule:
             return f"Weather error: {e}"
 
     def forecast(self, location=None):
+        if not _egress_ok():                     # master switch, before any socket
+            return _EGRESS_OFF
         loc = location or DEFAULT_LOCATION
         if not loc:
             return "I don't know your location — tell me where you are, or set PH3B3_DEFAULT_LOCATION in .env."
@@ -143,6 +185,11 @@ class WeatherModule:
             return f"Weather error: {e}"
 
     def good_for_ghost_hunting(self, location=None):
+        # self.current() is gated, so this path is already covered — but return
+        # the refusal PLAINLY instead of wrapping it in "Current: ..." and field
+        # notes derived from a sentence about a toggle.
+        if not _egress_ok():
+            return _EGRESS_OFF
         current = self.current(location)
         advice = []
         w = current.lower()

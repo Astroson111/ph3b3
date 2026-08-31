@@ -172,11 +172,13 @@ from recipes import RecipeStore
 import morpheus
 import amphion                    # song generation (ACE-Step 1.5) — Morpheus's sibling (shares gpu_lock + floor)
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
+import atalanta                   # sports results egress (ESPN); SETTLED GAMES ONLY
 import intent_registry           # dedicated-module intent claims (precedence over Metis)
 import device_auth               # per-device auth keys (Iris/Dio), decoupled from the human login
 import dnd_dice                  # dice-notation roller behind the utility tray
 import device_commands           # Iris track-playback voice-command gate (pre-LLM intercept)
 import vad_turns                 # per-turn VAD diagnostics (metadata only — never audio)
+import camera_module          # webcam pan/tilt/zoom (UVC v4l2); master switch, default OFF
 import apelles                   # photo editor — edits only, never generates (ruling A)
 import audio_monitor             # Silero VAD endpointing + level meter (chat cutoff / ghost readout)
 from triage import triage_gate   # clarification guard before main inference
@@ -640,6 +642,13 @@ _CAPTURE_NUDGE = (
     "say the camera is off, or answer from memory. That is a direct request and you act "
     "on it. The ONLY limit: never capture proactively, ambiently, on a timer, or to "
     "double-check something the user didn't ask you to see. Every capture happens out loud."
+    "\n\nNO SIGHT WITHOUT A CAPTURE. You may only say what you see when a capture tool "
+    "returned a description THIS TURN. If no tool ran, you have not seen anything: say "
+    "\"I don't have a capture — want me to take one?\" If a tool ran and failed, relay its "
+    "stated reason (busy, unreachable, no frame) — never substitute a guess. Never say you "
+    "are watching, monitoring, streaming, or keeping an eye on anything: you take single "
+    "stills on request, you do not have continuous view. When a description hedges "
+    "(\"looks like\", \"possibly\"), keep the hedge — do not upgrade it to certainty."
 )
 SYSTEM_PROMPT = load_soul() + _SEARCH_NUDGE + _CAPTURE_NUDGE + memory.as_context()
 
@@ -936,6 +945,18 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "calendar_today": result = calendar.today()
         elif name == "calendar_week": result = calendar.week()
         elif name == "weather_current": result = weather.current(args.get("location"))
+        elif name == "get_scores":
+            result = await asyncio.to_thread(_tool_sports, "scores", args)
+        elif name == "camera_status":
+            result = await asyncio.to_thread(_tool_camera, "status", args)
+        elif name == "camera_move":
+            result = await asyncio.to_thread(_tool_camera, "move", args)
+        elif name == "camera_reset":
+            result = await asyncio.to_thread(_tool_camera, "reset", args)
+        elif name == "get_standings":
+            result = await asyncio.to_thread(_tool_sports, "standings", args)
+        elif name == "get_schedule":
+            result = await asyncio.to_thread(_tool_sports, "schedule", args)
         elif name == "get_time": result = f"It is {_now_full()}."
         elif name == "weather_ghost_hunting": result = weather.good_for_ghost_hunting(args.get("location"))
         elif name == "extract_job_posting": result = resume.extract_job_posting(args["source"])
@@ -1259,6 +1280,88 @@ def _tool_list_singers() -> str:
     return "Singers available:\n" + "\n".join(lines)
 
 
+def _tool_camera(action: str, args: dict) -> str:
+    """Camera pan/tilt/zoom for the tool loop.
+
+    Refusals are spoken plainly (off / unplugged) because "she moved it and
+    nothing happened" is the one outcome worth never producing. Clamped values
+    are reported as what they BECAME, so she describes the real shot.
+    """
+    try:
+        if action == "status":
+            st = camera_module.status()
+            if not st["present"]:
+                return "No camera is connected."
+            ax = st.get("axes", {})
+            if not ax:
+                return "Camera is connected but reports no pan/tilt/zoom controls."
+            bits = [f"{k}={v['value']} (range {v['min']}..{v['max']})"
+                    for k, v in ax.items()]
+            state = "on" if st["enabled"] else "off"
+            return f"Camera framing — {', '.join(bits)}. Control switch is {state}."
+        if action == "move":
+            got = camera_module.move(
+                pan=args.get("pan"), tilt=args.get("tilt"), zoom=args.get("zoom"))
+            return "Camera moved to " + ", ".join(
+                f"{k}={v}" for k, v in got["applied"].items()) + "."
+        if action == "reset":
+            camera_module.reset()
+            return "Camera reset — centred and fully wide."
+        return f"Unknown camera action: {action}"
+    except camera_module.CameraOff as e:
+        return f"Camera control is off. {e}"
+    except camera_module.CameraMissing as e:
+        return f"No camera. {e}"
+    except Exception as e:
+        log.warning("camera tool failed: %s", e)
+        return f"Camera control failed: {str(e)[:200]}"
+
+
+# ── Atalanta (sports) — SETTLED RESULTS ONLY ─────────────────────────────────
+# Descriptions say plainly what this is NOT for. Rules, history and "why is it
+# called a safety" are answered from weights and must cause no egress at all, so
+# the model is told that here rather than being left to infer it.
+ATALANTA_TOOLS = [
+    {"type":"function","function":{"name":"get_scores","description":"Get FINISHED sports results (final scores) for a league on a date. Settled games only — it never reports a live/in-progress score. NOT for rules, history, explanations of terminology, predictions or odds: answer those yourself with NO tool call. Leagues: nfl, nba, mlb, nhl, cfb, cbb, mls, epl.","parameters":{"type":"object","properties":{"league":{"type":"string","description":"One of: nfl, nba, mlb, nhl, cfb, cbb, mls, epl"},"team":{"type":"string","description":"Optional team name to filter to"},"date":{"type":"string","description":"YYYYMMDD; omit for yesterday"}},"required":["league"]}}},
+    {"type":"function","function":{"name":"get_standings","description":"Get current league standings/table. NOT for rules, history or explanations — answer those yourself with no tool call.","parameters":{"type":"object","properties":{"league":{"type":"string","description":"One of: nfl, nba, mlb, nhl, cfb, cbb, mls, epl"}},"required":["league"]}}},
+    {"type":"function","function":{"name":"get_schedule","description":"Get UPCOMING scheduled fixtures for a league. These are scheduled, not results. NOT for rules or history.","parameters":{"type":"object","properties":{"league":{"type":"string","description":"One of: nfl, nba, mlb, nhl, cfb, cbb, mls, epl"},"team":{"type":"string"},"days":{"type":"integer","default":7}},"required":["league"]}}},
+]
+ATALANTA_TOOL_NAMES = frozenset(t["function"]["name"] for t in ATALANTA_TOOLS)
+TOOLS += ATALANTA_TOOLS
+
+
+# ── Camera control — pan/tilt/zoom on the webcam she is seen through ─────────
+# Digital pan/tilt inside a 4K sensor: a move is free, a hard zoom spends pixels.
+# Descriptions state the units so the model does not invent a scale of its own.
+CAMERA_TOOLS = [
+    {"type":"function","function":{"name":"camera_status","description":"Read the webcam's current framing — where it is panned/tilted and how far it is zoomed in, plus the limits of travel. Use before moving if you need to know where you are starting from.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"camera_move","description":"Reframe the webcam by panning, tilting and/or zooming. Absolute positions, not relative nudges. Pan/tilt run -36000 (left/up) to 36000 (right/down) with 0 centred; zoom runs 10 (widest) to 19 (tightest). Out-of-range values are clamped to the edge of travel and the tool reports what they actually became. The pan/tilt is digital — it crops inside the sensor, so zooming hard costs image quality.","parameters":{"type":"object","properties":{"pan":{"type":"integer","description":"-36000 (left) to 36000 (right); 0 is centred"},"tilt":{"type":"integer","description":"-36000 (up) to 36000 (down); 0 is centred"},"zoom":{"type":"integer","description":"10 (widest shot) to 19 (tightest)"}},"required":[]}}},
+    {"type":"function","function":{"name":"camera_reset","description":"Put the webcam back to a centred, fully wide shot. Use when the framing has drifted or the user asks you to go back to normal.","parameters":{"type":"object","properties":{}}}},
+]
+CAMERA_TOOL_NAMES = frozenset(t["function"]["name"] for t in CAMERA_TOOLS)
+TOOLS += CAMERA_TOOLS
+
+
+def tools_for_turn() -> list:
+    """The advertised tool set for THIS turn.
+
+    A switch that is OFF means those tools are ABSENT from what Phoebe is offered,
+    not merely refused when called — sports behind Metis egress, pan/tilt/zoom
+    behind the camera switch. A tool she can see is a tool she will mention, and
+    "I could check the scores but web access is off" is a worse answer than never
+    raising it. The endpoint still refuses with a stated reason for anything that
+    reaches it another way — absent from the menu, never a 404.
+    """
+    hidden = set()
+    if not atalanta.egress_ok():
+        hidden |= ATALANTA_TOOL_NAMES
+    if not camera_module.enabled():
+        hidden |= CAMERA_TOOL_NAMES
+    if not hidden:
+        return TOOLS
+    return [t for t in TOOLS if t["function"]["name"] not in hidden]
+
+
 ONE_SHOT_TOOLS = frozenset({"tell_joke", "roast", "web_search"})   # web_search: ONE search per turn (no autonomous loops)
 
 
@@ -1544,6 +1647,64 @@ async def _tool_web_search(query: str, session_id: str = "") -> str:
     return f'I looked up "{query}" on the web.\n\n{summary}\n\nSources:\n{srcs}'   # 8. announce + real cites
 
 
+# ── Atalanta (sports) tool handler ────────────────────────────────────────────
+def _tool_sports(kind: str, args: dict, for_model: bool = True) -> str:
+    """get_scores / get_standings / get_schedule.
+
+    ANNOUNCED: the announce line is returned as part of the tool result, so the
+    fetch is always visible in the answer rather than happening quietly behind
+    one. FAIL LOUD: a broken or rate-capped backend says so — it never degrades
+    into a plausible-sounding score, which is the one unforgivable failure for
+    this module. The question itself is never logged; only the league is.
+    """
+    league = (args.get("league") or "").strip()
+    try:
+        if kind == "scores":
+            res = atalanta.get_scores(league, args.get("team"), args.get("date"))
+            body = atalanta.format_scores(res, for_model)
+        elif kind == "standings":
+            res = atalanta.get_standings(league)
+            body = atalanta.format_standings(res, for_model)
+        else:
+            res = atalanta.get_schedule(league, args.get("team"), args.get("days", 7))
+            body = atalanta.format_schedule(res, for_model)
+    except atalanta.SportsBusy:
+        return ("I've checked scores a lot in the last minute — give me a moment "
+                "before the next one.")
+    except atalanta.SportsBroken as e:
+        log.error("[atalanta] backend broken (%s): %s", kind, e)
+        return ("I can't reach the scores service right now, so I don't have that "
+                "result. That's broken, not 'no games' — I won't guess a score.")
+    if not res.get("ok"):
+        return res.get("reason", "I can't look that up.")
+    log.info("[atalanta] %s served for %s (cache=%s)", kind, res.get("league"),
+             res.get("from_cache"))
+    return f"{res.get('announce','')}\n\n{body}"
+
+
+async def _answer_sports(user_msg: str, session_id: str = "") -> str | None:
+    """A claimed sports turn, answered from real data or an honest error.
+
+    Claimed server-side rather than left to tool selection: measured live, the
+    model picked the sports tools only about half the time and, when it missed,
+    narrated the call instead of making it. A module whose worst failure is a
+    wrong score cannot rest on that.
+
+    Returns None when the message names no league we cover — dispatch then falls
+    through to normal routing rather than guessing which sport was meant.
+    """
+    req = atalanta.read_request(user_msg)
+    if not req["league"]:
+        if req.get("uncovered"):
+            # Refuse BY NAME rather than let it fall through to improvisation.
+            return atalanta.resolve_league(req["uncovered"])[1]
+        return None
+    args = {"league": req["league"], "date": req["date"]}
+    # for_model=False: this string IS the reply the user reads.
+    kind = req["kind"] if req["kind"] in ("standings", "schedule") else "scores"
+    return await asyncio.to_thread(_tool_sports, kind, args, False)
+
+
 # ── Dedicated-module dispatch (intent-registry precedence over Metis) ──────────
 # A GENUINE weather-source failure (curl/network/backend), distinct from the
 # "tell me where you are" location prompt — only a real failure earns the
@@ -1627,6 +1788,8 @@ class _TriagePass:
 async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
     """Route a claimed turn to its owning module. Grows by module key, never by a
     branch inside the request path."""
+    if claim.module == "atalanta":
+        return await _answer_sports(user_msg, session_id)   # None → no league named → fall through
     if claim.module == "weather":
         return await _answer_weather(user_msg, session_id)
     if claim.module == "time":
@@ -1699,7 +1862,7 @@ CANON_INLINE_MAX_WORDS = int(os.getenv("PH3B3_CANON_INLINE_MAX_WORDS", "2000"))
 
 async def chat_with_tools(messages, device="nyx", session_id=""):
     async with httpx.AsyncClient(timeout=120) as client:
-        payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":TOOLS,"options":{"temperature":0.7,"num_ctx":CHAT_NUM_CTX}}
+        payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":tools_for_turn(),"options":{"temperature":0.7,"num_ctx":CHAT_NUM_CTX}}
         try:
             response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
             response.raise_for_status()
@@ -2085,7 +2248,9 @@ def _vision_intercept(msg: str, device: str = "nyx"):
         INCLUDING a combined "take a picture AND describe what you see" — routes to
         describe_view, which captures AND describes. Only a bare "take a photo" with
         no describe intent routes to take_photo (capture, no narration). `look`
-        already captures + describes, so it covers both intents for Dio."""
+        already captures + describes, so it covers both intents for Dio.
+      - "are you watching me" returns "no_watch": a stated non-capability, no
+        capture and no LLM turn. She has a still-frame tool, not eyes."""
     m = (msg or "").lower()
     wants_photo = any(p in m for p in ("take a photo", "take a picture", "take photo",
                                        "take pic", "snap a photo", "snap a picture",
@@ -2101,7 +2266,45 @@ def _vision_intercept(msg: str, device: str = "nyx"):
                                           "use your camera", "use the camera", "using your camera",
                                           "using the camera", "with your camera", "with the camera",
                                           "through your camera", "through the camera",
-                                          "look and tell me", "how many fingers"))
+                                          "look and tell me", "how many fingers",
+                                          # ── added 2026-08-31 ────────────────────────────────
+                                          # None of these routed before, so "can you see me?" and
+                                          # "what am I holding?" fell through to a free chat
+                                          # completion and the model narrated sight it never had
+                                          # (book → cup → "notebook and pen", zero captures on
+                                          # disk). Kept as full phrases, not the bare "can you
+                                          # see", so "can you see why that's a problem" still
+                                          # reaches the LLM and never trips the shutter.
+                                          "can you see me", "can you see what", "can you see this",
+                                          "can you see who", "can you see how many",
+                                          "do you see me", "do you see what", "do you see this",
+                                          "what am i holding", "what i'm holding", "what im holding",
+                                          "what's in my hand", "whats in my hand",
+                                          "in my hands", "am i holding",
+                                          "am i in frame", "am i in view", "look at this"))
+    # Figures of speech that LOOK like sight requests. "do you see what I mean" and
+    # "look at this from my point of view" both matched the new patterns and would
+    # have tripped the shutter on a turn of phrase — a camera firing on an idiom is
+    # a privacy bug, not a near-miss. These suppress the DESCRIBE intent only: an
+    # explicit "take a picture from my point of view" is still a real photo request.
+    figurative = any(p in m for p in ("what i mean", "what you mean", "what im saying",
+                                      "what i'm saying", "what i am saying",
+                                      "what im getting at", "what i'm getting at",
+                                      "point of view", "look at it this way",
+                                      "see my point", "see the point", "see your point"))
+    if figurative:
+        wants_describe = False
+
+    # "Are you watching me?" is NOT a capture request — it asks about a capability
+    # she does not have. Answering it with a photo would be as wrong as answering
+    # it with "yes, I'll keep monitoring". Handled as a stated non-capability.
+    wants_watch_claim = any(p in m for p in ("are you watching", "you watching me",
+                                             "still watching", "keep watching",
+                                             "are you monitoring", "you monitoring me",
+                                             "watching me right now", "can you watch me",
+                                             "are you recording me", "are you always watching"))
+    if wants_watch_claim and not (wants_photo or wants_describe):
+        return "no_watch"
     if not (wants_photo or wants_describe):
         return None
     # Origin picks the camera. Dio-named OR coming from Dio → her camera — UNLESS
@@ -2253,7 +2456,19 @@ async def _run_chat_pipeline(body: dict, request: Request):
             _story_claim = False       # a lookup fault must not gate the turn
 
     _early_claim = intent_registry.resolve(user_msg)
-    _triage = (_TriagePass() if (_early_claim or _story_claim)
+    # A camera request is answerable BY CONSTRUCTION — the same exemption a named
+    # story gets. Triage sits ahead of the vision routing below, and on
+    # "Can you see me now?" it held the turn and asked the USER to describe their
+    # "current visibility to me" (TRIAGE_HOLD, 2026-08-31). Nothing was captured and
+    # nothing was claimed, so the honesty rule held — but a question that should
+    # take a photo came back as a question about the photo. We know how to answer
+    # this turn: point the camera at it.
+    # `device` is not bound until further down (X-Ph3b3-Device, ~line 2746), so read
+    # the header directly here rather than moving that assignment and disturbing
+    # everything between. Same value, computed earlier.
+    _vision_claim = _vision_intercept(
+        user_msg, device=(request.headers.get("X-Ph3b3-Device", "") or "nyx"))
+    _triage = (_TriagePass() if (_early_claim or _story_claim or _vision_claim)
                else await triage_gate(user_msg, _triage_context(session.messages())))
     if not _triage.answerable:
         _q = _triage.question or "I don't have enough to go on yet — can you give me a bit more detail?"
@@ -2566,8 +2781,14 @@ async def _run_chat_pipeline(body: dict, request: Request):
         except Exception:
             log.exception("Mnemosyne auto-recall failed")
 
-    _vt = _vision_intercept(user_msg, device=(device or "nyx"))
-    if _vt:
+    _vt = _vision_claim          # computed above, ahead of triage
+    if _vt == "no_watch":
+        # No capture, no completion. She never claims monitoring or continuous view.
+        response = ("I don't watch continuously — I've got a still-photo tool, not eyes. "
+                    "I can take one frame and tell you what's in it whenever you ask.")
+        log.info("[vision-audit] event=no_watch ok=True source=- bytes=0 reason=stated-non-capability")
+        updated = messages
+    elif _vt:
         # Forced vision path — guarantee the right tool fires (skip the LLM's choice).
         if _vt == "take_photo":
             response = await asyncio.to_thread(vision.take_photo)
@@ -3241,6 +3462,35 @@ async def egress_set(body: dict):
     on = bool(body.get("web_access"))
     metis.set_egress(on)
     return {"ok": True, "web_access": metis.egress_enabled()}
+
+
+# ── Camera control (pan/tilt/zoom) — master switch, same card pattern ─────────
+# INVARIANT: default OFF. OFF means no ioctl reaches the camera AND the
+# pan/tilt/zoom tools are absent from what Phoebe is offered (tools_for_turn).
+@app.get("/camera")
+async def camera_get():
+    return await asyncio.to_thread(camera_module.status)
+
+@app.post("/camera")
+async def camera_set(body: dict):
+    on = bool(body.get("enabled"))
+    camera_module.set_enabled(on)
+    return {"ok": True, **await asyncio.to_thread(camera_module.status)}
+
+@app.post("/camera/move")
+async def camera_move(body: dict):
+    """Manual framing from the panel. Same refusals as the tool path."""
+    try:
+        if body.get("reset"):
+            return await asyncio.to_thread(camera_module.reset)
+        return await asyncio.to_thread(
+            camera_module.move, body.get("pan"), body.get("tilt"), body.get("zoom"))
+    except camera_module.CameraOff as e:
+        raise HTTPException(409, str(e))
+    except camera_module.CameraMissing as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 # Device WiFi network provisioning endpoints removed 2026-07-16 — Iris & Dio
 # now provision on-device via their own setup portals; the server no longer
