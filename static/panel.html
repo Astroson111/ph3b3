@@ -1335,6 +1335,17 @@
       </div>
     </div>
 
+    <div class="card">
+      <div class="card-title">
+        <span>Camera Control</span>
+        <span id="camBadge" class="wg-badge wg-off">Off</span>
+      </div>
+      <div class="wg-row">
+        <span id="camDesc" class="wg-desc">Camera control is <strong>off</strong> — Phoebe cannot move the shot</span>
+        <button class="wg-toggle" id="camToggleBtn">Enable</button>
+      </div>
+    </div>
+
     <!-- ══ Account — compact; opens a modal to change username / password ═════════ -->
     <div class="card">
       <div class="card-title"><span data-i18n="status.account">Account</span></div>
@@ -2347,7 +2358,7 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
   document.getElementById('pane' + t.dataset.pane).classList.add('active');
-  if (t.dataset.pane === 'Status') { wgRefresh(); egressRefresh(); langInit(); acctInit(); dgInit(); }
+  if (t.dataset.pane === 'Status') { wgRefresh(); egressRefresh(); cameraRefresh(); langInit(); acctInit(); dgInit(); }
   if (t.dataset.pane === 'Amphion') { ampRefreshLibrary(); }
   if (t.dataset.pane === 'Apelles') { apInit(); }
 }));
@@ -3709,7 +3720,7 @@ async function refreshStatus() {
   }
 }
 refreshStatus();
-wgRefresh(); egressRefresh(); acctInit(); dgInit(); qualInit(); emotionInit(); shelfInit();  // WireGuard + Account + Paired-devices + Emotion + Shelf cards live in Status (default pane)
+wgRefresh(); egressRefresh(); cameraRefresh(); acctInit(); dgInit(); qualInit(); emotionInit(); shelfInit();  // WireGuard + Account + Paired-devices + Emotion + Shelf cards live in Status (default pane)
 setInterval(refreshStatus, 10_000);
 
 // ── chat + audio ──────────────────────────────────────────────────────────────
@@ -4422,6 +4433,40 @@ async function egressToggle() {
   await egressRefresh();
 }
 document.getElementById('egToggleBtn')?.addEventListener('click', egressToggle);
+
+// ── Camera control (pan/tilt/zoom) toggle — same pattern as Metis egress ──────
+async function cameraRefresh() {
+  try {
+    const d = await fetch('/camera').then(r => r.json());
+    const on = d.enabled;
+    const badge = document.getElementById('camBadge');
+    const desc  = document.getElementById('camDesc');
+    const btn   = document.getElementById('camToggleBtn');
+    badge.className = 'wg-badge ' + (on ? 'wg-on' : 'wg-off');
+    badge.textContent = on ? 'On' : 'Off';
+    const z = d.axes && d.axes.zoom ? d.axes.zoom.value : null;
+    desc.innerHTML = !d.present
+      ? 'No camera detected — nothing to control'
+      : (on ? 'Camera control is <strong>on</strong> — Phoebe can pan, tilt and zoom'
+            + (z !== null ? ' (zoom ' + z + ')' : '')
+            : 'Camera control is <strong>off</strong> — Phoebe cannot move the shot');
+    btn.textContent = on ? 'Disable' : 'Enable';
+    btn.className = 'wg-toggle' + (on ? ' wg-danger' : '');
+    btn.disabled = !d.present && !on;
+  } catch {}
+}
+async function cameraToggle() {
+  const btn = document.getElementById('camToggleBtn');
+  const turnOn = btn.textContent === 'Enable';
+  btn.disabled = true; btn.textContent = turnOn ? 'Enabling…' : 'Disabling…';
+  try {
+    await fetch('/camera', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({enabled: turnOn})});
+  } catch(e) {}
+  btn.disabled = false;
+  await cameraRefresh();
+}
+document.getElementById('camToggleBtn')?.addEventListener('click', cameraToggle);
 
 // ── Account — change portal username / password (Status pane) ──────────────────
 async function acctInit() {
