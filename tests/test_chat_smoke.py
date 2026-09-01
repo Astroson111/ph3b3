@@ -38,12 +38,27 @@ HEADERS = {"Authorization": f"Basic {_auth}"}
 
 
 @pytest.fixture(autouse=True)
-def _no_outbound(monkeypatch):
-    """Stub everything that leaves the process: inference, TTS, and the camera.
+def _isolated(monkeypatch, tmp_path):
+    """Stub everything that leaves the process, and redirect everything it writes.
 
     The camera stub matters for its own sake — a test suite must never be able to
     photograph the room it runs in.
+
+    The STORE redirection matters just as much, and was missed on the first pass:
+    /chat persists every turn to the real chat transcripts AND to Mnemosyne, the
+    shared cross-device memory. Running this file wrote 51 junk transcripts and 54
+    Mnemosyne rows into live data — where auto-recall would later feed test strings
+    back as things the user had actually said. A test that pollutes the store it is
+    testing is a test that lies to the next investigation.
     """
+    import chats as _chats
+    monkeypatch.setattr(server, "chat_log", _chats.ChatLog(tmp_path / "chats"))
+
+    class _NullSpine:
+        def remember(self, *a, **k): return None
+        def recall(self, *a, **k):   return []
+        def recent(self, *a, **k):   return []
+    monkeypatch.setattr(server, "mem_spine", _NullSpine(), raising=False)
     async def _fake_chat_with_tools(messages, device="nyx", session_id="default"):
         return "stubbed reply", messages
 
