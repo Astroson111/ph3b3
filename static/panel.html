@@ -984,6 +984,11 @@
     .amp-presets { display: flex; gap: .35rem; flex-wrap: wrap; }
     .amp-preset { flex: 1; min-width: 3.2rem; background: rgba(0,0,0,.28); color: var(--text); border: 1px solid rgba(255,255,255,.14); border-radius: 7px; padding: .4rem .3rem; cursor: pointer; font-size: .82rem; }
     .amp-preset.active { border-color: var(--pink, #e28); background: rgba(226,40,136,.16); }
+    /* Title row. .amp-preset carries flex:1, which inside .amp-row would make
+       Suggest as wide as the field it sits beside; these two size to content. */
+    #ampSuggestTitle { flex: 0 0 auto; padding: .4rem .7rem; }
+    #ampTitleChips { display: flex; flex-wrap: wrap; gap: .4rem; }
+    #ampTitleChips .amp-title-chip { flex: 0 0 auto; padding: .3rem .6rem; }
     .amp-item-a { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
     .amp-fmt { background: rgba(0,0,0,.28); color: var(--text); border: 1px solid rgba(255,255,255,.14); border-radius: 6px; padding: .25rem .35rem; font-size: .8rem; }
     .amp-dl2 { background: none; border: 1px solid var(--cyan, #4cc); color: var(--cyan, #4cc); border-radius: 6px; padding: .25rem .6rem; cursor: pointer; font-size: .8rem; text-decoration: none; }
@@ -2064,6 +2069,20 @@
           <input type="number" id="ampSeed" class="ari-url" placeholder="random" min="0">
         </div>
       </div>
+    </div>
+
+    <!-- Title — above the render controls. Always editable; the suggest button is
+         the ONLY thing that ever writes into it, and typing always wins. -->
+    <div class="card">
+      <div class="card-title"><span data-i18n="amphion.songtitle">Title</span> <span class="ari-opt" data-i18n="amphion.songtitle.opt">— optional, name it or let her suggest</span></div>
+      <div class="amp-row">
+        <input type="text" id="ampTitle" class="ari-url"
+               placeholder="Leave blank and it renders as untitled-<seed>-<date>"
+               data-i18n-ph="amphion.songtitle.ph" autocomplete="off">
+        <button type="button" class="amp-preset" id="ampSuggestTitle" data-i18n="amphion.suggest">✨ Suggest title</button>
+      </div>
+      <div id="ampTitleChips" style="margin-top:6px"></div>
+      <div class="ari-hint" id="ampTitleNote" style="margin-top:6px"></div>
     </div>
 
     <div class="amp-row" style="margin-bottom:8px">
@@ -3226,11 +3245,15 @@ let apInit;
       const box = $('ampLibrary');
       if (!d.songs || !d.songs.length){ box.innerHTML = '<div class="ari-hint">'+ (t('amphion.empty')||'No songs yet.') +'</div>'; return; }
       box.innerHTML = d.songs.map(s => {
-        const label = esc(s.tags || '(untitled)').slice(0,90);
+        // Heading is the DISPLAY TITLE — every track has one, so there is no
+        // '(untitled)' branch left. The style tag it was made from moves down to
+        // the hint line, where it is still visible but no longer doing duty as a name.
+        const label = esc((s.title || s.slug || s.job_id).slice(0,90));
         const meta = [s.bpm?s.bpm+' bpm':'', s.keyscale||'', s.seed!=null?'seed '+s.seed:''].filter(Boolean).join(' · ');
+        const sub = [esc((s.tags||'').slice(0,90)), esc(meta)].filter(Boolean).join(' — ');
         return '<div class="amp-item">'
           + '<div class="amp-item-t">'+label+'</div>'
-          + '<div class="ari-hint">'+esc(meta)+'</div>'
+          + '<div class="ari-hint">'+sub+'</div>'
           + '<audio controls preload="none" src="/amphion/file/'+encodeURIComponent(s.job_id)+'"></audio>'
           + '<div class="amp-item-a">'
           +   '<select class="amp-fmt"><option value="flac">FLAC</option><option value="wav">WAV · Dio</option><option value="mp3">MP3 320</option></select>'
@@ -3238,6 +3261,7 @@ let apInit;
           +   '<select class="amp-fade" title="Fade-out"><option value="0">No fade</option><option value="2">Fade 2s</option><option value="4">Fade 4s</option><option value="8">Fade 8s</option></select>'
           +   '<a class="amp-dl2" data-id="'+esc(s.job_id)+'" href="/amphion/export/'+encodeURIComponent(s.job_id)+'/flac">⬇ Download</a>'
           +   (s.seed!=null ? '<button class="amp-seed" data-seed="'+esc(String(s.seed))+'" title="Generate again with this exact voice/seed">🎤 Use this voice</button>' : '')
+          +   '<button class="amp-rename" data-id="'+esc(s.job_id)+'" title="Rename — updates the title, the file stays where it is">✎ Rename</button>'
           +   '<button class="amp-remix" data-id="'+esc(s.job_id)+'" title="Remix this track">↻ Remix</button>'
           +   '<button class="amp-del" data-id="'+esc(s.job_id)+'">Delete</button>'
           + '</div></div>';
@@ -3267,6 +3291,19 @@ let apInit;
         const song = (d.songs || []).find(x => x.job_id === b.dataset.id) || {};
         ampSetRemix(b.dataset.id, song.tags || '', song.lyrics || '');
       }));
+      box.querySelectorAll('.amp-rename').forEach(b => b.addEventListener('click', async () => {
+        const song = (d.songs || []).find(x => x.job_id === b.dataset.id) || {};
+        const next = prompt('Rename this song:', song.title || '');
+        if (next === null) return;                       // cancelled — leave it alone
+        // The FILE does not move. The slug it was rendered under is fixed at
+        // render, so every existing link and provenance chain still resolves;
+        // this changes the display title and the metadata the next export stamps.
+        const r = await fetch('/amphion/song/'+encodeURIComponent(b.dataset.id)+'/title',
+          {method:'POST', headers:{'Content-Type':'application/json'},
+           body:JSON.stringify({title: next})});
+        if (!r.ok){ alert('Rename failed.'); return; }
+        ampRefreshLibrary();
+      }));
       box.querySelectorAll('.amp-del').forEach(b => b.addEventListener('click', async () => {
         if (!confirm('Delete this song?')) return;
         await fetch('/amphion/song/'+encodeURIComponent(b.dataset.id), {method:'DELETE'});
@@ -3295,6 +3332,73 @@ let apInit;
     } catch(e){ /* keep polling */ }
   }
 
+  // ── Title — Hermes3 suggests, you decide ──────────────────────────────────
+  // Three rules the rest of this block exists to keep:
+  //   the field is NEVER locked; nothing writes to it except an explicit press
+  //   of Suggest or a tap on a chip; and a failed suggestion leaves whatever was
+  //   already in it untouched. Blanking a field on failure is worse than not
+  //   trying — it destroys work to report a problem.
+  function ampTitleSources(){
+    return { lyrics: $('ampLyrics').value.trim(), tags: $('ampTags').value.trim() };
+  }
+  function ampSyncSuggest(){
+    const src = ampTitleSources();
+    const btn = $('ampSuggestTitle');
+    const nothing = !src.lyrics && !src.tags;
+    btn.disabled = nothing;
+    // Instrumental is a first-class case: a style tag alone is enough to name
+    // from, so the button only goes dead when there is genuinely no text at all.
+    btn.title = nothing ? (t('amphion.suggest.nothing') || 'nothing to name from yet')
+                        : (src.lyrics ? 'Name it from the lyrics and style'
+                                      : 'Instrumental — name it from the style tag');
+  }
+  function ampRenderChips(titles){
+    const box = $('ampTitleChips');
+    box.innerHTML = '';
+    // titles[0] went into the field; the rest are the alternatives. Chips are
+    // NOT cleared after a tap — picking a different one is the common second move.
+    titles.slice(1).forEach(function(title){
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'amp-preset amp-title-chip';
+      b.textContent = title;
+      b.addEventListener('click', function(){
+        $('ampTitle').value = title;
+        $('ampTitle').focus();
+      });
+      box.appendChild(b);
+    });
+  }
+  $('ampSuggestTitle').addEventListener('click', async () => {
+    const btn = $('ampSuggestTitle'), note = $('ampTitleNote');
+    const src = ampTitleSources();
+    if (!src.lyrics && !src.tags) return;
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Thinking…'; note.textContent = '';
+    try {
+      const r = await fetch('/amphion/suggest_title', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(src)});
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.titles || !d.titles.length){
+        // Say it out loud and leave the field alone.
+        note.textContent = (d && d.detail) || 'suggestion failed — name it yourself';
+        return;
+      }
+      $('ampTitle').value = d.titles[0];
+      ampRenderChips(d.titles);
+      note.textContent = d.titles.length > 1
+        ? 'Tap another to swap it, or type your own — typing always wins.'
+        : 'Type your own if this one is not it.';
+    } catch(e){
+      note.textContent = 'suggestion failed — name it yourself';
+    } finally {
+      btn.textContent = label; ampSyncSuggest();
+    }
+  });
+  $('ampLyrics').addEventListener('input', ampSyncSuggest);
+  $('ampTags').addEventListener('input', ampSyncSuggest);
+  ampSyncSuggest();
+
   $('ampGenerate').addEventListener('click', async () => {
     const tags = $('ampTags').value.trim();
     if (!tags){ $('ampTags').focus(); return; }
@@ -3309,6 +3413,10 @@ let apInit;
       // workflow silently 4/4 for every song ever generated here.
       timesig: ($('ampTimesig')||{}).value || '4',
       keyscale: ($('ampKey').value.trim()||'C major'),
+      // Whatever is in the box right now, suggested or typed — sent as-is. A
+      // blank one is fine and the server names it untitled-<seed>-<date>; the
+      // browser never fills this in on its own at render time.
+      title: $('ampTitle').value.trim(),
     };
     const sd = $('ampSeed').value.trim(); if (sd !== '') body.seed = parseInt(sd);
 

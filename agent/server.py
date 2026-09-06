@@ -1237,10 +1237,16 @@ async def _tool_generate_song(args: dict, device: str = "nyx") -> str:
     except (TypeError, ValueError):
         seconds = amphion.DEFAULT_DURATION
 
+    _seed = int(args.get("seed") or int.from_bytes(os.urandom(4), "big"))
     params = {"tags": desc, "lyrics": lyrics, "bpm": 120, "keyscale": "C major",
               "timesig": "4", "language": "en", "seconds": seconds,
-              "seed": int(args.get("seed") or int.from_bytes(os.urandom(4), "big")),
-              "variant": "base"}
+              "seed": _seed, "variant": "base",
+              # A song asked for in conversation has no title field to read, and
+              # NOTHING here asks Hermes3 to invent one: a suggestion may only
+              # enter a title by an explicit button press, never from the render
+              # path. So it renders as untitled-<seed>-<date> — a real name, no
+              # model call, no failure mode — and can be renamed from the library.
+              **amphion.resolve_naming(None, _seed)}
     job_id = amphion.new_job()
     amphion.register_task(job_id, asyncio.create_task(amphion.run_generation(job_id, params)))
     _amphion_last_job = job_id
@@ -6269,6 +6275,10 @@ async def amphion_generate(request: Request, body: dict):
         "timesig": timesig, "language": body.get("language", "en"),
         "seconds": seconds, "seed": seed, "variant": variant,
         "duration_mode": duration_mode, "bars": body.get("bars") if duration_mode == "bars" else None,
+        # Naming is settled HERE, before the job queues, not in the render loop.
+        # A blank title is not an error and never blocks a render — it becomes
+        # untitled-<seed>-<date>, which needs no model and cannot fail.
+        **amphion.resolve_naming(body.get("title"), seed),
     }
     job_id = amphion.new_job()
     task = asyncio.create_task(amphion.run_generation(job_id, params))
@@ -6373,6 +6383,11 @@ async def amphion_variations(request: Request, body: dict):
             "duration_mode": dur["duration_mode"], "bars": dur["bars"],
             "variant": body.get("variant") if body.get("variant") in amphion.DIT_BY_VARIANT else "base",
             "variation_of": base_seed,
+            # Per-seed, inside the loop. The set shares one title, but each track
+            # is its own file: resolve_naming reserves the slug it hands back, so
+            # the four tracks land as name, name-2, name-3, name-4 instead of all
+            # four claiming the same filename.
+            **amphion.resolve_naming(body.get("title"), sd),
         }
         jid = amphion.new_job()
         amphion.register_task(jid, asyncio.create_task(amphion.run_generation(jid, params)))
@@ -6438,6 +6453,11 @@ async def amphion_remix(job_id: str, request: Request, body: dict):
     if params.get("seed") is None:
         params["seed"] = int.from_bytes(os.urandom(4), "big")
     params["seconds"] = max(5.0, min(amphion.MAX_DURATION, float(params["seconds"])))
+    # After the seed is settled, because the untitled- fallback is seed-anchored.
+    # remix_params is a whitelist and does not carry `title` across, which is the
+    # behaviour we want: a remix is a new track and gets its own name rather than
+    # a second file silently claiming the original's.
+    params.update(amphion.resolve_naming(body.get("title"), params["seed"]))
 
     new_id = amphion.new_job()
     amphion.register_task(new_id, asyncio.create_task(amphion.run_generation(new_id, params)))
@@ -6493,6 +6513,46 @@ async def amphion_export(job_id: str, fmt: str, loudness: str = "peak", fade: fl
     data, media_type, filename = res
     return Response(content=data, media_type=media_type,
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.post("/amphion/suggest_title")
+async def amphion_suggest_title(body: dict):
+    """3-5 candidate titles from the local Hermes3, for the current lyrics + style.
+
+    NO FLOOR CALL, deliberately. The floor gates GENERATION; this route makes
+    nothing and stores nothing. Anything it is asked to name either already
+    passed the floor at render or is about to be floored by /amphion/generate a
+    moment later, so a second gate here would only add refusals a user cannot act
+    on. See the naming section in modules/amphion.py for the full reasoning.
+
+    The request to Ollama is transient — localhost only, nothing persisted, and
+    the lyric text is never written to the log on any path through here.
+    """
+    lyrics = (body.get("lyrics") or "").strip()
+    tags = (body.get("tags") or "").strip()
+    if not lyrics and not tags:
+        raise HTTPException(400, "nothing to name from yet")
+    try:
+        titles = await asyncio.to_thread(amphion.suggest_titles, lyrics, tags)
+    except amphion.SuggestFailed as exc:
+        # 503, not 500: the local model was unreachable or unhelpful, which is a
+        # temporary condition the user can retry — and the UI must SAY so rather
+        # than blank the field. Fail loud, never fail blank.
+        raise HTTPException(503, str(exc))
+    return {"titles": titles}
+
+
+@app.post("/amphion/song/{job_id}/title")
+async def amphion_rename_song(job_id: str, body: dict):
+    """Retitle an existing track. Sidecar is updated; the file does NOT move, and
+    the slug it was rendered under stays as it is. Embedded metadata is stamped
+    from the sidecar at export, so the next download carries the new title."""
+    if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
+        raise HTTPException(400, "bad id")
+    res = await asyncio.to_thread(amphion.rename_song, job_id, body.get("title") or "")
+    if res is None:
+        raise HTTPException(404, "not found")
+    return res
 
 
 @app.delete("/amphion/song/{job_id}")
