@@ -446,6 +446,54 @@ def test_metadata_and_filename_agree_for_a_track_from_before_titling():
     assert "title=untitled-7-20260801" in amphion._tags_for("abc123", side, "flac")
 
 
+def test_two_unnamed_renders_never_share_a_name(open_floor):
+    """Asked for by name in the addendum. Each render carries its OWN seed into
+    the default, so two blank-title renders a second apart are still two songs."""
+    assert _generate(title="", seed=111).status_code == 200
+    assert _generate(title="", seed=222).status_code == 200
+    assert _rendered[0]["title"] != _rendered[1]["title"]
+    assert "111" in _rendered[0]["title"] and "222" in _rendered[1]["title"]
+    assert _rendered[0]["slug"] != _rendered[1]["slug"]
+
+
+def test_an_unnamed_render_carries_the_real_seed_not_noseed(open_floor):
+    """'noseed' is what the default degrades to when the seed never arrives. It
+    must never appear on a render — the seed is settled before naming is."""
+    assert _generate(title="").status_code == 200
+    assert "noseed" not in _rendered[0]["title"]
+    assert "noseed" not in _rendered[0]["slug"]
+    assert str(_rendered[0]["seed"]) in _rendered[0]["title"]
+
+
+def test_audio_with_no_sidecar_is_not_a_song():
+    """The Orpheus regression, from the outside. Instrumentals are written beside
+    the master by design; four of them appeared in the library as songs, all four
+    named untitled-noseed-<today> because a file with no sidecar has no seed and
+    no date. A render is a master PLUS its record."""
+    _write_track("abc123", title="Blue Hour", slug="blue-hour", seed=7)
+    d = amphion._songs_dir()
+    (d / "blue-hour-instrumental.flac").write_bytes(b"\x00")
+    (d / "somebody-dropped-this-here.flac").write_bytes(b"\x00")
+    lib = amphion.library()
+    assert [s["job_id"] for s in lib] == ["abc123"]
+    assert not any("noseed" in (s["slug"] or "") for s in lib)
+
+
+def test_deleting_a_song_takes_its_derivatives_with_it():
+    """Otherwise the instrumental and the timing file outlive the record that
+    explains them — orphan audio, which is the same shape as the bug above."""
+    _write_track("abc123", title="Blue Hour", slug="blue-hour", seed=7,
+                 stems={"instrumental": "blue-hour-instrumental.flac",
+                        "timing": "blue-hour-timing.json"})
+    d = amphion._songs_dir()
+    (d / "blue-hour-instrumental.flac").write_bytes(b"\x00")
+    (d / "blue-hour-timing.json").write_text("{}")
+    assert amphion.delete_song("abc123") is True
+    assert not (d / "blue-hour-instrumental.flac").exists()
+    assert not (d / "blue-hour-timing.json").exists()
+    assert not (d / "abc123.flac").exists()
+
+
 def test_library_reports_the_title(open_floor):
     _write_track("abc123", title="Blue Hour", slug="blue-hour", seed=7)
     r = client.get("/amphion/library", headers=HEADERS)

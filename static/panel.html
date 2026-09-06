@@ -955,6 +955,9 @@
       font-family: inherit; transition: color .15s;
     }
     .tab.active { color: var(--magenta); }
+    /* Orpheus stays amber whether or not anything else is selected — it is a
+       door out of the panel, not one of the panel's own rooms. */
+    .tab-orpheus, .tab-orpheus.active { color: #ffb020; }
     .tab svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; }
 
     /* ── Ariadne (résumé ATS) ── */
@@ -2294,6 +2297,15 @@
     <svg viewBox="0 0 24 24"><line x1="4" y1="10" x2="4" y2="14"/><line x1="8" y1="6" x2="8" y2="18"/><line x1="12" y1="9" x2="12" y2="15"/><line x1="16" y1="4" x2="16" y2="20"/><line x1="20" y1="10" x2="20" y2="14"/></svg>
     <span data-i18n="tab.amphion">Amphion</span>
   </button>
+  <!-- A LAUNCHER, not a pane. Orpheus is the surface OBS captures, so it opens
+       in its own window — a pane would drag the whole panel into the shot.
+       Amber and a microphone against Morpheus's magenta crescent, so the two
+       cannot be confused at a glance despite the two-letter name collision. -->
+  <button class="tab tab-orpheus" data-launch="/orpheus"
+          title="Karaoke stage — opens its own window">
+    <svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
+    <span data-i18n="tab.orpheus">Orpheus</span>
+  </button>
   <button class="tab" data-pane="Argus">
     <svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
     <span data-i18n="tab.argus">Argus</span>
@@ -2380,6 +2392,12 @@ async function loadLocale(lang) {
 
 // ── tab nav ───────────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  // A launcher tab owns no pane. Guarded generically rather than by name, so the
+  // next one added does not crash this handler on getElementById(null).
+  if (t.dataset.launch){
+    window.open(t.dataset.launch, 'orpheus', 'width=1280,height=760');
+    return;
+  }
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
   document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
   t.classList.add('active');

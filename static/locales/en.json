@@ -142,6 +142,7 @@
   "ariadne.result": "Result",
   "ariadne.download": "⬇&ensp;Download ATS .docx",
   "tab.amphion": "Amphion",
+  "tab.orpheus": "Orpheus",
   "amphion.title": "Amphion — song generation",
   "amphion.note": "Full songs are generated <b>locally and never leave this machine</b> — your prompt and lyrics <b>are never uploaded</b>. There's <b>no cost per song</b>, so generate as many times as it takes.",
   "amphion.describe": "Describe the song",

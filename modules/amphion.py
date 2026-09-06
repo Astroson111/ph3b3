@@ -981,11 +981,33 @@ def register_task(job_id: str, task: asyncio.Task) -> None:
 
 # ── Library — scan songs/ + sidecars (no SQLite; sidecar IS the record) ──────────
 def library(n: int = 100) -> list[dict]:
+    """Every Amphion render. A RENDER IS A MASTER PLUS ITS SIDECAR — that is the
+    module's stated record model, and this function now holds to it.
+
+    It used to list every .flac in the directory and shrug at a missing sidecar,
+    which was harmless while nothing else wrote there. Orpheus writes
+    <slug>-instrumental.flac beside the master, as its brief specifies, and four
+    of them promptly appeared in the library as songs: no sidecar, so no title,
+    no seed and no date, and slug_for gave all four the same derived name —
+    "untitled-noseed-20260906". Four identical entries that were not songs.
+
+    Filtering on the sidecar rather than on the "-instrumental" suffix is
+    deliberate: it fixes the whole class rather than the one member of it that
+    has shown up so far, and any future tool that drops audio in here is covered
+    without amphion having to learn what that tool is called.
+    """
     d = _songs_dir()
     out = []
-    for f in sorted(d.glob("*.flac"), key=lambda x: x.stat().st_mtime, reverse=True)[:n]:
+    for f in sorted(d.glob("*.flac"), key=lambda x: x.stat().st_mtime, reverse=True):
         side = f.with_suffix(".json")
-        meta = json.loads(side.read_text()) if side.exists() else {}
+        if not side.exists():
+            continue
+        try:
+            meta = json.loads(side.read_text())
+        except Exception:
+            continue
+        if len(out) >= n:
+            break
         out.append({"job_id": f.stem,
                     "title": meta.get("title") or "", "slug": slug_for(f.stem, meta),
                     "tags": meta.get("tags", ""), "lyrics": meta.get("lyrics", ""),
@@ -1509,11 +1531,29 @@ def export_bytes(job_id: str, fmt: str, loudness: str = "peak",
 
 
 def delete_song(job_id: str) -> bool:
+    """Delete a render and everything derived from it.
+
+    The instrumental and the timing file are named from the SLUG and live beside
+    the master, so deleting only <job_id>.flac/.json used to leave them behind as
+    orphans — audio with no record, which is exactly the shape of thing that then
+    turns up in a listing pretending to be a song. Whatever the sidecar says was
+    derived is deleted with it, and the slug-derived names are swept too in case
+    the sidecar was written before those names were recorded.
+    """
     p = song_path(job_id)
     if not p:
         return False
+    side = _sidecar_for(job_id)
+    derived = {(side.get("stems") or {}).get("instrumental"),
+               (side.get("stems") or {}).get("timing")}
+    stem = slug_for(job_id, side)
+    derived |= {f"{stem}-instrumental.flac", f"{stem}-timing.json"}
     p.unlink(missing_ok=True)
     p.with_suffix(".json").unlink(missing_ok=True)
+    for name in filter(None, derived):
+        f = _songs_dir() / name
+        if f.parent == _songs_dir():          # never follow a name out of the directory
+            f.unlink(missing_ok=True)
     return True
 
 
