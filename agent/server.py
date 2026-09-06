@@ -171,6 +171,7 @@ from kadmos_module import KadmosModule, KadmosError  # Kadmos — PDF reader (un
 from recipes import RecipeStore
 import morpheus
 import amphion                    # song generation (ACE-Step 1.5) — Morpheus's sibling (shares gpu_lock + floor)
+import orpheus                    # karaoke: stems, word-timed lyrics, the stage. NO floor import by design.
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
 import atalanta                   # sports results egress (ESPN); SETTLED GAMES ONLY
 import intent_registry           # dedicated-module intent claims (precedence over Metis)
@@ -1237,10 +1238,16 @@ async def _tool_generate_song(args: dict, device: str = "nyx") -> str:
     except (TypeError, ValueError):
         seconds = amphion.DEFAULT_DURATION
 
+    _seed = int(args.get("seed") or int.from_bytes(os.urandom(4), "big"))
     params = {"tags": desc, "lyrics": lyrics, "bpm": 120, "keyscale": "C major",
               "timesig": "4", "language": "en", "seconds": seconds,
-              "seed": int(args.get("seed") or int.from_bytes(os.urandom(4), "big")),
-              "variant": "base"}
+              "seed": _seed, "variant": "base",
+              # A song asked for in conversation has no title field to read, and
+              # NOTHING here asks Hermes3 to invent one: a suggestion may only
+              # enter a title by an explicit button press, never from the render
+              # path. So it renders as untitled-<seed>-<date> — a real name, no
+              # model call, no failure mode — and can be renamed from the library.
+              **amphion.resolve_naming(None, _seed)}
     job_id = amphion.new_job()
     amphion.register_task(job_id, asyncio.create_task(amphion.run_generation(job_id, params)))
     _amphion_last_job = job_id
@@ -6269,6 +6276,10 @@ async def amphion_generate(request: Request, body: dict):
         "timesig": timesig, "language": body.get("language", "en"),
         "seconds": seconds, "seed": seed, "variant": variant,
         "duration_mode": duration_mode, "bars": body.get("bars") if duration_mode == "bars" else None,
+        # Naming is settled HERE, before the job queues, not in the render loop.
+        # A blank title is not an error and never blocks a render — it becomes
+        # untitled-<seed>-<date>, which needs no model and cannot fail.
+        **amphion.resolve_naming(body.get("title"), seed),
     }
     job_id = amphion.new_job()
     task = asyncio.create_task(amphion.run_generation(job_id, params))
@@ -6373,6 +6384,11 @@ async def amphion_variations(request: Request, body: dict):
             "duration_mode": dur["duration_mode"], "bars": dur["bars"],
             "variant": body.get("variant") if body.get("variant") in amphion.DIT_BY_VARIANT else "base",
             "variation_of": base_seed,
+            # Per-seed, inside the loop. The set shares one title, but each track
+            # is its own file: resolve_naming reserves the slug it hands back, so
+            # the four tracks land as name, name-2, name-3, name-4 instead of all
+            # four claiming the same filename.
+            **amphion.resolve_naming(body.get("title"), sd),
         }
         jid = amphion.new_job()
         amphion.register_task(jid, asyncio.create_task(amphion.run_generation(jid, params)))
@@ -6438,6 +6454,11 @@ async def amphion_remix(job_id: str, request: Request, body: dict):
     if params.get("seed") is None:
         params["seed"] = int.from_bytes(os.urandom(4), "big")
     params["seconds"] = max(5.0, min(amphion.MAX_DURATION, float(params["seconds"])))
+    # After the seed is settled, because the untitled- fallback is seed-anchored.
+    # remix_params is a whitelist and does not carry `title` across, which is the
+    # behaviour we want: a remix is a new track and gets its own name rather than
+    # a second file silently claiming the original's.
+    params.update(amphion.resolve_naming(body.get("title"), params["seed"]))
 
     new_id = amphion.new_job()
     amphion.register_task(new_id, asyncio.create_task(amphion.run_generation(new_id, params)))
@@ -6495,11 +6516,196 @@ async def amphion_export(job_id: str, fmt: str, loudness: str = "peak", fade: fl
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
+@app.post("/amphion/suggest_title")
+async def amphion_suggest_title(body: dict):
+    """3-5 candidate titles from the local Hermes3, for the current lyrics + style.
+
+    NO FLOOR CALL, deliberately. The floor gates GENERATION; this route makes
+    nothing and stores nothing. Anything it is asked to name either already
+    passed the floor at render or is about to be floored by /amphion/generate a
+    moment later, so a second gate here would only add refusals a user cannot act
+    on. See the naming section in modules/amphion.py for the full reasoning.
+
+    The request to Ollama is transient — localhost only, nothing persisted, and
+    the lyric text is never written to the log on any path through here.
+    """
+    lyrics = (body.get("lyrics") or "").strip()
+    tags = (body.get("tags") or "").strip()
+    if not lyrics and not tags:
+        raise HTTPException(400, "nothing to name from yet")
+    try:
+        titles = await asyncio.to_thread(amphion.suggest_titles, lyrics, tags)
+    except amphion.SuggestFailed as exc:
+        # 503, not 500: the local model was unreachable or unhelpful, which is a
+        # temporary condition the user can retry — and the UI must SAY so rather
+        # than blank the field. Fail loud, never fail blank.
+        raise HTTPException(503, str(exc))
+    return {"titles": titles}
+
+
+@app.post("/amphion/song/{job_id}/title")
+async def amphion_rename_song(job_id: str, body: dict):
+    """Retitle an existing track. Sidecar is updated; the file does NOT move, and
+    the slug it was rendered under stays as it is. Embedded metadata is stamped
+    from the sidecar at export, so the next download carries the new title."""
+    if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
+        raise HTTPException(400, "bad id")
+    res = await asyncio.to_thread(amphion.rename_song, job_id, body.get("title") or "")
+    if res is None:
+        raise HTTPException(404, "not found")
+    return res
+
+
 @app.delete("/amphion/song/{job_id}")
 async def amphion_delete_song(job_id: str):
     if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
         raise HTTPException(400, "bad id")
     return {"deleted": await asyncio.to_thread(amphion.delete_song, job_id)}
+
+
+# ══ Orpheus — karaoke: stems, word-timed lyrics, the stage ═══════════════════
+# NO FLOOR GATE ON ANY ROUTE IN THIS BLOCK, and that is the design. Every one of
+# them takes an Amphion job_id and operates on a render that already passed the
+# floor when it was made. Nothing here generates anything, so there is nothing
+# for a floor to gate — and a second copy of the gate on a playback surface would
+# refuse songs Astro is mid-way through singing.
+#
+# There is also no path, url or upload parameter anywhere below. That is not an
+# omission to be tidied up later: it is what keeps the stream strike-proof. Every
+# route reaches audio through amphion.song_path(job_id) and nothing else.
+
+def _orpheus_guard(fn, *a, **kw):
+    """Run a GPU job, turning Orpheus's two failure kinds into HTTP that says
+    which is which. 409 for a busy GPU because it is a conflict the caller can
+    retry; 400 for a bad request that retrying will not fix."""
+    try:
+        return fn(*a, **kw)
+    except orpheus.Busy as exc:
+        raise HTTPException(409, str(exc))
+    except orpheus.OrpheusError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/orpheus")
+async def orpheus_view():
+    return Response(
+        content=(ROOT / "static" / "orpheus.html").read_text(encoding="utf-8"),
+        media_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/orpheus/library")
+async def orpheus_library():
+    """Amphion renders and what each one is ready for."""
+    return {"songs": await asyncio.to_thread(orpheus.library),
+            "gpu_busy": orpheus.gpu_busy_with()}
+
+
+@app.get("/orpheus/song/{job_id}")
+async def orpheus_song(job_id: str):
+    """Everything the stage needs for one song, in one request — so advancing to
+    the next track is a single round trip and can be done ahead of time."""
+    try:
+        entry = await asyncio.to_thread(orpheus.setlist_entry, job_id)
+    except orpheus.OrpheusError as exc:
+        raise HTTPException(404, str(exc))
+    tim = orpheus.find_timing(job_id)
+    doc = None
+    if tim:
+        try:
+            doc = json.loads(tim.read_text("utf-8"))
+        except Exception as exc:
+            # Say it. A timing file that is present but unreadable is exactly the
+            # case that must not turn into a blank screen mid-song.
+            log.warning("[orpheus] timing unreadable for %s: %s", job_id, exc)
+            entry["timing_error"] = "timing file is unreadable — playing without lyrics"
+    return {**entry, "timing": doc}
+
+
+@app.get("/orpheus/audio/{job_id}")
+async def orpheus_audio(job_id: str):
+    """The instrumental. FileResponse handles Range natively, which is what makes
+    the seek bar and the loop punch-in work at all."""
+    if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
+        raise HTTPException(400, "bad id")
+    p = orpheus.find_instrumental(job_id)
+    if not p:
+        raise HTTPException(404, "no instrumental for this song yet")
+    return FileResponse(str(p), media_type="audio/flac",
+                        headers={"Accept-Ranges": "bytes", "Cache-Control": "no-store"})
+
+
+@app.post("/orpheus/prepare/{job_id}")
+async def orpheus_prepare(job_id: str, timing: bool = True, force: bool = False):
+    """Separate, and align if the song has words. Refuses loudly while a render
+    holds the GPU — never queues behind one."""
+    fn = orpheus.prepare if timing else orpheus.separate
+    stems = await asyncio.to_thread(_orpheus_guard, fn, job_id, force)
+    return {"job_id": job_id, "stems": stems}
+
+
+@app.post("/orpheus/batch")
+async def orpheus_batch(body: dict | None = None):
+    """Prepare the whole library in one pass — the first-run batch.
+
+    Serial by construction: one GPU, one job at a time. The GPU is re-checked
+    before EVERY song rather than once at the top, so a render started halfway
+    through the batch stops it at the next boundary instead of fighting it.
+    """
+    force = bool((body or {}).get("force"))
+    def _run():
+        done, skipped, failed = [], [], []
+        for s in orpheus.library():
+            jid = s["job_id"]
+            # Checked HERE, at the top of every iteration, not left to prepare()
+            # to raise. Both is right: prepare() must refuse whoever calls it, and
+            # the batch must be able to stop itself without depending on the
+            # internals of the thing it calls.
+            try:
+                orpheus.require_free_gpu()
+            except orpheus.Busy as exc:
+                failed.append({"job_id": jid, "why": str(exc)})
+                break
+            if s["instrumental_only"]:
+                skipped.append({"job_id": jid, "why": "instrumental — nothing to separate"})
+                continue
+            if s["has_instrumental"] and s["has_timing"] and not force:
+                skipped.append({"job_id": jid, "why": "already prepared"})
+                continue
+            try:
+                orpheus.prepare(jid, force=force)
+                done.append(jid)
+            except orpheus.Busy as exc:
+                failed.append({"job_id": jid, "why": str(exc)})
+                break                       # stop the batch, do not fight the render
+            except Exception as exc:
+                failed.append({"job_id": jid, "why": str(exc)})
+        return {"prepared": done, "skipped": skipped, "failed": failed}
+    return await asyncio.to_thread(_run)
+
+
+@app.get("/orpheus/setlist")
+async def orpheus_setlist_get():
+    return await asyncio.to_thread(orpheus.load_setlist)
+
+
+@app.put("/orpheus/setlist")
+async def orpheus_setlist_put(body: dict):
+    """Replace the whole setlist. Reorder, remove and clear are all this one
+    call — the browser owns the order it is showing, and a partial update would
+    let the two drift apart mid-show."""
+    items = body.get("items")
+    if not isinstance(items, list):
+        raise HTTPException(400, "items must be a list")
+    return await asyncio.to_thread(orpheus.save_setlist, items,
+                                   body.get("position", 0), body.get("mode", "hold"))
+
+
+@app.post("/orpheus/setlist/{job_id}")
+async def orpheus_setlist_add(job_id: str):
+    """Send to Orpheus."""
+    return await asyncio.to_thread(_orpheus_guard, orpheus.add_to_setlist, job_id)
 
 
 @app.post("/morpheus/delete_all")

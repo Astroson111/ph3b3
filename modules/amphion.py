@@ -353,15 +353,20 @@ _JD_LIKE_OPEN  = "<<<LYRICS>>>"
 _JD_LIKE_CLOSE = "<<<END LYRICS>>>"
 
 
-def _default_llm(prompt: str) -> str:
-    """Local Hermes3 generate. No tools, no egress — same discipline as the rest."""
+def _default_llm(prompt: str, temperature: float = 0.0) -> str:
+    """Local Hermes3 generate. No tools, no egress — same discipline as the rest.
+
+    temperature defaults to 0.0 so every existing caller (the copyright check)
+    keeps the deterministic behaviour it was written against. Title suggestion
+    passes a warm value on purpose: a judge must not wander, a namer must.
+    """
     import os
     import httpx as _hx
     host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
     model = os.getenv("PH3B3_HEAVY_MODEL", os.getenv("PH3B3_MODEL", "hermes3"))
     r = _hx.post(f"{host}/api/generate",
                  json={"model": model, "prompt": prompt, "stream": False,
-                       "options": {"temperature": 0.0, "num_ctx": 4096}},
+                       "options": {"temperature": float(temperature), "num_ctx": 4096}},
                  timeout=60.0)
     r.raise_for_status()
     return r.json().get("response", "")
@@ -686,6 +691,12 @@ def _write_sidecar(job_id: str, p: dict, path: Path) -> None:
     meta = {"job_id": job_id, "model_variant": p.get("variant", "base"),
             "model_file": DIT_BY_VARIANT.get(p.get("variant", "base")),
             "steps": STEPS, "cfg": CFG, "sampler": SAMPLER, "scheduler": SCHED, "shift": SHIFT,
+            # The name. `title` is the display form exactly as typed; `slug` is
+            # derived from it once at queue time and is what the export filename
+            # uses. Both must be named explicitly — this dict is a WHITELIST, and
+            # a title passed in `p` alone would be dropped silently, leaving the
+            # metadata to fall back to "Amphion <job_id>" with nothing to show why.
+            "title": p.get("title"), "slug": p.get("slug"),
             "tags": p.get("tags", ""), "lyrics": p.get("lyrics", ""), "bpm": p.get("bpm"),
             "keyscale": p.get("keyscale"), "timesignature": p.get("timesig", "4"),
             "seconds": p.get("seconds"), "seed": p.get("seed"),
@@ -970,12 +981,36 @@ def register_task(job_id: str, task: asyncio.Task) -> None:
 
 # ── Library — scan songs/ + sidecars (no SQLite; sidecar IS the record) ──────────
 def library(n: int = 100) -> list[dict]:
+    """Every Amphion render. A RENDER IS A MASTER PLUS ITS SIDECAR — that is the
+    module's stated record model, and this function now holds to it.
+
+    It used to list every .flac in the directory and shrug at a missing sidecar,
+    which was harmless while nothing else wrote there. Orpheus writes
+    <slug>-instrumental.flac beside the master, as its brief specifies, and four
+    of them promptly appeared in the library as songs: no sidecar, so no title,
+    no seed and no date, and slug_for gave all four the same derived name —
+    "untitled-noseed-20260906". Four identical entries that were not songs.
+
+    Filtering on the sidecar rather than on the "-instrumental" suffix is
+    deliberate: it fixes the whole class rather than the one member of it that
+    has shown up so far, and any future tool that drops audio in here is covered
+    without amphion having to learn what that tool is called.
+    """
     d = _songs_dir()
     out = []
-    for f in sorted(d.glob("*.flac"), key=lambda x: x.stat().st_mtime, reverse=True)[:n]:
+    for f in sorted(d.glob("*.flac"), key=lambda x: x.stat().st_mtime, reverse=True):
         side = f.with_suffix(".json")
-        meta = json.loads(side.read_text()) if side.exists() else {}
-        out.append({"job_id": f.stem, "tags": meta.get("tags", ""), "lyrics": meta.get("lyrics", ""),
+        if not side.exists():
+            continue
+        try:
+            meta = json.loads(side.read_text())
+        except Exception:
+            continue
+        if len(out) >= n:
+            break
+        out.append({"job_id": f.stem,
+                    "title": meta.get("title") or "", "slug": slug_for(f.stem, meta),
+                    "tags": meta.get("tags", ""), "lyrics": meta.get("lyrics", ""),
                     "seed": meta.get("seed"), "variant": meta.get("model_variant", "base"),
                     "bpm": meta.get("bpm"), "keyscale": meta.get("keyscale"),
                     "created_at": meta.get("created_at"), "bytes": f.stat().st_size})
@@ -1029,7 +1064,10 @@ def _tags_for(job_id: str, p: dict, fmt: str) -> list[str]:
     written in every format — it is what makes the remix provenance check
     enforceable, and it is the honest thing to ship on generated audio."""
     prov = f"{PROVENANCE}; generation_id={job_id}"
-    title = (p.get("title") or f"Amphion {job_id}").strip()
+    # The name the file carries into a DAW. Falls back through slug_for, so a
+    # track generated before titling gets the same untitled-<seed>-<date> name in
+    # its metadata that it gets in its filename — the two never disagree.
+    title = (p.get("title") or "").strip() or slug_for(job_id, p)
     tags = (p.get("tags") or "").strip()
     lyrics = (p.get("lyrics") or "").strip()
     bpm = p.get("bpm")
@@ -1081,6 +1119,327 @@ def _sidecar_for(job_id: str) -> dict:
         return json.loads((_songs_dir() / f"{job_id}.json").read_text("utf-8"))
     except Exception:
         return {}
+
+
+# ── Song naming — display title, file slug, Hermes3 suggestions ──────────────
+# Every render gets a title. Hermes3 proposes, Astro always overrides, and a
+# blank field is a name too (the untitled- form below) rather than a nameless
+# file. There is ONE source of truth: the display title exactly as typed. The
+# slug is DERIVED from it, once, at render, and is never hand-edited — which is
+# why rename touches the title and leaves the slug alone.
+#
+# NO FLOOR CALL LIVES IN THIS SECTION, and that is deliberate. A title labels
+# lyrics that already passed the floor when the track was generated; floor_check
+# gates what gets MADE, not what it is called. Putting a second, weaker copy of
+# the gate on a surface that generates nothing would add refusals without adding
+# safety, so the suggest prompt and the title text are never routed through it.
+#
+# NO NETWORK. suggest_titles goes to the same localhost Ollama that the chat tab
+# uses, through the same _default_llm this module already had for the copyright
+# check. No new model is pulled and nothing leaves the machine.
+
+TITLE_MAX = 200          # display title, as typed (UTF-8) — a sane upper bound, not a style rule
+SLUG_MAX = 60            # file slug, ASCII, per brief
+SUGGEST_MIN, SUGGEST_MAX = 3, 5
+
+# Slugs reserved by renders that are queued but whose sidecar has not landed yet.
+# The on-disk scan alone is not enough: variations queue N jobs at once and each
+# sidecar is only written when that job finishes, so four tracks sharing a title
+# would all derive the same slug and all believe it was free. Reservations are
+# in-memory and per-process, which is the right lifetime — a slug is only at risk
+# from a job this process queued and has not yet written.
+_reserved_slugs: set[str] = set()
+
+
+class SuggestFailed(Exception):
+    """Hermes3 gave nothing usable. Raised so the caller fails LOUD — the field
+    is left exactly as the user had it, never silently blanked."""
+
+
+def slugify(text: str) -> str:
+    """Display title -> file slug: lowercase, ASCII, [a-z0-9-] only, runs of
+    anything else collapsed to a single hyphen, trimmed to SLUG_MAX.
+
+    May return "" — a title of pure emoji has no ASCII left after folding. The
+    empty case is the CALLER's to handle (resolve_naming falls back to the
+    untitled- form); returning "" here rather than inventing something keeps this
+    function pure and testable.
+    """
+    import unicodedata
+    # NFKD then ASCII-fold: "Café" -> "cafe", "①" -> "1", emoji -> dropped.
+    folded = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"[^a-z0-9]+", "-", folded.lower()).strip("-")
+    # Hard cut at SLUG_MAX, then strip a hyphen the cut may have left dangling.
+    # A hard cut can land mid-word; that is preferred over trimming back to the
+    # last hyphen, which would throw away most of a title made of long words.
+    return s[:SLUG_MAX].strip("-")
+
+
+def untitled_name(seed, when: datetime | None = None) -> str:
+    """`untitled-<seed>-<YYYYMMDD>` — the name a blank field renders under.
+
+    Deterministic and seed-anchored, and computed WITHOUT an LLM call: a blank
+    title must still produce a file on a machine where Ollama is down. The date
+    is UTC, matching the sidecar's created_at, so the name and the record agree.
+    """
+    when = when or datetime.now(timezone.utc)
+    sd = "noseed" if seed is None else str(seed)
+    return f"untitled-{sd}-{when.strftime('%Y%m%d')}"
+
+
+def _slugs_on_disk() -> set[str]:
+    """Every export name already spoken for — recorded slugs AND the names that
+    tracks from before titling derive. A new song must not be able to claim
+    either."""
+    return _export_names()[1]
+
+
+def reserve_slug(base: str) -> str:
+    """Claim `base`, or `base-2`, `base-3`, … if it is taken. The claim is held in
+    memory until the process restarts; by then the sidecar exists and the on-disk
+    scan sees it."""
+    taken = _slugs_on_disk() | _reserved_slugs
+    slug, n = base, 1
+    while slug in taken:
+        n += 1
+        slug = f"{base}-{n}"
+    _reserved_slugs.add(slug)
+    return slug
+
+
+def resolve_naming(title: str | None, seed, when: datetime | None = None) -> dict:
+    """Settle the name of a render, once, at queue time.
+
+    Returns {"title": <display, as typed>, "slug": <ascii, collision-free>}.
+    A blank or whitespace-only title becomes the untitled- form in BOTH fields,
+    so the file, the sidecar and the embedded metadata all say the same thing.
+    """
+    display = (title or "").strip()[:TITLE_MAX]
+    fallback = untitled_name(seed, when)
+    if not display:
+        display = fallback
+    base = slugify(display) or slugify(fallback) or "untitled"
+    return {"title": display, "slug": reserve_slug(base)}
+
+
+def _parse_created(s) -> datetime | None:
+    """created_at back to a datetime, or None. Used to date an untitled- name for
+    a track that predates titling, so the name reflects when it was MADE."""
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+def _derive_slug(job_id: str, side: dict) -> str:
+    """The name a track with no recorded slug would export under, on its own.
+
+    Tracks generated before titling have no `slug`. Rather than fall back to the
+    raw job id — a hex string that tells a DAW nothing — they are named from the
+    title if a title is there, and otherwise by the same untitled- rule, from the
+    seed and creation date the sidecar already records.
+
+    Collision-blind on purpose: two tracks can derive the same name here, and
+    resolving that needs to see the whole directory. That is _export_names'.
+    """
+    s = slugify(side.get("title") or "")
+    if s:
+        return s
+    when = _parse_created(side.get("created_at"))
+    return slugify(untitled_name(side.get("seed"), when)) or job_id
+
+
+def _export_names() -> tuple[dict[str, str], set[str]]:
+    """(job_id -> export name, every name taken) for the whole songs directory.
+
+    Derivation collides in practice and not rarely: Astro's library had three
+    collision groups covering seven of forty-five tracks. Two are the same title
+    rendered twice; two are the same SEED rendered twice, which is what the
+    "Use this voice" button is for, so it is the normal way to work rather than
+    an edge case. Left alone, each group downloads as several files with one
+    name and the browser silently appends "(1)".
+
+    Resolved here, across the whole directory, because a single sidecar cannot
+    see its own collision. RECORDED slugs are fixed and are laid down first —
+    they were settled at render and nothing may move them. Derived names are then
+    fitted around them: oldest keeps the plain name, the rest take -2, -3 in
+    creation order, with the job id breaking ties so the answer never depends on
+    the order the directory happens to list in. A derived name also steps around
+    a recorded one, which is the same collision wearing a different hat.
+
+    Stable in practice: only tracks with no recorded slug take part, and every
+    track rendered from now on records one, so the derived group cannot grow. It
+    CAN shrink — delete the oldest of a colliding pair and the survivor's export
+    name loses its -2. That is cosmetic and it is the reason this is a pure read:
+    the identity of a track is its job id and its sidecar, never its download name.
+    """
+    recorded: dict[str, str] = {}
+    groups: dict[str, list[tuple[str, str]]] = {}
+    try:
+        for f in _songs_dir().glob("*.json"):
+            # A sidecar with no master beside it cannot be exported, so it must
+            # not hold an export name. Two kinds sit in this directory: failed and
+            # cancelled renders, which are written on purpose so a bad result can
+            # be reproduced — and, in Astro's library, hand-made COPIES of real
+            # sidecars saved under the name he wanted, which is the manual
+            # workaround this whole feature replaces. Counting either one numbered
+            # the real tracks around ghosts: two takes of one song came out
+            # "somebody-else-s-computer" and "-3", because two nameless copies had
+            # silently taken the numbers in between.
+            if not (f.with_suffix(".flac")).exists():
+                continue
+            try:
+                side = json.loads(f.read_text("utf-8"))
+            except Exception:
+                continue
+            s = (side.get("slug") or "").strip()
+            if s:
+                recorded[f.stem] = s          # settled at render; never moved
+            else:
+                groups.setdefault(_derive_slug(f.stem, side), []).append(
+                    (side.get("created_at") or "", f.stem))
+    except Exception:
+        return {}, set()
+    names = dict(recorded)
+    taken = set(recorded.values())
+    for base, members in groups.items():
+        for _, jid in sorted(members):
+            name, n = base, 1
+            while name in taken:
+                n += 1
+                name = f"{base}-{n}"
+            names[jid] = name
+            taken.add(name)
+    return names, taken
+
+
+def slug_for(job_id: str, side: dict | None = None) -> str:
+    """The export filename stem for an existing track. Nothing is written back;
+    this is a read."""
+    side = _sidecar_for(job_id) if side is None else side
+    s = (side.get("slug") or "").strip()
+    if s:
+        return s
+    # _export_names knows about collisions with the track's neighbours. It only
+    # answers for sidecars actually on disk, so a synthetic one falls through to
+    # the plain derivation rather than to the job id.
+    return _export_names()[0].get(job_id) or _derive_slug(job_id, side)
+
+
+# ── Hermes3 title suggestions ────────────────────────────────────────────────
+_SUGGEST_PROMPT = (
+    "You title songs. Given lyrics and a style tag, return exactly a JSON array "
+    f"of {SUGGEST_MIN}-{SUGGEST_MAX} short titles (1-6 words each). "
+    "No commentary, no markdown.\n\n"
+    "Style tag: {tags}\n"
+    "Lyrics:\n{lyrics}\n\n"
+    "JSON array only:"
+)
+
+
+def _strip_fences(raw: str) -> str:
+    """Hermes3 wraps JSON in ```json fences perhaps half the time. Strip them
+    defensively, then take the outermost [ … ].
+
+    Taking the bracket span rather than parsing the whole reply is what salvages
+    the two commonest deviations from the contract, and both are worth salvaging:
+    a stray sentence either side of the array ("Sure! Here are some titles:"),
+    and the array wrapped in an object ({"titles": [...]}). In both cases the
+    titles the model produced are perfectly good and the only thing wrong is the
+    packaging. Refusing them would be a worse button, not a stricter one.
+    """
+    t = (raw or "").strip()
+    t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+    t = re.sub(r"\s*```$", "", t).strip()
+    i, j = t.find("["), t.rfind("]")
+    return t[i:j + 1] if 0 <= i < j else t
+
+
+def suggest_titles(lyrics: str = "", tags: str = "", llm=None) -> list[str]:
+    """3-5 candidate titles from the local Hermes3. Raises SuggestFailed on an
+    unreachable Ollama or unusable output — never returns [] and never returns
+    something invented locally, because a silent fallback would be indistinguishable
+    from a real suggestion.
+
+    Instrumental fallback: with no lyrics it names from the style tag alone. With
+    NEITHER there is nothing to name from, and the caller is expected not to ask.
+    """
+    lyrics, tags = (lyrics or "").strip(), (tags or "").strip()
+    if not lyrics and not tags:
+        raise SuggestFailed("nothing to name from yet")
+    llm = llm or _default_llm
+    prompt = _SUGGEST_PROMPT.format(
+        tags=tags or "(none given)",
+        lyrics=lyrics[:4000] if lyrics else "(instrumental — no lyrics; name it from the style alone)")
+    try:
+        # Warm, not deterministic: at temperature 0 a second press of the button
+        # returns the identical list, which reads as a broken button.
+        raw = llm(prompt, temperature=0.8)
+    except Exception as exc:
+        # The lyric text is NEVER logged here — only that the call failed and why.
+        log.warning("[amphion] title suggest: local model call failed: %s", exc)
+        raise SuggestFailed("suggestion failed — name it yourself") from exc
+    try:
+        data = json.loads(_strip_fences(raw))
+    except Exception:
+        log.warning("[amphion] title suggest: model did not return JSON")
+        raise SuggestFailed("suggestion failed — name it yourself")
+    if not isinstance(data, list):
+        log.warning("[amphion] title suggest: JSON was not a list")
+        raise SuggestFailed("suggestion failed — name it yourself")
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in data:
+        if not isinstance(item, str):
+            continue
+        t = " ".join(item.split()).strip(" \"'`").strip()[:TITLE_MAX]
+        if not t or t.lower() in seen:
+            continue
+        seen.add(t.lower())
+        out.append(t)
+        if len(out) == SUGGEST_MAX:
+            break
+    if not out:
+        log.warning("[amphion] title suggest: list held no usable titles")
+        raise SuggestFailed("suggestion failed — name it yourself")
+    return out
+
+
+def rename_song(job_id: str, title: str) -> dict | None:
+    """Retitle an existing track. Updates the sidecar `title`; the SLUG IS NOT
+    RECOMPUTED and the file does not move.
+
+    Files staying put is the point: a rename that renamed the master would break
+    every link, every remix provenance chain and every download URL already in
+    flight, to change a label. Embedded metadata needs no separate write — it is
+    stamped at export time from the sidecar (see _tags_for), so the next export
+    carries the new title automatically.
+
+    Returns the new {"title", "slug"} or None if there is no such track.
+    """
+    p = song_path(job_id)
+    if not p:
+        return None
+    side = _sidecar_for(job_id)
+    if not side:
+        return None
+    display = (title or "").strip()[:TITLE_MAX]
+    if not display:
+        display = untitled_name(side.get("seed"),
+                                _parse_created(side.get("created_at")))
+    side["title"] = display
+    # A RECORDED slug is kept: it was settled at render, and a track that has
+    # been exported and linked under a name does not lose it to a relabel.
+    #
+    # A track with no recorded slug is the other case, and it must not be handed
+    # the name it was merely DERIVING. That name is the untitled- form it is
+    # being renamed away from — pinning it would mean "The Machine" downloads
+    # for ever as untitled-3695418445-20260828.flac. Deriving from the new title
+    # is the whole point of renaming a track that never had a name.
+    if not (side.get("slug") or "").strip():
+        side["slug"] = reserve_slug(_derive_slug(job_id, side) or job_id)
+    p.with_suffix(".json").write_text(json.dumps(side, indent=2))
+    return {"title": side["title"], "slug": side["slug"]}
 
 
 
@@ -1164,17 +1523,37 @@ def export_bytes(job_id: str, fmt: str, loudness: str = "peak",
         if r.returncode != 0:
             log.warning("[amphion] export %s -> %s failed: %s", job_id, fmt, r.stderr[-300:])
             return None
-        return Path(dst).read_bytes(), mt, f"{job_id}.{fmt}"
+        # Named by the slug, not the job id: this is the filename that lands in
+        # someone's Downloads folder and gets dragged into a DAW.
+        return Path(dst).read_bytes(), mt, f"{slug_for(job_id)}.{fmt}"
     finally:
         Path(dst).unlink(missing_ok=True)
 
 
 def delete_song(job_id: str) -> bool:
+    """Delete a render and everything derived from it.
+
+    The instrumental and the timing file are named from the SLUG and live beside
+    the master, so deleting only <job_id>.flac/.json used to leave them behind as
+    orphans — audio with no record, which is exactly the shape of thing that then
+    turns up in a listing pretending to be a song. Whatever the sidecar says was
+    derived is deleted with it, and the slug-derived names are swept too in case
+    the sidecar was written before those names were recorded.
+    """
     p = song_path(job_id)
     if not p:
         return False
+    side = _sidecar_for(job_id)
+    derived = {(side.get("stems") or {}).get("instrumental"),
+               (side.get("stems") or {}).get("timing")}
+    stem = slug_for(job_id, side)
+    derived |= {f"{stem}-instrumental.flac", f"{stem}-timing.json"}
     p.unlink(missing_ok=True)
     p.with_suffix(".json").unlink(missing_ok=True)
+    for name in filter(None, derived):
+        f = _songs_dir() / name
+        if f.parent == _songs_dir():          # never follow a name out of the directory
+            f.unlink(missing_ok=True)
     return True
 
 

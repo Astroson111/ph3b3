@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Orpheus — Ph3b3</title>
+<style>
+/* Orpheus is AMBER and its icon is a microphone. Morpheus is purple and its icon
+   is a crescent. Two letters apart in the name, nothing alike on screen — a
+   misclick is meant to announce itself before anything is generated. */
+:root{
+  --amber:#ffb020; --amber-dim:#8a5c10;
+  --bg:#07070c; --bg2:#0e0e18; --line:#1e1e2c;
+  --text:#f2ece0; --ghost:#6b6a7a; --bad:#ff5c5c; --good:#4ade80;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  display:grid; grid-template-columns:340px 1fr; overflow:hidden;
+}
+button{font:inherit;color:inherit;cursor:pointer;background:none;border:none}
+
+/* ── Chrome (everything that is not the lyrics) ─────────────────────────── */
+#chrome{
+  background:var(--bg2); border-right:1px solid var(--line);
+  display:flex; flex-direction:column; height:100vh; overflow:hidden;
+}
+#brand{
+  display:flex; align-items:center; gap:.55rem;
+  padding:.9rem 1rem; border-bottom:1px solid var(--line); flex-shrink:0;
+}
+#brand svg{width:22px;height:22px;stroke:var(--amber);fill:none;stroke-width:2;
+           stroke-linecap:round;stroke-linejoin:round}
+#brand h1{font-size:1rem;letter-spacing:.14em;text-transform:uppercase;color:var(--amber)}
+#brand small{margin-left:auto;color:var(--ghost);font-size:.68rem}
+
+.sect{border-bottom:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.sect > h2{
+  font-size:.68rem;letter-spacing:.16em;text-transform:uppercase;color:var(--ghost);
+  padding:.7rem 1rem .4rem;display:flex;align-items:center;gap:.5rem;flex-shrink:0;
+}
+.sect > h2 .sp{margin-left:auto;display:flex;gap:.35rem}
+.scroll{overflow-y:auto;padding:0 .6rem .7rem}
+#setlistSect{flex:0 0 auto;max-height:38vh}
+#pickerSect{flex:1 1 auto}
+
+.row{
+  display:flex;align-items:center;gap:.5rem;padding:.45rem .5rem;border-radius:7px;
+  border:1px solid transparent;
+}
+.row:hover{background:#15151f}
+.row .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.84rem}
+.row .sub{font-size:.68rem;color:var(--ghost)}
+.row.now{border-color:var(--amber);background:#1a1408}
+.row.dragging{opacity:.4}
+.pill{font-size:.6rem;padding:.1rem .35rem;border-radius:4px;border:1px solid var(--line);color:var(--ghost)}
+.pill.ok{color:var(--good);border-color:#1d4d33}
+.pill.no{color:var(--amber-dim);border-color:#4a3410}
+.mini{font-size:.68rem;padding:.2rem .45rem;border:1px solid var(--line);border-radius:5px;color:var(--ghost)}
+.mini:hover{color:var(--amber);border-color:var(--amber-dim)}
+.mini[disabled]{opacity:.35;cursor:not-allowed}
+.mini.go{color:var(--amber);border-color:var(--amber-dim)}
+
+/* ── Stage ──────────────────────────────────────────────────────────────── */
+#stage{display:flex;flex-direction:column;height:100vh;overflow:hidden;position:relative}
+#nowTitle{
+  padding:.9rem 1.4rem .2rem;font-size:.78rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ghost);flex-shrink:0;
+}
+#lyrics{
+  flex:1;overflow:hidden;position:relative;
+  display:flex;align-items:center;justify-content:center;
+}
+#lyricScroll{
+  width:100%;padding:0 4vw;text-align:center;
+  transition:transform .35s cubic-bezier(.22,.61,.36,1);   /* smooth, never a jump cut */
+}
+.ln{
+  font-size:clamp(1.1rem,2.4vw,2rem);line-height:1.35;margin:.55rem 0;
+  color:#2e2d3a; transition:color .25s, opacity .25s; opacity:.75;
+}
+.ln.section{font-size:.8rem;letter-spacing:.22em;text-transform:uppercase;color:#33323f}
+.ln.next{color:var(--ghost);opacity:.9}
+.ln.cur{
+  font-size:clamp(1.8rem,4.6vw,4rem);font-weight:700;color:var(--text);opacity:1;
+  text-shadow:0 0 40px rgba(255,176,32,.14);
+}
+.ln.sel{background:rgba(255,176,32,.08);border-radius:10px}
+.w{transition:color .08s linear}
+.ln.cur .w.done{color:var(--amber)}
+.ln.cur .w.on{color:#fff;text-shadow:0 0 26px rgba(255,176,32,.75)}
+
+#notice{
+  position:absolute;top:1rem;left:50%;transform:translateX(-50%);
+  background:#2a1010;border:1px solid var(--bad);color:#ffd7d7;
+  padding:.5rem .9rem;border-radius:8px;font-size:.82rem;max-width:80%;
+  display:none;z-index:5;
+}
+#notice.show{display:block}
+
+#nextUp{
+  position:absolute;inset:0;display:none;flex-direction:column;
+  align-items:center;justify-content:center;gap:1.2rem;background:rgba(7,7,12,.94);z-index:4;
+}
+#nextUp.show{display:flex}
+#nextUp .lab{font-size:.8rem;letter-spacing:.24em;text-transform:uppercase;color:var(--ghost)}
+#nextUp .ttl{font-size:clamp(1.6rem,4vw,3rem);font-weight:700;color:var(--amber);text-align:center;padding:0 6vw}
+#nextUp button{
+  border:1px solid var(--amber);color:var(--amber);border-radius:10px;
+  padding:.7rem 2rem;font-size:1rem;letter-spacing:.1em;text-transform:uppercase;
+}
+
+/* ── Transport ──────────────────────────────────────────────────────────── */
+#bar{flex-shrink:0;padding:.7rem 1.4rem 1rem;border-top:1px solid var(--line)}
+#seek{
+  height:6px;background:#1b1b28;border-radius:99px;cursor:pointer;position:relative;
+}
+#seekFill{height:100%;background:var(--amber);border-radius:99px;width:0}
+#seekLoop{
+  position:absolute;top:0;height:100%;background:rgba(255,176,32,.28);
+  border-radius:99px;display:none;
+}
+#times{display:flex;justify-content:space-between;font-size:.7rem;color:var(--ghost);margin-top:.35rem}
+#tp{display:flex;align-items:center;gap:.8rem;margin-top:.6rem}
+#tp button{
+  border:1px solid var(--line);border-radius:9px;padding:.5rem .9rem;font-size:.85rem;color:var(--ghost)
+}
+#tp button:hover{color:var(--amber);border-color:var(--amber-dim)}
+#tp #play{border-color:var(--amber-dim);color:var(--amber);padding:.5rem 1.6rem;font-size:1rem}
+#tp .sp{margin-left:auto;display:flex;gap:.6rem;align-items:center}
+#loopNote{font-size:.7rem;color:var(--amber)}
+
+/* ── Stream mode: the OBS capture surface ───────────────────────────────── */
+/* Only lyrics and a slim bar. Nothing that says "software" is on screen. */
+body.stream{grid-template-columns:1fr}
+body.stream #chrome{display:none}
+body.stream #nowTitle{display:none}
+body.stream #bar{padding:0;border-top:none}
+body.stream #times,body.stream #tp{display:none}
+body.stream #seek{height:3px;border-radius:0;background:#141420}
+body.stream #seekFill{border-radius:0}
+#exitStream{
+  position:absolute;top:.5rem;right:.7rem;font-size:.62rem;color:#22212c;z-index:6;
+}
+body.stream #exitStream{display:block}
+#exitStream{display:none}
+#exitStream:hover{color:var(--ghost)}
+</style>
+</head>
+<body>
+
+<aside id="chrome">
+  <div id="brand">
+    <!-- A microphone. Morpheus is a crescent moon; these do not blur together. -->
+    <svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
+    <h1>Orpheus</h1>
+    <small id="gpuNote"></small>
+  </div>
+
+  <div class="sect" id="setlistSect">
+    <h2>Setlist
+      <span class="sp">
+        <button class="mini" id="modeBtn" title="What happens when a song ends">hold</button>
+        <button class="mini" id="clearBtn">clear</button>
+      </span>
+    </h2>
+    <div class="scroll" id="setlist"></div>
+  </div>
+
+  <div class="sect" id="pickerSect">
+    <h2>Songs <span class="sp"><button class="mini" id="batchBtn">prepare all</button></span></h2>
+    <div class="scroll" id="picker"></div>
+  </div>
+</aside>
+
+<main id="stage">
+  <button id="exitStream">exit stream mode</button>
+  <div id="nowTitle">nothing loaded</div>
+  <div id="lyrics">
+    <div id="lyricScroll"></div>
+    <div id="notice"></div>
+    <div id="nextUp">
+      <div class="lab">Next up</div>
+      <div class="ttl" id="nextTitle"></div>
+      <button id="goNext">Start</button>
+    </div>
+  </div>
+  <div id="bar">
+    <div id="seek"><div id="seekLoop"></div><div id="seekFill"></div></div>
+    <div id="times"><span id="tCur">0:00</span><span id="tDur">0:00</span></div>
+    <div id="tp">
+      <button id="play">▶ Play</button>
+      <button id="restart">⟲ Restart</button>
+      <button id="prev">⏮ Prev</button>
+      <button id="next">⏭ Next</button>
+      <span class="sp">
+        <span id="loopNote"></span>
+        <button id="loopBtn" disabled>Loop selection</button>
+        <button id="streamBtn">Stream mode</button>
+      </span>
+    </div>
+  </div>
+</main>
+
+<audio id="pa" preload="auto"></audio>
+<audio id="pb" preload="auto"></audio>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const mmss = s => (isFinite(s) && s >= 0)
+  ? Math.floor(s/60) + ':' + String(Math.floor(s%60)).padStart(2,'0') : '0:00';
+
+// ── Failure is spoken, never swallowed ──────────────────────────────────────
+// Every state this page can be in that is not "singing" gets said out loud. The
+// one thing it must never do is go blank and leave him guessing mid-stream.
+let noticeTimer = null;
+function say(msg, sticky){
+  const n = $('notice');
+  n.textContent = msg; n.classList.add('show');
+  clearTimeout(noticeTimer);
+  if (!sticky) noticeTimer = setTimeout(() => n.classList.remove('show'), 6000);
+}
+function clearSay(){ $('notice').classList.remove('show'); clearTimeout(noticeTimer); }
+
+async function api(url, opts){
+  const r = await fetch(url, opts);
+  let d = null;
+  try { d = await r.json(); } catch(e){}
+  if (!r.ok) throw new Error((d && d.detail) || (r.status + ' ' + r.statusText));
+  return d;
+}
+
+// ── State ───────────────────────────────────────────────────────────────────
+const S = {
+  library: [], setlist: {items:[], position:0, mode:'hold'},
+  song: null,                 // the loaded song doc (entry + timing)
+  cache: new Map(),           // job_id -> song doc, so an advance is not a fetch
+  lines: [], lineEls: [], wordEls: [],
+  curLine: -1, curWord: -1,
+  sel: {a:null, b:null}, loop: null,
+  players: [], cur: 0,        // two <audio>: one sings, one loads the next
+  raf: null, pendingNext: null,
+};
+
+const audio = () => S.players[S.cur];
+const idle  = () => S.players[1 - S.cur];
+
+// ── Library + setlist ───────────────────────────────────────────────────────
+async function loadLibrary(){
+  try {
+    const d = await api('/orpheus/library');
+    S.library = d.songs || [];
+    $('gpuNote').textContent = d.gpu_busy ? 'GPU busy' : '';
+    $('gpuNote').style.color = d.gpu_busy ? 'var(--bad)' : 'var(--ghost)';
+    renderPicker();
+  } catch(e){ say('Could not read the song library: ' + e.message, true); }
+}
+
+function renderPicker(){
+  const box = $('picker');
+  if (!S.library.length){ box.innerHTML = '<div class="row"><span class="sub">No Amphion songs yet.</span></div>'; return; }
+  box.innerHTML = '';
+  S.library.forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const ready = s.has_instrumental && (s.has_timing || s.instrumental_only);
+    row.innerHTML =
+      '<span class="t">' + esc(s.title) + '</span>' +
+      (s.instrumental_only ? '<span class="pill">instrumental</span>' : '') +
+      '<span class="pill ' + (s.has_instrumental?'ok':'no') + '">stems</span>' +
+      (s.instrumental_only ? '' : '<span class="pill ' + (s.has_timing?'ok':'no') + '">timing</span>');
+    const btn = document.createElement('button');
+    btn.className = 'mini' + (ready ? ' go' : '');
+    btn.textContent = ready ? 'send' : 'prepare';
+    btn.onclick = () => ready ? sendToSetlist(s.job_id) : prepare(s.job_id, btn);
+    row.appendChild(btn);
+    box.appendChild(row);
+  });
+}
+
+async function prepare(jobId, btn){
+  const label = btn ? btn.textContent : '';
+  if (btn){ btn.disabled = true; btn.textContent = 'working…'; }
+  try {
+    await api('/orpheus/prepare/' + encodeURIComponent(jobId), {method:'POST'});
+    clearSay();
+    await loadLibrary();
+  } catch(e){
+    // A 409 carries the name of the job holding the GPU. Show it verbatim —
+    // "GPU busy: Amphion song 8f15 (generating)" tells him what to wait for.
+    say(e.message, true);
+    if (btn){ btn.disabled = false; btn.textContent = label; }
+  }
+}
+
+async function sendToSetlist(jobId){
+  try {
+    S.setlist = await api('/orpheus/setlist/' + encodeURIComponent(jobId), {method:'POST'});
+    renderSetlist();
+    if (!S.song) playIndex(S.setlist.items.length - 1);
+  } catch(e){ say(e.message, true); }
+}
+
+async function saveSetlist(){
+  try {
+    S.setlist = await api('/orpheus/setlist', {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({items:S.setlist.items, position:S.setlist.position, mode:S.setlist.mode})
+    });
+  } catch(e){ say('Setlist not saved: ' + e.message); }
+  renderSetlist();
+}
+
+function renderSetlist(){
+  const box = $('setlist');
+  $('modeBtn').textContent = S.setlist.mode === 'auto' ? 'auto-advance' : 'hold';
+  if (!S.setlist.items.length){
+    box.innerHTML = '<div class="row"><span class="sub">Empty — send a song from below.</span></div>';
+    return;
+  }
+  box.innerHTML = '';
+  S.setlist.items.forEach((it, i) => {
+    const row = document.createElement('div');
+    row.className = 'row' + (i === S.setlist.position ? ' now' : '');
+    row.draggable = true;
+    row.innerHTML = '<span class="sub">' + (i+1) + '</span><span class="t">' + esc(it.title) + '</span>';
+    const x = document.createElement('button');
+    x.className = 'mini'; x.textContent = '✕';
+    x.onclick = ev => { ev.stopPropagation(); S.setlist.items.splice(i,1);
+                        if (S.setlist.position > i) S.setlist.position--; saveSetlist(); };
+    row.appendChild(x);
+    row.onclick = () => playIndex(i);
+    row.ondragstart = ev => { ev.dataTransfer.setData('text/plain', i); row.classList.add('dragging'); };
+    row.ondragend   = () => row.classList.remove('dragging');
+    row.ondragover  = ev => ev.preventDefault();
+    row.ondrop      = ev => {
+      ev.preventDefault();
+      const from = parseInt(ev.dataTransfer.getData('text/plain'), 10);
+      if (isNaN(from) || from === i) return;
+      const moved = S.setlist.items.splice(from, 1)[0];
+      S.setlist.items.splice(i, 0, moved);
+      saveSetlist();
+    };
+    box.appendChild(row);
+  });
+}
+
+// ── Loading a song ──────────────────────────────────────────────────────────
+// Fetched into a cache and kept, because the NEXT song is fetched while the
+// current one plays. Advancing must not be the moment we discover the network.
+async function fetchSong(jobId){
+  if (S.cache.has(jobId)) return S.cache.get(jobId);
+  const d = await api('/orpheus/song/' + encodeURIComponent(jobId));
+  S.cache.set(jobId, d);
+  return d;
+}
+
+/** Point an <audio> at a song's instrumental and wait until it can play through.
+ *  Resolves either way — a preload that fails must not reject into the void and
+ *  it must not stop the current song. */
+function preloadInto(el, jobId){
+  return new Promise(resolve => {
+    const url = '/orpheus/audio/' + encodeURIComponent(jobId);
+    if (el.dataset.job === jobId && el.readyState >= 3) return resolve(true);
+    const ok = () => { cleanup(); resolve(true); };
+    const bad = () => { cleanup(); resolve(false); };
+    const cleanup = () => {
+      el.removeEventListener('canplaythrough', ok); el.removeEventListener('error', bad);
+    };
+    el.addEventListener('canplaythrough', ok, {once:true});
+    el.addEventListener('error', bad, {once:true});
+    el.dataset.job = jobId; el.src = url; el.load();
+  });
+}
+
+/** The song after this one, warmed into the idle player. Only the immediate
+ *  next: warming the whole queue would hold every instrumental in memory for a
+ *  running order that is about to be dragged around anyway. */
+async function warmNext(){
+  const nx = S.setlist.items[S.setlist.position + 1];
+  S.pendingNext = null;
+  if (!nx) return;
+  try { await fetchSong(nx.job_id); } catch(e){ /* reported when we get there */ }
+  const ok = await preloadInto(idle(), nx.job_id);
+  S.pendingNext = ok ? nx.job_id : null;
+}
+
+async function playIndex(i, autoplay){
+  if (i < 0 || i >= S.setlist.items.length) return;
+  const it = S.setlist.items[i];
+  S.setlist.position = i;
+  renderSetlist();
+  $('nextUp').classList.remove('show');
+  clearSay();
+
+  let doc;
+  try { doc = await fetchSong(it.job_id); }
+  catch(e){ say('Could not load "' + it.title + '": ' + e.message, true); return; }
+
+  // If the idle player was already warmed with this song, swap to it — that swap
+  // is the entire gapless trick. Otherwise load into the current one and wait.
+  if (idle().dataset.job === it.job_id && idle().readyState >= 3){
+    audio().pause();
+    S.cur = 1 - S.cur;
+  } else {
+    audio().pause();
+    const ok = await preloadInto(audio(), it.job_id);
+    if (!ok){ say('No instrumental for "' + it.title + '" — separate it first.', true); return; }
+  }
+  audio().currentTime = 0;
+
+  S.song = doc;
+  $('nowTitle').textContent = doc.title + (doc.instrumental_only ? ' · instrumental' : '');
+  if (doc.timing_error) say(doc.timing_error, true);
+  renderLyrics(doc);
+  clearSelection();
+  saveSetlist();
+  if (autoplay !== false) play();
+  warmNext();
+}
+
+// ── Lyrics ──────────────────────────────────────────────────────────────────
+function renderLyrics(doc){
+  const box = $('lyricScroll');
+  S.lines = []; S.lineEls = []; S.wordEls = []; S.curLine = -1; S.curWord = -1;
+  box.style.transform = 'translateY(0)';
+  box.innerHTML = '';
+
+  if (!doc.timing || !doc.timing.lines || !doc.timing.lines.length){
+    // Acceptance 4 and 7 live here. An instrumental has nothing to show and that
+    // is fine; a song whose timing went missing says so and still plays.
+    const d = document.createElement('div');
+    d.className = 'ln section';
+    d.textContent = doc.instrumental_only
+      ? '— instrumental —'
+      : (doc.has_timing ? '— timing missing —' : '— no timed lyrics for this song —');
+    box.appendChild(d);
+    if (!doc.instrumental_only && !doc.has_timing)
+      say('No timing file for this song — it will play without lyrics.');
+    return;
+  }
+
+  S.lines = doc.timing.lines;
+  S.lines.forEach((ln, i) => {
+    const el = document.createElement('div');
+    el.className = 'ln' + (ln.section ? ' section' : '');
+    if (ln.section || !ln.words.length){
+      el.textContent = ln.text;
+      S.wordEls.push([]);
+    } else {
+      const spans = ln.words.map(w => {
+        const sp = document.createElement('span');
+        sp.className = 'w'; sp.textContent = w.word;
+        return sp;
+      });
+      spans.forEach((sp, k) => { el.appendChild(sp); if (k < spans.length-1) el.appendChild(document.createTextNode(' ')); });
+      S.wordEls.push(spans);
+    }
+    // Click a line to select; shift-click to extend. That is the whole
+    // punch-in gesture — pick a span, hit loop.
+    el.onclick = ev => selectLine(i, ev.shiftKey);
+    box.appendChild(el);
+    S.lineEls.push(el);
+  });
+
+  const t = doc.timing;
+  if (t.lyrics_end_s && t.duration_s && t.duration_s - t.lyrics_end_s > 15){
+    say('Written lyrics end at ' + mmss(t.lyrics_end_s) + ' of ' + mmss(t.duration_s)
+        + ' — the render keeps singing past the sheet.');
+  }
+}
+
+/** The sweep. One rAF loop for the whole page; it touches only the spans whose
+ *  state actually changed, so a four-minute song is not four minutes of DOM
+ *  thrash. */
+function tick(){
+  S.raf = requestAnimationFrame(tick);
+  const a = audio();
+  const t = a.currentTime || 0;
+
+  $('seekFill').style.width = (a.duration ? (t / a.duration * 100) : 0) + '%';
+  $('tCur').textContent = mmss(t);
+  $('tDur').textContent = mmss(a.duration);
+
+  if (S.loop && t >= S.loop.end){ a.currentTime = S.loop.start; return; }
+  if (!S.lines.length) return;
+
+  let li = -1;
+  for (let i = 0; i < S.lines.length; i++){
+    const ln = S.lines[i];
+    if (ln.start == null) continue;
+    if (t >= ln.start - 0.15) li = i; else break;
+  }
+  if (li !== S.curLine){
+    if (S.curLine >= 0){
+      S.lineEls[S.curLine].classList.remove('cur');
+      S.wordEls[S.curLine].forEach(sp => sp.classList.remove('on','done'));
+    }
+    if (S.curLine + 1 < S.lineEls.length) S.lineEls[S.curLine+1]?.classList.remove('next');
+    S.curLine = li; S.curWord = -1;
+    if (li >= 0){
+      S.lineEls[li].classList.add('cur');
+      S.lineEls[li+1]?.classList.add('next');
+      centerLine(li);
+    }
+  }
+  if (S.curLine < 0) return;
+
+  const words = S.lines[S.curLine].words, spans = S.wordEls[S.curLine];
+  let wi = -1;
+  for (let k = 0; k < words.length; k++){
+    if (words[k].start != null && t >= words[k].start) wi = k; else break;
+  }
+  if (wi !== S.curWord){
+    for (let k = 0; k < spans.length; k++){
+      spans[k].classList.toggle('done', k < wi);
+      spans[k].classList.toggle('on', k === wi);
+    }
+    S.curWord = wi;
+  }
+}
+
+function centerLine(i){
+  const box = $('lyricScroll'), el = S.lineEls[i];
+  if (!el) return;
+  const y = el.offsetTop + el.offsetHeight/2 - box.offsetHeight/2;
+  box.style.transform = 'translateY(' + (-y) + 'px)';
+}
+
+// ── Part looping: verse-by-verse punch-ins ──────────────────────────────────
+// Select a span of lines, hit loop. It repeats with a 2s pre-roll so he comes in
+// on a breath rather than cold on the first syllable, and it keeps repeating
+// until stopped — that is what "in parts" recording actually needs.
+const PREROLL = 2.0;
+
+function selectLine(i, extend){
+  if (S.lines[i] && S.lines[i].section) return;      // a heading is not a take
+  if (extend && S.sel.a != null) S.sel.b = i;
+  else { S.sel.a = i; S.sel.b = i; }
+  paintSelection();
+}
+function clearSelection(){ S.sel = {a:null,b:null}; stopLoop(); paintSelection(); }
+function paintSelection(){
+  const lo = Math.min(S.sel.a ?? -1, S.sel.b ?? -1), hi = Math.max(S.sel.a ?? -1, S.sel.b ?? -1);
+  S.lineEls.forEach((el,i) => el.classList.toggle('sel', S.sel.a != null && i >= lo && i <= hi));
+  const span = selectionSpan();
+  $('loopBtn').disabled = !span;
+  $('loopBtn').textContent = S.loop ? 'Stop loop' : 'Loop selection';
+  $('loopNote').textContent = S.loop
+    ? ('looping ' + mmss(S.loop.start) + '–' + mmss(S.loop.end) + ' (' + PREROLL + 's pre-roll)')
+    : (span ? 'selected ' + mmss(span.start) + '–' + mmss(span.end) : '');
+  const sk = $('seekLoop'), a = audio();
+  if (S.loop && a.duration){
+    sk.style.display = 'block';
+    sk.style.left  = (S.loop.start / a.duration * 100) + '%';
+    sk.style.width = ((S.loop.end - S.loop.start) / a.duration * 100) + '%';
+  } else sk.style.display = 'none';
+}
+function selectionSpan(){
+  if (S.sel.a == null) return null;
+  const lo = Math.min(S.sel.a, S.sel.b), hi = Math.max(S.sel.a, S.sel.b);
+  const starts = [], ends = [];
+  for (let i = lo; i <= hi; i++){
+    if (S.lines[i]?.start != null) starts.push(S.lines[i].start);
+    if (S.lines[i]?.end   != null) ends.push(S.lines[i].end);
+  }
+  if (!starts.length || !ends.length) return null;
+  return {start: Math.min(...starts), end: Math.max(...ends)};
+}
+function toggleLoop(){
+  if (S.loop){ stopLoop(); paintSelection(); return; }
+  const span = selectionSpan();
+  if (!span) return;
+  S.loop = {start: Math.max(0, span.start - PREROLL), end: span.end + 0.25};
+  audio().currentTime = S.loop.start;
+  play();
+  paintSelection();
+}
+function stopLoop(){ S.loop = null; $('seekLoop').style.display = 'none'; }
+
+// ── Transport ───────────────────────────────────────────────────────────────
+function play(){ audio().play().then(() => $('play').textContent = '❚❚ Pause')
+                                .catch(e => say('Playback blocked — click the page once, then Play.')); }
+function pause(){ audio().pause(); $('play').textContent = '▶ Play'; }
+
+function onEnded(){
+  const nx = S.setlist.items[S.setlist.position + 1];
+  if (!nx){ $('play').textContent = '▶ Play'; return; }
+  if (S.setlist.mode === 'auto'){ playIndex(S.setlist.position + 1); return; }
+  // hold: the default. Dead air beats being ambushed by your own backing track
+  // halfway through a sentence.
+  $('nextTitle').textContent = nx.title;
+  $('nextUp').classList.add('show');
+  $('play').textContent = '▶ Play';
+}
+
+// ── Wiring ──────────────────────────────────────────────────────────────────
+S.players = [$('pa'), $('pb')];
+S.players.forEach(p => {
+  p.addEventListener('ended', () => { if (p === audio()) onEnded(); });
+  p.addEventListener('error', () => { if (p === audio()) say('The instrumental failed to load.', true); });
+});
+
+$('play').onclick    = () => audio().paused ? play() : pause();
+$('restart').onclick = () => { audio().currentTime = S.loop ? S.loop.start : 0; play(); };
+$('prev').onclick    = () => playIndex(S.setlist.position - 1);
+$('next').onclick    = () => playIndex(S.setlist.position + 1);
+$('goNext').onclick  = () => playIndex(S.setlist.position + 1);
+$('loopBtn').onclick = toggleLoop;
+$('clearBtn').onclick = () => { S.setlist.items = []; S.setlist.position = 0; saveSetlist(); };
+$('modeBtn').onclick = () => { S.setlist.mode = S.setlist.mode === 'auto' ? 'hold' : 'auto'; saveSetlist(); };
+
+$('seek').onclick = ev => {
+  const a = audio(); if (!a.duration) return;
+  const r = ev.currentTarget.getBoundingClientRect();
+  a.currentTime = (ev.clientX - r.left) / r.width * a.duration;
+};
+
+function setStream(on){
+  document.body.classList.toggle('stream', on);
+  $('streamBtn').textContent = on ? 'Exit stream mode' : 'Stream mode';
+  try { localStorage.setItem('orpheus.stream', on ? '1' : '0'); } catch(e){}
+  if (S.curLine >= 0) centerLine(S.curLine);
+}
+$('streamBtn').onclick = () => setStream(!document.body.classList.contains('stream'));
+$('exitStream').onclick = () => setStream(false);
+
+$('batchBtn').onclick = async () => {
+  const b = $('batchBtn');
+  b.disabled = true; b.textContent = 'preparing…';
+  try {
+    const d = await api('/orpheus/batch', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    say('Prepared ' + d.prepared.length + ', skipped ' + d.skipped.length +
+        (d.failed.length ? ', failed ' + d.failed.length + ': ' + d.failed[0].why : ''),
+        d.failed.length > 0);
+    await loadLibrary();
+  } catch(e){ say(e.message, true); }
+  finally { b.disabled = false; b.textContent = 'prepare all'; }
+};
+
+document.addEventListener('keydown', ev => {
+  if (ev.target.tagName === 'INPUT') return;
+  if (ev.code === 'Space'){ ev.preventDefault(); audio().paused ? play() : pause(); }
+  if (ev.key === 'Escape') setStream(false);
+  if (ev.key === 'l' || ev.key === 'L') toggleLoop();
+});
+
+// ── Boot ────────────────────────────────────────────────────────────────────
+// The setlist and the position come from the SERVER, so a reload mid-stream —
+// or a browser crash, or a different machine — picks the night up where it was.
+(async function boot(){
+  try { setStream(localStorage.getItem('orpheus.stream') === '1'); } catch(e){}
+  await loadLibrary();
+  try { S.setlist = await api('/orpheus/setlist'); } catch(e){ say('Setlist unavailable: ' + e.message); }
+  renderSetlist();
+  if (S.setlist.items.length){
+    // Loaded, not started. Coming back to a page that immediately starts singing
+    // at you is worse than one that waits.
+    await playIndex(S.setlist.position, false);
+  }
+  tick();
+})();
+</script>
+</body>
+</html>

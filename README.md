@@ -297,6 +297,40 @@ Built for the room it lives in — when it's not screening calls or generating i
 
 ---
 
+## Orpheus
+
+Amphion writes the song; Orpheus lets you *sing* it.
+
+Pick any track you've made and Orpheus splits it into stems on the GPU, keeps the mix minus the vocal as an instrumental beside the original, and runs Whisper over the isolated vocal to work out when every word lands. The result is a dedicated dark, big-type stage window — `/orpheus`, opened from the 🎤 button in the Amphion tab — where the current line sits huge and centred, the next one waits ghosted underneath, and the highlight sweeps word by word in time with the backing track.
+
+Because your catalogue is your own, the whole stream is strike-proof, and Orpheus is built to keep it that way: **it can only play songs this machine generated.** There is no "open a file" button, no URL box, no upload — every route reaches audio through an Amphion track id and nothing else. That isn't a feature waiting to be added; it's the property the module exists to protect.
+
+Build a **setlist** by hitting *Send to Orpheus* on any song in the library. The queue is ordered, drag-reorderable, and saved on the server rather than in the browser, so a reload — or a browser crash — halfway through a stream doesn't eat the night's lineup. Orpheus quietly preloads the next song's backing track and lyrics while the current one plays, so advancing is instant. When a song ends it **holds** on a "next up" card by default and waits for you to press start; flip it to auto-advance for a straight karaoke run.
+
+For punching in verse by verse, click a lyric line — shift-click to extend — and hit **Loop selection**. It repeats that span with a two-second pre-roll so you come in on a breath instead of cold on the first syllable.
+
+**Stream mode** strips everything but the lyrics and a slim progress bar. That's the surface OBS captures.
+
+Orpheus does not touch the microphone and does not record. OBS owns the mic on its own track; Orpheus plays and displays. Nothing captured means nothing to retain.
+
+### Streaming it
+
+OBS is already on Nyx. Capture the Orpheus window in stream mode, plus desktop audio for the backing track and your mic on a separate track so you can mix them after.
+
+* Encode with **NVENC** — it uses the card's dedicated encoder instead of competing with everything else for CUDA.
+* **Don't kick off renders mid-stream.** Orpheus refuses to separate or align while an Amphion or Morpheus job is in flight, and says which job is holding the GPU — but a render started *behind* a live stream will still take the card the encoder is sharing. Prepare the setlist before you go live.
+* Twitch has no follower gate. **TikTok LIVE needs 1,000 followers** — nothing to do with this code, but it decides where the first stream can go.
+
+### Preparing songs
+
+*Prepare all* in the Orpheus window batches the whole library: separation on every song that has vocals, then alignment. It runs one song at a time — there is one GPU — and re-checks between songs, so if you start a render mid-batch it stops cleanly at the next boundary rather than fighting you for the card.
+
+Alignment quality depends on `PH3B3_WHISPER_MODEL` (default `medium`). It matters more than it looks: on a three-minute track, `base` ran out of transcript at eighty seconds and landed one line on a real vocal onset, where `medium` covered the whole sung range and landed five. `base` is faster and it is wrong.
+
+An instrumental you generated with no lyrics opens fine — it just has no words to show. That's a song, not an error.
+
+---
+
 ## Ariadne
 
 Ariadne is Ph3b3's résumé toolkit — a private ATS reader and builder for job-seekers. Paste your résumé (or drop a `.txt`, `.docx`, or `.pdf`; a scanned image-PDF is flagged rather than mis-read), and she scores how cleanly an applicant-tracking system can parse it — tables, multi-column layouts, non-standard headers, and content stranded in headers or footers are each called out with the line they're on, alongside a section-completeness check. Add the job description — pasted, or fetched from a URL (Greenhouse, Lever, Workday, most career pages; login-walled sites like LinkedIn simply ask you to paste the text) — and she maps the keyword gap in two honest buckets: the terms you already demonstrate under different words, and the ones you'd have to genuinely earn.
