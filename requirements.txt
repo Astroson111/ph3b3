@@ -22,6 +22,12 @@ sounddevice>=0.4.6
 soundfile>=0.12.1
 openai-whisper>=20231117
 torch>=2.0.0
+
+# Orpheus — karaoke stem separation. Pulls einops/julius/lameenc/sphn and NOT
+# torchaudio: demucs 4.1 does its own audio I/O, so this installs alongside an
+# existing torch without moving it. Weights (htdemucs, ~80 MB) are fetched once
+# on the first separation and cached; after that Orpheus is offline.
+demucs>=4.1.0
 speedtest-cli>=2.1.3
 pykakasi>=2.2.1
 pypinyin>=0.51.0

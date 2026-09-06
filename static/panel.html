@@ -2103,7 +2103,14 @@
     </div>
 
     <div class="card">
-      <div class="card-title" data-i18n="amphion.library">Library</div>
+      <div class="card-title">
+        <span data-i18n="amphion.library">Library</span>
+        <!-- Orpheus opens in its OWN WINDOW, not as a tab here. It is the surface
+             OBS captures, and a tab would drag the whole panel into the shot. -->
+        <button type="button" class="amp-preset" id="ampOpenOrpheus"
+                style="flex:0 0 auto;margin-left:.6rem;padding:.25rem .6rem;color:#ffb020;border-color:#8a5c10"
+                title="Karaoke stage — stems, timed lyrics, setlist">🎤 Orpheus</button>
+      </div>
       <div id="ampLibrary" class="amp-lib"><div class="ari-hint" data-i18n="amphion.empty">No songs yet.</div></div>
     </div>
   </section>
@@ -3239,8 +3246,35 @@ let apInit;
     ampDurationRefresh();
   });
 
+  // Which songs Orpheus can already sing. Read from ORPHEUS, not from the
+  // Amphion library: Orpheus depends on Amphion and not the other way round, and
+  // teaching amphion.library() about stems would invert that for a badge.
+  let ampOrpheusReady = {};
+  async function ampLoadOrpheusReady(){
+    try {
+      const d = await fetch('/orpheus/library').then(r => r.json());
+      ampOrpheusReady = {};
+      (d.songs || []).forEach(s => { ampOrpheusReady[s.job_id] = s; });
+    } catch(e){ ampOrpheusReady = {}; }      // Orpheus down: buttons stay generic
+  }
+  window.ampOrpheusBtn = function(jobId){
+    const s = ampOrpheusReady[jobId];
+    const ready = s && s.has_instrumental && (s.has_timing || s.instrumental_only);
+    return '<button class="amp-orph" data-id="' + esc(jobId) + '" data-ready="' + (ready?'1':'0')
+         + '" title="' + (ready ? 'Add to the Orpheus setlist'
+                                : 'Needs an instrumental first — this will separate it (GPU)')
+         + '" style="color:#ffb020;border:1px solid #8a5c10;border-radius:6px;padding:.25rem .6rem;'
+         + 'background:none;cursor:pointer;font-size:.8rem">'
+         + (ready ? '🎤 Send to Orpheus' : '🎤 Prepare + send') + '</button>';
+  };
+
+  $('ampOpenOrpheus').addEventListener('click', () => {
+    window.open('/orpheus', 'orpheus', 'width=1280,height=760');
+  });
+
   window.ampRefreshLibrary = async function(){
     try {
+      await ampLoadOrpheusReady();
       const d = await fetch('/amphion/library').then(r => r.json());
       const box = $('ampLibrary');
       if (!d.songs || !d.songs.length){ box.innerHTML = '<div class="ari-hint">'+ (t('amphion.empty')||'No songs yet.') +'</div>'; return; }
@@ -3262,6 +3296,7 @@ let apInit;
           +   '<a class="amp-dl2" data-id="'+esc(s.job_id)+'" href="/amphion/export/'+encodeURIComponent(s.job_id)+'/flac">⬇ Download</a>'
           +   (s.seed!=null ? '<button class="amp-seed" data-seed="'+esc(String(s.seed))+'" title="Generate again with this exact voice/seed">🎤 Use this voice</button>' : '')
           +   '<button class="amp-rename" data-id="'+esc(s.job_id)+'" title="Rename — updates the title, the file stays where it is">✎ Rename</button>'
+          +   ampOrpheusBtn(s.job_id)
           +   '<button class="amp-remix" data-id="'+esc(s.job_id)+'" title="Remix this track">↻ Remix</button>'
           +   '<button class="amp-del" data-id="'+esc(s.job_id)+'">Delete</button>'
           + '</div></div>';
@@ -3303,6 +3338,34 @@ let apInit;
            body:JSON.stringify({title: next})});
         if (!r.ok){ alert('Rename failed.'); return; }
         ampRefreshLibrary();
+      }));
+      box.querySelectorAll('.amp-orph').forEach(b => b.addEventListener('click', async () => {
+        const id = b.dataset.id, label = b.textContent;
+        b.disabled = true;
+        try {
+          if (b.dataset.ready !== '1'){
+            b.textContent = '🎤 separating…';
+            // A 409 here names the render holding the GPU. Never queue behind it.
+            const r = await fetch('/orpheus/prepare/' + encodeURIComponent(id), {method:'POST'});
+            if (!r.ok){
+              const d = await r.json().catch(()=>({}));
+              alert(d.detail || 'Could not prepare this song.');
+              b.disabled = false; b.textContent = label; return;
+            }
+          }
+          b.textContent = '🎤 sending…';
+          const r2 = await fetch('/orpheus/setlist/' + encodeURIComponent(id), {method:'POST'});
+          if (!r2.ok){
+            const d = await r2.json().catch(()=>({}));
+            alert(d.detail || 'Could not add to the setlist.');
+            b.disabled = false; b.textContent = label; return;
+          }
+          b.textContent = '🎤 in the setlist';
+          ampRefreshLibrary();
+        } catch(e){
+          alert('Orpheus is not reachable.');
+          b.disabled = false; b.textContent = label;
+        }
       }));
       box.querySelectorAll('.amp-del').forEach(b => b.addEventListener('click', async () => {
         if (!confirm('Delete this song?')) return;

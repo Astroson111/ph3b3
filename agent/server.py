@@ -171,6 +171,7 @@ from kadmos_module import KadmosModule, KadmosError  # Kadmos — PDF reader (un
 from recipes import RecipeStore
 import morpheus
 import amphion                    # song generation (ACE-Step 1.5) — Morpheus's sibling (shares gpu_lock + floor)
+import orpheus                    # karaoke: stems, word-timed lyrics, the stage. NO floor import by design.
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
 import atalanta                   # sports results egress (ESPN); SETTLED GAMES ONLY
 import intent_registry           # dedicated-module intent claims (precedence over Metis)
@@ -6560,6 +6561,151 @@ async def amphion_delete_song(job_id: str):
     if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
         raise HTTPException(400, "bad id")
     return {"deleted": await asyncio.to_thread(amphion.delete_song, job_id)}
+
+
+# ══ Orpheus — karaoke: stems, word-timed lyrics, the stage ═══════════════════
+# NO FLOOR GATE ON ANY ROUTE IN THIS BLOCK, and that is the design. Every one of
+# them takes an Amphion job_id and operates on a render that already passed the
+# floor when it was made. Nothing here generates anything, so there is nothing
+# for a floor to gate — and a second copy of the gate on a playback surface would
+# refuse songs Astro is mid-way through singing.
+#
+# There is also no path, url or upload parameter anywhere below. That is not an
+# omission to be tidied up later: it is what keeps the stream strike-proof. Every
+# route reaches audio through amphion.song_path(job_id) and nothing else.
+
+def _orpheus_guard(fn, *a, **kw):
+    """Run a GPU job, turning Orpheus's two failure kinds into HTTP that says
+    which is which. 409 for a busy GPU because it is a conflict the caller can
+    retry; 400 for a bad request that retrying will not fix."""
+    try:
+        return fn(*a, **kw)
+    except orpheus.Busy as exc:
+        raise HTTPException(409, str(exc))
+    except orpheus.OrpheusError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/orpheus")
+async def orpheus_view():
+    return Response(
+        content=(ROOT / "static" / "orpheus.html").read_text(encoding="utf-8"),
+        media_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/orpheus/library")
+async def orpheus_library():
+    """Amphion renders and what each one is ready for."""
+    return {"songs": await asyncio.to_thread(orpheus.library),
+            "gpu_busy": orpheus.gpu_busy_with()}
+
+
+@app.get("/orpheus/song/{job_id}")
+async def orpheus_song(job_id: str):
+    """Everything the stage needs for one song, in one request — so advancing to
+    the next track is a single round trip and can be done ahead of time."""
+    try:
+        entry = await asyncio.to_thread(orpheus.setlist_entry, job_id)
+    except orpheus.OrpheusError as exc:
+        raise HTTPException(404, str(exc))
+    tim = orpheus.find_timing(job_id)
+    doc = None
+    if tim:
+        try:
+            doc = json.loads(tim.read_text("utf-8"))
+        except Exception as exc:
+            # Say it. A timing file that is present but unreadable is exactly the
+            # case that must not turn into a blank screen mid-song.
+            log.warning("[orpheus] timing unreadable for %s: %s", job_id, exc)
+            entry["timing_error"] = "timing file is unreadable — playing without lyrics"
+    return {**entry, "timing": doc}
+
+
+@app.get("/orpheus/audio/{job_id}")
+async def orpheus_audio(job_id: str):
+    """The instrumental. FileResponse handles Range natively, which is what makes
+    the seek bar and the loop punch-in work at all."""
+    if not re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""):
+        raise HTTPException(400, "bad id")
+    p = orpheus.find_instrumental(job_id)
+    if not p:
+        raise HTTPException(404, "no instrumental for this song yet")
+    return FileResponse(str(p), media_type="audio/flac",
+                        headers={"Accept-Ranges": "bytes", "Cache-Control": "no-store"})
+
+
+@app.post("/orpheus/prepare/{job_id}")
+async def orpheus_prepare(job_id: str, timing: bool = True, force: bool = False):
+    """Separate, and align if the song has words. Refuses loudly while a render
+    holds the GPU — never queues behind one."""
+    fn = orpheus.prepare if timing else orpheus.separate
+    stems = await asyncio.to_thread(_orpheus_guard, fn, job_id, force)
+    return {"job_id": job_id, "stems": stems}
+
+
+@app.post("/orpheus/batch")
+async def orpheus_batch(body: dict | None = None):
+    """Prepare the whole library in one pass — the first-run batch.
+
+    Serial by construction: one GPU, one job at a time. The GPU is re-checked
+    before EVERY song rather than once at the top, so a render started halfway
+    through the batch stops it at the next boundary instead of fighting it.
+    """
+    force = bool((body or {}).get("force"))
+    def _run():
+        done, skipped, failed = [], [], []
+        for s in orpheus.library():
+            jid = s["job_id"]
+            # Checked HERE, at the top of every iteration, not left to prepare()
+            # to raise. Both is right: prepare() must refuse whoever calls it, and
+            # the batch must be able to stop itself without depending on the
+            # internals of the thing it calls.
+            try:
+                orpheus.require_free_gpu()
+            except orpheus.Busy as exc:
+                failed.append({"job_id": jid, "why": str(exc)})
+                break
+            if s["instrumental_only"]:
+                skipped.append({"job_id": jid, "why": "instrumental — nothing to separate"})
+                continue
+            if s["has_instrumental"] and s["has_timing"] and not force:
+                skipped.append({"job_id": jid, "why": "already prepared"})
+                continue
+            try:
+                orpheus.prepare(jid, force=force)
+                done.append(jid)
+            except orpheus.Busy as exc:
+                failed.append({"job_id": jid, "why": str(exc)})
+                break                       # stop the batch, do not fight the render
+            except Exception as exc:
+                failed.append({"job_id": jid, "why": str(exc)})
+        return {"prepared": done, "skipped": skipped, "failed": failed}
+    return await asyncio.to_thread(_run)
+
+
+@app.get("/orpheus/setlist")
+async def orpheus_setlist_get():
+    return await asyncio.to_thread(orpheus.load_setlist)
+
+
+@app.put("/orpheus/setlist")
+async def orpheus_setlist_put(body: dict):
+    """Replace the whole setlist. Reorder, remove and clear are all this one
+    call — the browser owns the order it is showing, and a partial update would
+    let the two drift apart mid-show."""
+    items = body.get("items")
+    if not isinstance(items, list):
+        raise HTTPException(400, "items must be a list")
+    return await asyncio.to_thread(orpheus.save_setlist, items,
+                                   body.get("position", 0), body.get("mode", "hold"))
+
+
+@app.post("/orpheus/setlist/{job_id}")
+async def orpheus_setlist_add(job_id: str):
+    """Send to Orpheus."""
+    return await asyncio.to_thread(_orpheus_guard, orpheus.add_to_setlist, job_id)
 
 
 @app.post("/morpheus/delete_all")
