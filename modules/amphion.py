@@ -1166,32 +1166,10 @@ def untitled_name(seed, when: datetime | None = None) -> str:
 
 
 def _slugs_on_disk() -> set[str]:
-    """Every export name already spoken for.
-
-    Not just the recorded `slug` fields: a track from before titling has none,
-    but it still EXPORTS under a name (slug_for derives one from its seed and
-    date), and a new song must not be able to claim that name. Taking the derived
-    form here is what makes the two agree.
-
-    What this does NOT fix, said plainly: two pre-titling tracks that share a
-    seed and a render date — reachable via "Use this voice" — still derive the
-    same name as each other. Renumbering them would mean writing to sidecars on a
-    read path, and the cost of the collision is a browser appending "(1)" to a
-    download, so it is left alone.
-    """
-    out: set[str] = set()
-    try:
-        for f in _songs_dir().glob("*.json"):
-            try:
-                side = json.loads(f.read_text("utf-8"))
-            except Exception:
-                continue
-            s = (side.get("slug") or "").strip() or slug_for(f.stem, side)
-            if s:
-                out.add(s)
-    except Exception:
-        pass
-    return out
+    """Every export name already spoken for — recorded slugs AND the names that
+    tracks from before titling derive. A new song must not be able to claim
+    either."""
+    return _export_names()[1]
 
 
 def reserve_slug(base: str) -> str:
@@ -1230,24 +1208,99 @@ def _parse_created(s) -> datetime | None:
     except Exception:
         return None
 
-def slug_for(job_id: str, side: dict | None = None) -> str:
-    """The export filename stem for an existing track.
+def _derive_slug(job_id: str, side: dict) -> str:
+    """The name a track with no recorded slug would export under, on its own.
 
-    Tracks generated before titling have no `slug` and no `title` in their
-    sidecar. Rather than fall back to the raw job id — a hex string that tells a
-    DAW nothing — those are named by the same untitled- rule, derived from the
-    seed and creation date the sidecar already records. Nothing is written back;
-    this is a read.
+    Tracks generated before titling have no `slug`. Rather than fall back to the
+    raw job id — a hex string that tells a DAW nothing — they are named from the
+    title if a title is there, and otherwise by the same untitled- rule, from the
+    seed and creation date the sidecar already records.
+
+    Collision-blind on purpose: two tracks can derive the same name here, and
+    resolving that needs to see the whole directory. That is _export_names'.
     """
-    side = _sidecar_for(job_id) if side is None else side
-    s = (side.get("slug") or "").strip()
-    if s:
-        return s
     s = slugify(side.get("title") or "")
     if s:
         return s
     when = _parse_created(side.get("created_at"))
     return slugify(untitled_name(side.get("seed"), when)) or job_id
+
+
+def _export_names() -> tuple[dict[str, str], set[str]]:
+    """(job_id -> export name, every name taken) for the whole songs directory.
+
+    Derivation collides in practice and not rarely: Astro's library had three
+    collision groups covering seven of forty-five tracks. Two are the same title
+    rendered twice; two are the same SEED rendered twice, which is what the
+    "Use this voice" button is for, so it is the normal way to work rather than
+    an edge case. Left alone, each group downloads as several files with one
+    name and the browser silently appends "(1)".
+
+    Resolved here, across the whole directory, because a single sidecar cannot
+    see its own collision. RECORDED slugs are fixed and are laid down first —
+    they were settled at render and nothing may move them. Derived names are then
+    fitted around them: oldest keeps the plain name, the rest take -2, -3 in
+    creation order, with the job id breaking ties so the answer never depends on
+    the order the directory happens to list in. A derived name also steps around
+    a recorded one, which is the same collision wearing a different hat.
+
+    Stable in practice: only tracks with no recorded slug take part, and every
+    track rendered from now on records one, so the derived group cannot grow. It
+    CAN shrink — delete the oldest of a colliding pair and the survivor's export
+    name loses its -2. That is cosmetic and it is the reason this is a pure read:
+    the identity of a track is its job id and its sidecar, never its download name.
+    """
+    recorded: dict[str, str] = {}
+    groups: dict[str, list[tuple[str, str]]] = {}
+    try:
+        for f in _songs_dir().glob("*.json"):
+            # A sidecar with no master beside it cannot be exported, so it must
+            # not hold an export name. Two kinds sit in this directory: failed and
+            # cancelled renders, which are written on purpose so a bad result can
+            # be reproduced — and, in Astro's library, hand-made COPIES of real
+            # sidecars saved under the name he wanted, which is the manual
+            # workaround this whole feature replaces. Counting either one numbered
+            # the real tracks around ghosts: two takes of one song came out
+            # "somebody-else-s-computer" and "-3", because two nameless copies had
+            # silently taken the numbers in between.
+            if not (f.with_suffix(".flac")).exists():
+                continue
+            try:
+                side = json.loads(f.read_text("utf-8"))
+            except Exception:
+                continue
+            s = (side.get("slug") or "").strip()
+            if s:
+                recorded[f.stem] = s          # settled at render; never moved
+            else:
+                groups.setdefault(_derive_slug(f.stem, side), []).append(
+                    (side.get("created_at") or "", f.stem))
+    except Exception:
+        return {}, set()
+    names = dict(recorded)
+    taken = set(recorded.values())
+    for base, members in groups.items():
+        for _, jid in sorted(members):
+            name, n = base, 1
+            while name in taken:
+                n += 1
+                name = f"{base}-{n}"
+            names[jid] = name
+            taken.add(name)
+    return names, taken
+
+
+def slug_for(job_id: str, side: dict | None = None) -> str:
+    """The export filename stem for an existing track. Nothing is written back;
+    this is a read."""
+    side = _sidecar_for(job_id) if side is None else side
+    s = (side.get("slug") or "").strip()
+    if s:
+        return s
+    # _export_names knows about collisions with the track's neighbours. It only
+    # answers for sidecars actually on disk, so a synthetic one falls through to
+    # the plain derivation rather than to the job id.
+    return _export_names()[0].get(job_id) or _derive_slug(job_id, side)
 
 
 # ── Hermes3 title suggestions ────────────────────────────────────────────────
@@ -1353,7 +1406,16 @@ def rename_song(job_id: str, title: str) -> dict | None:
         display = untitled_name(side.get("seed"),
                                 _parse_created(side.get("created_at")))
     side["title"] = display
-    side.setdefault("slug", slug_for(job_id, side))
+    # A RECORDED slug is kept: it was settled at render, and a track that has
+    # been exported and linked under a name does not lose it to a relabel.
+    #
+    # A track with no recorded slug is the other case, and it must not be handed
+    # the name it was merely DERIVING. That name is the untitled- form it is
+    # being renamed away from — pinning it would mean "The Machine" downloads
+    # for ever as untitled-3695418445-20260828.flac. Deriving from the new title
+    # is the whole point of renaming a track that never had a name.
+    if not (side.get("slug") or "").strip():
+        side["slug"] = reserve_slug(_derive_slug(job_id, side) or job_id)
     p.with_suffix(".json").write_text(json.dumps(side, indent=2))
     return {"title": side["title"], "slug": side["slug"]}
 

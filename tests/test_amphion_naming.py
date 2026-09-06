@@ -178,6 +178,46 @@ def test_a_new_song_cannot_claim_a_pre_titling_track_s_export_name():
     assert amphion.resolve_naming("untitled-7-20260801", 1)["slug"] == "untitled-7-20260801-2"
 
 
+def test_two_pre_titling_tracks_that_derive_the_same_name_are_disambiguated():
+    """Found in the real library: three collision groups over seven of forty-five
+    tracks. Same title rendered twice, and same SEED rendered twice — which is
+    what "Use this voice" is for, so it is the normal way to work."""
+    _write_track("bbb222", title="Somebody Else's Computer", created_at="2026-08-30T09:00:00+00:00")
+    _write_track("aaa111", title="Somebody Else's Computer", created_at="2026-08-29T09:00:00+00:00")
+    _write_track("ccc333", title="Somebody Else's Computer", created_at="2026-08-31T09:00:00+00:00")
+    # Oldest keeps the plain name; the rest take -2, -3 in creation order.
+    assert amphion.slug_for("aaa111") == "somebody-else-s-computer"
+    assert amphion.slug_for("bbb222") == "somebody-else-s-computer-2"
+    assert amphion.slug_for("ccc333") == "somebody-else-s-computer-3"
+
+
+def test_same_seed_same_day_no_title_is_disambiguated_too():
+    _write_track("aaa111", seed=3695418445, created_at="2026-08-28T09:00:00+00:00")
+    _write_track("bbb222", seed=3695418445, created_at="2026-08-28T11:00:00+00:00")
+    got = {amphion.slug_for("aaa111"), amphion.slug_for("bbb222")}
+    assert got == {"untitled-3695418445-20260828", "untitled-3695418445-20260828-2"}
+
+
+def test_derived_names_do_not_depend_on_directory_order():
+    """Two sidecars written with the same created_at. The job id breaks the tie,
+    so the answer cannot change between two readings of the same directory."""
+    _write_track("bbb222", title="Twice", created_at="2026-08-30T09:00:00+00:00")
+    _write_track("aaa111", title="Twice", created_at="2026-08-30T09:00:00+00:00")
+    first = {j: amphion.slug_for(j) for j in ("aaa111", "bbb222")}
+    assert first == {j: amphion.slug_for(j) for j in ("aaa111", "bbb222")}
+    assert sorted(first.values()) == ["twice", "twice-2"]
+
+
+def test_a_recorded_slug_never_takes_part_in_derivation():
+    """Tracks rendered from now on record their slug, so they are fixed and the
+    derived group cannot grow to include them."""
+    _write_track("aaa111", title="Twice", slug="twice", created_at="2026-08-01T09:00:00+00:00")
+    _write_track("bbb222", title="Twice", created_at="2026-08-30T09:00:00+00:00")
+    assert amphion.slug_for("aaa111") == "twice"          # recorded at render, never moved
+    assert amphion.slug_for("bbb222") == "twice-2"        # derived, and it steps around
+    assert amphion.resolve_naming("Twice", 1)["slug"] == "twice-3"
+
+
 def test_slugs_reserved_in_the_same_batch_do_not_collide():
     """Variations queue N jobs at once and no sidecar exists yet for any of them.
     The on-disk scan alone cannot see the siblings; the reservation set can."""
@@ -448,6 +488,31 @@ def test_rename_updates_the_title_and_leaves_the_file_alone():
     assert res["slug"] == "blue-hour"                     # unchanged, on purpose
     assert amphion._sidecar_for("abc123")["title"] == "Low Sun"
     assert sorted(p.name for p in amphion._songs_dir().iterdir()) == before
+
+
+def test_renaming_a_track_that_never_had_a_slug_gives_it_a_real_one():
+    """The case Astro actually hit: a track from before titling, sitting under
+    untitled-<seed>-<date>, renamed to something he chose. If rename pinned the
+    name it was deriving, "The Machine" would download for ever as
+    untitled-3695418445-20260828.flac and the rename would be cosmetic."""
+    _write_track("abc123", seed=3695418445, created_at="2026-08-28T05:45:01+00:00")
+    assert amphion.slug_for("abc123") == "untitled-3695418445-20260828"
+    assert amphion.rename_song("abc123", "The Machine")["slug"] == "the-machine"
+    assert amphion.slug_for("abc123") == "the-machine"
+
+
+def test_renaming_a_track_that_HAS_a_slug_keeps_it():
+    """The other half. A slug settled at render is a name the track has already
+    been exported and linked under; a relabel does not move it."""
+    _write_track("abc123", title="Blue Hour", slug="blue-hour", seed=7)
+    assert amphion.rename_song("abc123", "Low Sun")["slug"] == "blue-hour"
+
+
+def test_two_renames_to_the_same_title_do_not_collide():
+    _write_track("aaa111", seed=1, created_at="2026-08-28T05:45:01+00:00")
+    _write_track("bbb222", seed=2, created_at="2026-08-28T05:45:01+00:00")
+    assert amphion.rename_song("aaa111", "The Machine")["slug"] == "the-machine"
+    assert amphion.rename_song("bbb222", "The Machine")["slug"] == "the-machine-2"
 
 
 def test_rename_changes_what_the_next_export_stamps(monkeypatch):
