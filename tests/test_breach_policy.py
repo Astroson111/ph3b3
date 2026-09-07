@@ -120,18 +120,59 @@ def test_recent_breaches_with_no_log_is_zero(sandbox):
     assert morpheus.recent_breaches(hours=24) == 0
 
 
+def _fetch_and_save_source() -> str:
+    """The body of fetch_and_save, sliced to the function and not to a byte count.
+
+    It used to be `src[start:start + 2500]`. Adding a comment to the function
+    pushed `path.write_bytes` past 2500 characters and the test failed — which
+    was the lucky outcome. Had the window ended just past the write instead, the
+    ordering assertion would have gone on passing while checking a fragment that
+    no longer contained the thing it was ordering against."""
+    src = (ROOT / "modules" / "morpheus.py").read_text(encoding="utf-8")
+    start = src.index("async def fetch_and_save(")
+    nxt = src.index("\nasync def ", start + 1)
+    return src[start:nxt]
+
+
 # ── The part that has no off switch ──────────────────────────────────────────
 def test_the_render_is_destroyed_regardless_of_halt_policy():
     """The refusal is the protection, and it lives on the fetch path — the
     flagged bytes are never written to IMAGE_DIR whatever the halt policy says.
     Structural: fetch_and_save raises before it ever reaches path.write_bytes."""
-    src = (ROOT / "modules" / "morpheus.py").read_text(encoding="utf-8")
-    start = src.index("async def fetch_and_save(")
-    body = src[start:start + 2500]
+    body = _fetch_and_save_source()
     refuse_at = body.index("raise RuntimeError(_OUTPUT_REFUSAL)")
     write_at = body.index("path.write_bytes(raw)")
     assert refuse_at < write_at, \
         "a corroborated render could reach the library — the refusal must precede the write"
+
+
+def test_the_vision_judge_gets_the_vram_before_it_is_asked():
+    """2026-09-05: llava was asked to describe a render while SDXL was still
+    resident, died with `cudaMalloc failed: out of memory`, and _minor_check's
+    fail-closed error path turned that OOM into a child-safety refusal of a
+    picture of moonflowers. comfy_free must run BEFORE the check, not only in
+    run_generation's finally afterwards."""
+    body = _fetch_and_save_source()
+    free_at = body.index("await comfy_free(http)")
+    check_at = body.index("output_minor_check")
+    assert free_at < check_at, \
+        "the output check is being asked to load a vision model into a card the " \
+        "renderer still holds — that is what produced the OOM-as-refusal"
+
+
+def test_the_finally_still_frees_on_every_path():
+    """Freeing early must not have REPLACED the unconditional free. An error
+    between the fetch and the return would otherwise leave the checkpoint
+    resident with no owner. Structural rather than comment-matching: each of the
+    three render lifecycles must still free inside a finally."""
+    src = (ROOT / "modules" / "morpheus.py").read_text(encoding="utf-8")
+    guarded = sum(
+        1 for i, _ in enumerate(src.split("finally:")[1:])
+        if "comfy_free(http)" in src.split("finally:")[i + 1][:300]
+    )
+    assert guarded >= 3, (
+        f"only {guarded} finally block(s) free the GPU — txt2img, edit and video "
+        f"each need one, and freeing early is defence in depth, not a replacement")
 
 
 def test_halt_policy_is_opt_in_not_default():
