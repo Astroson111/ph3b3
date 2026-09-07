@@ -415,6 +415,7 @@ async function playIndex(i, autoplay){
   audio().currentTime = 0;
 
   S.song = doc;
+  msMeta();                       // name it before it can be started from a headphone
   $('nowTitle').textContent = doc.title + (doc.instrumental_only ? ' · instrumental' : '');
   if (doc.timing_error) say(doc.timing_error, true);
   renderLyrics(doc);
@@ -483,6 +484,7 @@ function tick(){
   const a = audio();
   const t = a.currentTime || 0;
 
+  msPosition();                   // throttled inside; keeps the OS scrubber honest
   $('seekFill').style.width = (a.duration ? (t / a.duration * 100) : 0) + '%';
   $('tCur').textContent = mmss(t);
   $('tDur').textContent = mmss(a.duration);
@@ -583,12 +585,96 @@ function toggleLoop(){
 }
 function stopLoop(){ S.loop = null; $('seekLoop').style.display = 'none'; }
 
+// ── Media session: let the headphones drive the show ────────────────────────
+// An armed <audio> element makes this tab the OS media target whether we ask for
+// it or not. That is how a play press on a pair of Bluetooth headphones started
+// a backing track out of nowhere, from a page that was only ever LOADED, never
+// started. The behaviour is worth keeping — hands off the keyboard is exactly
+// what you want mid-take — but a blank media card is what made it feel like a
+// haunting. Naming the song and wiring the transport turns a surprise into a
+// remote control, and a stray press into something that says what it just did.
+//
+// Every call is guarded. mediaSession is absent on some browsers, individual
+// actions are unevenly supported (setActionHandler throws on an unknown one),
+// and setPositionState throws outright on a NaN duration — which is exactly what
+// duration is between selecting a song and its metadata arriving.
+const hasMS = () => 'mediaSession' in navigator;
+
+function msMeta(){
+  if (!hasMS() || !window.MediaMetadata) return;
+  const s = S.song;
+  const n = S.setlist.items.length;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: s ? s.title : 'Orpheus',
+      // Says what it is AND that it has no vocal, so a backing track starting
+      // unannounced is legible from the lock screen rather than mysterious.
+      artist: s && s.instrumental_only ? 'Ph3b3 Amphion — instrumental'
+                                       : 'Ph3b3 Orpheus — backing track',
+      album: n > 1 ? `Setlist ${S.setlist.position + 1} of ${n}` : 'Ph3b3 Amphion',
+      artwork: [
+        {src:'/static/icon-192.png', sizes:'192x192', type:'image/png'},
+        {src:'/static/icon-512.png', sizes:'512x512', type:'image/png'},
+      ],
+    });
+  } catch(e){}
+}
+
+function msState(){
+  if (!hasMS()) return;
+  try { navigator.mediaSession.playbackState = audio().paused ? 'paused' : 'playing'; } catch(e){}
+}
+
+let msPosAt = 0;
+function msPosition(force){
+  if (!hasMS() || !navigator.mediaSession.setPositionState) return;
+  const now = performance.now();
+  if (!force && now - msPosAt < 1000) return;      // once a second, not once a frame
+  msPosAt = now;
+  const a = audio();
+  if (!isFinite(a.duration) || a.duration <= 0) return;
+  try {
+    navigator.mediaSession.setPositionState({
+      duration: a.duration,
+      playbackRate: a.playbackRate || 1,
+      position: Math.min(Math.max(a.currentTime || 0, 0), a.duration),
+    });
+  } catch(e){}
+}
+
+function msWire(){
+  if (!hasMS()) return;
+  const acts = {
+    play:  () => play(),
+    pause: () => pause(),
+    stop:  () => { pause(); audio().currentTime = S.loop ? S.loop.start : 0; },
+    // An explicit skip is explicit: it advances even in hold mode, because the
+    // hold exists to stop the NEXT song ambushing you, not to argue with a press.
+    previoustrack: () => playIndex(S.setlist.position - 1),
+    nexttrack:     () => playIndex(S.setlist.position + 1),
+    seekbackward: d => { const a=audio(); a.currentTime = Math.max(0, (a.currentTime||0) - ((d&&d.seekOffset)||10)); },
+    seekforward:  d => { const a=audio(); a.currentTime = Math.min(a.duration||0, (a.currentTime||0) + ((d&&d.seekOffset)||10)); },
+    seekto: d => {
+      const a = audio();
+      if (!d || d.seekTime == null) return;
+      if (d.fastSeek && a.fastSeek) a.fastSeek(d.seekTime); else a.currentTime = d.seekTime;
+      msPosition(true);
+    },
+  };
+  for (const name in acts){
+    // Unsupported actions throw rather than no-op, and one throw would abandon
+    // every handler after it in the loop.
+    try { navigator.mediaSession.setActionHandler(name, acts[name]); } catch(e){}
+  }
+}
+
 // ── Transport ───────────────────────────────────────────────────────────────
-function play(){ audio().play().then(() => $('play').textContent = '❚❚ Pause')
+function play(){ audio().play().then(() => { $('play').textContent = '❚❚ Pause'; msState(); msPosition(true); })
                                 .catch(e => say('Playback blocked — click the page once, then Play.')); }
-function pause(){ audio().pause(); $('play').textContent = '▶ Play'; }
+function pause(){ audio().pause(); $('play').textContent = '▶ Play'; msState(); }
 
 function onEnded(){
+  msState();
   const nx = S.setlist.items[S.setlist.position + 1];
   if (!nx){ $('play').textContent = '▶ Play'; return; }
   if (S.setlist.mode === 'auto'){ playIndex(S.setlist.position + 1); return; }
@@ -654,6 +740,7 @@ document.addEventListener('keydown', ev => {
 // The setlist and the position come from the SERVER, so a reload mid-stream —
 // or a browser crash, or a different machine — picks the night up where it was.
 (async function boot(){
+  msWire();
   try { setStream(localStorage.getItem('orpheus.stream') === '1'); } catch(e){}
   await loadLibrary();
   try { S.setlist = await api('/orpheus/setlist'); } catch(e){ say('Setlist unavailable: ' + e.message); }
