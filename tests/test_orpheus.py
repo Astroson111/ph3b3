@@ -125,6 +125,19 @@ def test_orpheus_does_not_import_the_floor():
     assert "floor_check" not in code
 
 
+def test_every_static_asset_the_stage_names_actually_exists():
+    """The media-session card names artwork by path. A typo there is invisible in
+    development — the card just renders blank, which is indistinguishable from a
+    browser that does not support artwork — and blank is the exact failure this
+    feature was added to remove."""
+    import re
+    html = (REPO / "static" / "orpheus.html").read_text()
+    refs = sorted(set(re.findall(r"['\"](/static/[A-Za-z0-9._/-]+)['\"]", html)))
+    assert refs, "the stage names no static assets — did the artwork wiring vanish?"
+    for r in refs:
+        assert (REPO / r.lstrip("/")).exists(), f"{r} is referenced but not on disk"
+
+
 # ══ 2. GPU etiquette ═════════════════════════════════════════════════════════
 def test_gpu_free_reads_none():
     assert orpheus.gpu_busy_with() is None
