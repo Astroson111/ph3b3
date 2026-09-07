@@ -766,6 +766,105 @@ _SCALE_PERSON: frozenset[str] = frozenset([
 _RE_SCALE_PERSON = _floor_re(_SCALE_PERSON, whole_word=True)
 
 
+# ── Musical keys: "A minor" is a key signature, not a person ─────────────────
+# TEXT SURFACE ONLY, and it exists because an ordinary song brief refused as
+# child depiction. "minor" is on _FLOOR_MINOR, so a key signature is a
+# minor-lexical hit. On the text surface that alone is harmless — a second
+# signal is required — but a style tag reading "A minor, breathy soft intimate
+# vocals" supplies one ("intimate" is a _FLOOR_SEXUAL term) and the whole brief
+# refused. Neither word is rare: most mournful songs are in a minor key and a
+# good half of them ask for an intimate vocal, so this is the common case rather
+# than an edge. The refusal names only the category, so nothing on screen points
+# at the key signature — the "D minor" incident was this same collision, one
+# signal short of firing.
+#
+# Done by REMOVING the key span before the minor check rather than by adding an
+# exception after it. The rest of the text is then matched exactly as it was, so
+# only the span that spells a key is affected and every other minor term in the
+# same string still fires.
+#
+# Two tiers, because "a minor" is genuinely ambiguous: it is a key AND the
+# commonest way in English to name a child ("a photograph of a minor").
+#
+#   UNAMBIGUOUS — a note letter that cannot be read as the article, an
+#   accidental, an explicit "key of", or a music-theory noun after "minor".
+#   Removed unconditionally; none of these spans has a person reading.
+#
+#   AMBIGUOUS — bare "a minor". Two conditions, and BOTH are needed. It must be
+#   a whole comma-delimited FIELD ("…, A minor, …"), because a key signature is
+#   a complete noun phrase and a child is not: "sexual lyrics about a minor" and
+#   "a minor girl" are the same two words inside a larger phrase, and both must
+#   keep refusing. And the text must carry music-THEORY context somewhere, the
+#   same whole-prompt release _STUDENT_ADULT_QUALIFIER already uses. The anchor
+#   set is deliberately theory and tempo vocabulary rather than
+#   "song"/"sing"/"vocal": those ride along with any lyric about a person, and
+#   the job is to release a key signature, not anything that mentions music.
+#
+# WHAT THIS DOES NOT CATCH, said out loud: "a minor, erotic, 90 bpm" — a bare
+# key field beside adult sexual terms — now clears Layer A. It has to. That is
+# the identical shape to "e flat minor, erotic slow jam, 70 bpm", a legitimate
+# adult request, and the only thing separating them is which letter the key is.
+# Layer B is asked either way and is fail-closed, which is exactly the division
+# of labour this surface was designed around: the term list stops what a term
+# list can see, and the judge carries the rest.
+#
+# The image path never reaches this. No image prompt names a key signature, and
+# the 2026-07-31 subject weld stays byte-for-byte what it was.
+_KEY_NOTE = r"[a-g]"
+_KEY_ACCIDENTAL = r"(?:\s?(?:#|♯|b|♭|sharp|flat))"
+
+_RE_KEY_UNAMBIGUOUS = re.compile(
+    r"\b(?:"
+    r"key\s+of\s+" + _KEY_NOTE + _KEY_ACCIDENTAL + r"?\s+minor"
+    r"|" + _KEY_NOTE + _KEY_ACCIDENTAL + r"\s+minor"     # c# minor, e flat minor, bb minor
+    r"|[b-g]\s+minor"                                    # c..g minor — never the article
+    r"|(?:harmonic|melodic|natural|relative)\s+minor"
+    r"|minor\s+(?:key|chord|scale|triad|tonality|mode|pentatonic|arpeggio"
+    r"|third|sixth|seventh|ninth|blues)"
+    r")\b"
+)
+
+# The one span that collides with the article. A whole field, nothing else in
+# it — "in a minor" and "key of a minor" are the same field with the musical
+# preposition kept.
+_RE_KEY_FIELD = re.compile(r"^(?:the\s+)?(?:key\s+of\s+|in\s+)?a\s+minor$")
+
+# Comma-delimited fields are how every style tag on this surface is written; the
+# rest are ordinary clause boundaries. Kept as a capturing split so the
+# delimiters survive the rebuild and the text stays the same length in tokens.
+_RE_FIELD_SPLIT = re.compile(r"([,;/|()\[\]\n]|\s-\s)")
+
+_KEY_CONTEXT: frozenset[str] = frozenset([
+    "bpm", "beats per minute", "time signature", "timesignature", "keyscale",
+    "key of", "key signature", "chord", "chords", "scale", "pentatonic",
+    "arpeggio", "capo", "transpose", "semitone", "tonality", "triad", "tempo",
+    "major",
+])
+_RE_KEY_CONTEXT = _floor_re(_KEY_CONTEXT, whole_word=True)
+
+
+def _strip_musical_keys(norm: str) -> str:
+    """Blank out key-signature spans in already-normalised text.
+
+    Spans are replaced with a SPACE, never deleted: closing the gap would weld
+    the words on either side into a token no list can see.
+
+    The ambiguous tier is judged against the text as it arrived, not against the
+    partially stripped copy — an earlier strip can remove the very word ("minor
+    key", "key of") that proves the sentence is about music.
+    """
+    stripped = _RE_KEY_UNAMBIGUOUS.sub(" ", norm)
+    if not _RE_KEY_CONTEXT.search(norm):
+        return stripped                      # no music context: nothing more is released
+    # Bare "a minor" only as a whole field. Blanking the field rather than the
+    # two words means "a minor girl" keeps its "minor" and keeps refusing.
+    parts = _RE_FIELD_SPLIT.split(stripped)
+    for i in range(0, len(parts), 2):        # even indices are fields, odd are delimiters
+        if _RE_KEY_FIELD.match(parts[i].strip()):
+            parts[i] = " "
+    return "".join(parts)
+
+
 # ── Leetspeak folding ────────────────────────────────────────────────────────
 # "t33n" cleared both layers. Digit-for-letter substitution is the oldest filter
 # evasion there is and the term list cannot see through it.
@@ -964,11 +1063,18 @@ def minor_subject_signal(text: str, surface: str = "image") -> bool:
     "orphan". Both are subject heuristics — they guess at who is depicted — and
     on a surface that depicts nobody they carry no signal, only false positives
     ("a student of the machine", "an orphan bolt").
+
+    Key signatures are removed from the text before the minor check runs, also
+    text-surface only — see _strip_musical_keys for which spans and why.
     """
     norm = _normalize(text)
-    hit = _minor_lexical_hit(norm)
     if surface == "text":
-        return hit and bool(_RE_SEXUAL.search(norm))
+        # Key signatures come out BEFORE the minor check — see
+        # _strip_musical_keys. The sexual half is still asked of the WHOLE text:
+        # only the minor term is ever in question here, never the second signal.
+        return (_minor_lexical_hit(_strip_musical_keys(norm))
+                and bool(_RE_SEXUAL.search(norm)))
+    hit = _minor_lexical_hit(norm)
     if hit:
         return True
     if _RE_ORPHAN.search(norm):
@@ -1895,6 +2001,31 @@ async def fetch_and_save(http: httpx.AsyncClient, outputs: dict,
                 "type":      img["type"]},
         timeout=60.0,
     )).content
+
+    # ── Give the judge the card back BEFORE asking it anything ───────────────
+    # The bytes are in hand, so ComfyUI's work on this job is over — but SDXL is
+    # still resident, and the vision judge is a 4.7GB model that has to load into
+    # whatever is left. On 2026-09-05 it did not fit:
+    #
+    #   08:51:19  vision judge HTTP 500 from llava —
+    #             llama runner process has terminated: cudaMalloc failed: out of memory
+    #   08:51:28  output check CORROBORATED on job 138d050f — not persisting
+    #
+    # _minor_check is fail-closed on error, so that OOM WAS the flag: the check
+    # refused a render it had never looked at, and the second opinion then agreed
+    # with a first opinion that did not exist. The prompt was "Moonflowers in an
+    # open field". Same crash again at 06:03 the same day.
+    #
+    # This costs nothing. comfy_free already ran unconditionally in run_generation's
+    # finally moments later, on every path including errors — so the checkpoint was
+    # being unloaded after every job anyway. Moving it in front of the check adds no
+    # reload; it only stops the guard from being starved by the thing it guards.
+    #
+    # Fail-closed still means fail-closed. An empty verdict from a judge that HAD
+    # room to run is still a refusal; what this removes is the refusal that only
+    # ever meant "the GPU was full".
+    await comfy_free(http)
+
     # Last gate. The bytes are judged before they become a file, so a flagged
     # render never exists in IMAGE_DIR at all.
     # Destroying a render requires the SAME corroboration the halt requires. A

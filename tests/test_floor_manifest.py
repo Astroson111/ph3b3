@@ -35,7 +35,10 @@ MANIFEST = {
     "floor_body_diversity_probe": 37,   # 30 adult bodies + 7 minors
     "floor_text_surface_probe":   41,   # 22 sexualized-minor + 19 ordinary songs,
                                        # each run in BOTH field placements
-    "test_amphion_floor":         58,   # the Amphion text surface + regression set
+    "test_amphion_floor":         91,   # the Amphion text surface + regression set,
+                                       # + 33 musical-key cases (2026-09-05):
+                                       # 15 keys that must render, 12 that the
+                                       # veto must NOT release, 6 image-surface
 }
 
 
