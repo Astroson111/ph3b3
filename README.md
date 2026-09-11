@@ -277,6 +277,26 @@ Morpheus does more than stills now. It can **edit** an image you point it at, an
 
 Every generation passes through a safety floor that runs locally before anything renders and cannot be disabled by any setting. It refuses content involving minors, non-consensual material, and sexualized or compromising depictions of real, identifiable people — categorically, on every request. The floor covers video exactly as it covers images: the prompt, and for image-to-video the source image too, are checked before a single frame renders. Local generation doesn't mean no guardrails. The line is enforced on your hardware, by default, with no off switch.
 
+### The content floor, in plain language
+
+The full account — every claim tied to a file, a line, a commit, or a command you can run — is in [`docs/content_floor.md`](docs/content_floor.md). The short version:
+
+**It is a floor, not a filter.** A filter is something you adjust. A floor is the level below which nothing goes, whatever the settings. Ph3b3 has adjustable content profiles; the floor runs *before* them, and no profile, flag, or environment variable can reach it (`modules/morpheus.py`, line 131). Image generation and the floor were added on the same day — there has never been a build of Ph3b3 that could render a picture without it.
+
+**For images, a child subject is refused on its own.** Not "a child in a sexual context" — *any* figure who appears to be under 18. A kid at a birthday party is refused. The code's reasoning: "a rendered figure of a child IS the harm, so the subject alone is the test." That trade — giving up every innocent picture of a child rather than trying to draw a line inside that space — was made deliberately on 2026-07-31 (`7efcdb2`, *"Weld the child-depiction floor shut"*). The one exception is reproducing a specific, named, pre-existing artwork, and it cancels itself the moment any sexual or undress term appears anywhere in the request. It is deliberately **not** an "artistic style" exception, because "fine art" is the most common jailbreak framing for exactly this content.
+
+**Three independent checks, each of which refuses when unsure.** Word and pattern lists in several languages, with look-alike-letter folding. Then a language-model judge asked one question of every request — *would the rendered image depict someone under 18?* — where only an explicit "NO" lets the request through; "uncertain", a timeout, or an unreachable model all refuse. Then, after rendering, a vision model inspects the actual pixels; a flagged image is destroyed and never written to disk, and every hit goes to a permanent log. The design assumes each layer can be wrong and arranges them so that being wrong means *no image*, never *an unchecked image*.
+
+**Refusals name the category, never the word.** Telling someone which term tripped the check is a bypass tutorial; a category is enough to write around honestly.
+
+**Six categories**, not one: child sexualization, real-person likeness, non-consent, atrocity, hate/dehumanization, terror instruction. The first is the strictest and the only one with a semantic judge on every request.
+
+**Tested, and the tests are guarded.** Eight adversarial suites — multilingual evasion, look-alike letters, body diversity (so adult bodies of every shape pass while actual minors don't), horror, the artistic exception, real-person identity, the lyrics surface. A manifest records how many cases each suite must *actually run* and fails the build on a shortfall, because for a month in 2026 the runner silently collected zero of 151 adversarial cases and reported green. The lesson is written into the manifest: *a safety test that can silently not run is worse than no test at all.* As of 2026-09-11: 767 cases, 0 failures.
+
+**The history is one direction.** Eighteen commits touching the floor since June 2026. Every false-positive fix ("draped" tripping "rape", "man" matching inside "mandalorian", a musical key of A minor read as a person) narrowed the *pattern* and left the *rule* alone. Tightened eighteen times; lowered never.
+
+**What it does not claim.** From the code itself: "this floor stops casual misuse and accidental drift. It is NOT an adversary-proof wall — deliberate euphemism or coded language can evade keyword/pattern checks. Build the floor; do not over-claim it as exhaustive." That is why there are three layers, and why the last one destroys rather than quarantines.
+
 ---
 
 ## Amphion
