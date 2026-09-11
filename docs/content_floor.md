@@ -2,7 +2,7 @@
 
 *Prepared 2026-09-11 from the Ph3b3 source code and its git history. Every statement below points at a file, a line, a commit, or a command that anyone with a copy of the repository can check. Nothing here is taken from memory or from the owner's description — it comes from what the code does. Line numbers are as of commit `8764b0e`; if they drift, the quoted text is the stable reference.*
 
-*Repository: `https://github.com/Astroson111/ph3b3` (public). The relevant module is `modules/morpheus.py`; the request gate is in `agent/server.py`; the tests are in `tests/`.*
+*Repository: `https://github.com/Astroson111/ph3b3` (private; access on request). The relevant module is `modules/morpheus.py`; the request gate is in `agent/server.py`; the tests are in `tests/`.*
 
 ---
 
@@ -123,7 +123,7 @@ $ .venv/bin/python -m pytest tests/test_floor_manifest.py tests/test_minor_floor
 
 Zero failures, with the manifest guard confirming the cases were collected.
 
-The probe files themselves are deliberately kept out of the public repository (they are in `.gitignore`) because a list of adversarial prompts is, by itself, a how-to. They exist locally and are run locally.
+The probe files themselves are deliberately kept out of the repository (they are in `.gitignore`) because a list of adversarial prompts is, by itself, a how-to. They exist locally and are run locally.
 
 ## 9. What the floor honestly does not claim
 
