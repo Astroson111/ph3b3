@@ -1,0 +1,574 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# thoth_corpus.yaml — the works Thoth holds, and everything true about them.
+#
+# THIS FILE IS THE LIBRARY'S SCHOLARSHIP. The texts are re-downloadable bulk;
+# this is the authored part, and the part worth keeping. It lives in config/,
+# which Rhea's nightly backup already covers in full — the corpus bodies and
+# embeddings under ~/ph3b3_thoth deliberately are not.
+#
+# Loaded and validated by modules/thoth/corpus.py. Every field below is enforced
+# in modules/thoth/schema.py: a work that under-declares does not load, and is
+# named in the failure list rather than silently skipped.
+#
+# ── WHAT MAY BE IN THIS FILE ────────────────────────────────────────────────
+# A work with no public-domain or openly-licensed ENGLISH translation is not
+# listed here at all — not as a gap, not as a placeholder, not as pending.
+# The manifest describes the corpus that exists. (Astro's ruling, 2026-09-13.)
+#
+# The Pyramid Texts were removed under this rule: the standard English
+# translation is Mercer 1952 and is in copyright, Sethe's edition is German, and
+# what is public domain in English is a 1916 monograph ABOUT the corpus rather
+# than a translation of it. A placeholder row would have described a text this
+# library cannot hold, which is the opposite of what these records are for.
+#
+# canonicity   one row per tradition that has taken a position. REQUIRED and
+#              non-empty. "non-canonical" with a note is a position; silence is
+#              not. Statuses: canonical | deuterocanonical | apocryphal |
+#              excluded | non-canonical.
+# book_canonicity  per-book overrides, for editions that span several canons.
+# retrievable  false keeps a work out of the Rung 2 index. Requires a note.
+# vendorable   false means the TEXT may never be written into this repository.
+# ─────────────────────────────────────────────────────────────────────────────
+
+works:
+
+  # ── Christian scripture ───────────────────────────────────────────────────
+  - id: web
+    title: World English Bible
+    tradition: Christianity
+    language_of_origin: Hebrew, Aramaic and Koine Greek
+    translation:
+      translator: Michael Paul Johnson and contributors (rev. of ASV 1901)
+      year: 2020
+      title: World English Bible
+    address: {section_label: chapter, unit_label: verse, has_books: true}
+    provenance:
+      license: public-domain
+      license_note: >-
+        Dedicated to the public domain by Rainbow Missions / eBible.org. PD by
+        explicit dedication, not by age — the translation itself is modern.
+      completeness: complete
+      vendorable: true
+    source:
+      url: https://ebible.org/Scriptures/eng-web_usfm.zip
+      adapter: usfm
+      subset: protocanon
+      note: >-
+        The archive also contains the deuterocanonical books; those are ingested
+        separately as work 'web-apocrypha' because their canonicity differs book
+        by book and does not belong on this record.
+    canonicity:
+      - tradition: Protestant Christianity
+        status: canonical
+        note: The 66-book canon; this edition's protocanonical contents exactly.
+      - tradition: Catholic Church
+        status: canonical
+        note: >-
+          All 66 are canonical; the Catholic canon additionally contains the
+          deuterocanonical books carried here as 'web-apocrypha'.
+      - tradition: Eastern Orthodox Church
+        status: canonical
+        note: >-
+          All 66 are canonical; the Orthodox canon is wider still — see
+          'web-apocrypha'.
+      - tradition: Rabbinic Judaism
+        status: non-canonical
+        note: >-
+          As a Christian Bible. The 39 Old Testament books correspond to the
+          Tanakh but are differently ordered and divided, and the New Testament
+          is not received. For the Jewish canon of those books see 'jps1917'
+          and 'wlc' — this row is about THIS edition, not about Genesis.
+
+  - id: web-apocrypha
+    title: World English Bible — Apocrypha and Deuterocanon
+    tradition: Christianity
+    language_of_origin: Koine Greek and Hebrew
+    translation:
+      translator: Michael Paul Johnson and contributors
+      year: 2020
+      title: World English Bible (Apocrypha)
+    address: {section_label: chapter, unit_label: verse, has_books: true}
+    provenance:
+      license: public-domain
+      license_note: Same public-domain dedication as the WEB proper (eBible.org).
+      completeness: complete
+      vendorable: true
+    source:
+      url: https://ebible.org/Scriptures/eng-web_usfm.zip
+      adapter: usfm
+      subset: deuterocanon
+      note: The deuterocanonical book files within the same archive.
+    # Work-level DEFAULT. The books that do not follow it are overridden below.
+    canonicity:
+      - tradition: Catholic Church
+        status: deuterocanonical
+        note: Received as scripture at the Council of Trent, 1546.
+      - tradition: Eastern Orthodox Church
+        status: canonical
+        note: The anagignoskomena, read and received as scripture.
+      - tradition: Protestant Christianity
+        status: apocryphal
+        note: >-
+          Valued and printed in early Protestant Bibles (including the 1611 KJV)
+          but placed outside the canon and later usually omitted.
+      - tradition: Rabbinic Judaism
+        status: excluded
+        note: Not part of the Tanakh.
+    book_canonicity:
+      - book: 1 Esdras
+        canonicity:
+          - {tradition: Eastern Orthodox Church, status: canonical}
+          - {tradition: Catholic Church, status: apocryphal,
+             note: Printed in an appendix to the Vulgate, outside the canon.}
+          - {tradition: Protestant Christianity, status: apocryphal}
+      - book: 2 Esdras
+        canonicity:
+          - {tradition: Eastern Orthodox Church, status: apocryphal,
+             note: Not in the Greek canon; received in the Slavonic tradition.}
+          - {tradition: Catholic Church, status: apocryphal,
+             note: Vulgate appendix only.}
+          - {tradition: Protestant Christianity, status: apocryphal}
+      - book: Prayer of Manasses
+        canonicity:
+          - {tradition: Eastern Orthodox Church, status: canonical}
+          - {tradition: Catholic Church, status: apocryphal,
+             note: Vulgate appendix only.}
+          - {tradition: Protestant Christianity, status: apocryphal}
+      - book: Psalm 151
+        canonicity:
+          - {tradition: Eastern Orthodox Church, status: canonical}
+          - {tradition: Catholic Church, status: apocryphal}
+          - {tradition: Protestant Christianity, status: apocryphal}
+      - book: 3 Maccabees
+        canonicity:
+          - {tradition: Eastern Orthodox Church, status: canonical}
+          - {tradition: Catholic Church, status: apocryphal}
+          - {tradition: Protestant Christianity, status: apocryphal}
+      - book: 4 Maccabees
+        canonicity:
+          - {tradition: Georgian Orthodox Church, status: canonical}
+          - {tradition: Eastern Orthodox Church, status: apocryphal,
+             note: Printed in an appendix to the Greek Bible, outside the canon.}
+          - {tradition: Catholic Church, status: apocryphal}
+          - {tradition: Protestant Christianity, status: apocryphal}
+
+  # ── Jewish scripture ──────────────────────────────────────────────────────
+  - id: jps1917
+    title: The Holy Scriptures According to the Masoretic Text
+    tradition: Judaism
+    language_of_origin: Hebrew and Aramaic
+    translation:
+      translator: Jewish Publication Society of America
+      year: 1917
+      title: "The Holy Scriptures: A New Translation (JPS 1917)"
+    address: {section_label: chapter, unit_label: verse, has_books: true}
+    provenance:
+      license: public-domain
+      license_note: Published 1917; public domain by age. Sefaria records it as such.
+      completeness: complete
+      vendorable: true
+    source:
+      url: https://www.sefaria.org/api/v3/texts/
+      adapter: sefaria
+      note: >-
+        Fetched per chapter with version=english|The Holy Scriptures: A New
+        Translation (JPS 1917). The older /api/texts/ endpoint accepts a version
+        parameter and ignores it, serving the CC-BY-NC Gender-Sensitive Edition
+        instead; the adapter checks the versionTitle that comes back and refuses
+        a substitution.
+    canonicity:
+      - tradition: Rabbinic Judaism
+        status: canonical
+        note: The Tanakh — 24 books in the Jewish reckoning.
+      - tradition: Protestant Christianity
+        status: canonical
+        note: >-
+          The same books constitute the Old Testament, redivided into 39 and
+          reordered; the Christian sequence ends with Malachi, the Jewish with
+          Chronicles.
+      - tradition: Catholic Church
+        status: canonical
+        note: Canonical, alongside the deuterocanonical books Judaism excludes.
+
+  - id: wlc
+    title: Westminster Leningrad Codex
+    tradition: Judaism
+    language_of_origin: Hebrew
+    # No `translation` key: this IS the Hebrew, not a rendering of it.
+    address: {section_label: chapter, unit_label: verse, has_books: true}
+    provenance:
+      license: open-licensed
+      license_note: >-
+        Unicode/XML Leningrad Codex, tanach.us, transcribed by Christopher V.
+        Kimball and released for free use with attribution.
+      completeness: complete
+      vendorable: true
+    source:
+      url: https://tanach.us/Books/Tanach.xml.zip
+      adapter: wlc
+      note: >-
+        The archive ships Genesis.DH.xml and four siblings alongside the plain
+        books; DH is Documentary-Hypothesis source marking over the SAME text,
+        not a second edition, and the adapter skips those files.
+    retrievable: false
+    retrievable_note: >-
+      Excluded from the Rung 2 retrieval index. all-MiniLM-L6-v2 is an English
+      model: measured on Nyx, Hebrew tokenizes to bare per-character subwords and
+      clusters by script rather than meaning — English Genesis 1:1 scores 0.751
+      against an English paraphrase of itself and only 0.393 against the actual
+      Hebrew of the same verse. Retrieval would not fail, it would return
+      confident nonsense. Carried as display and citation text. A multilingual
+      encoder (LaBSE / multilingual-e5) is logged as a v1.1 candidate.
+    canonicity:
+      - tradition: Rabbinic Judaism
+        status: canonical
+        note: >-
+          The Masoretic text itself — the received consonantal text with Tiberian
+          pointing and accents, copied c. 1008 CE.
+
+  # ── Islamic scripture ─────────────────────────────────────────────────────
+  - id: quran-ar
+    title: Qur'an — Arabic (Tanzil)
+    tradition: Islam
+    language_of_origin: Classical Arabic
+    address: {section_label: sura, unit_label: aya, has_books: false}
+    provenance:
+      license: open-licensed
+      license_note: >-
+        Tanzil Quran Text, Uthmani-simple. Distributed by tanzil.net for free use
+        with attribution and an unmodified-text condition.
+      completeness: complete
+      vendorable: true
+    source:
+      url: https://tanzil.net/pub/download/index.php?quranType=simple&marks=true&sajdah=true&outType=txt-2&agree=true
+      adapter: tanzil
+      note: Kufan verse count, as published.
+    retrievable: false
+    retrievable_note: >-
+      Excluded from the Rung 2 retrieval index, for the same measured reason as
+      the WLC: Arabic tokenizes to per-character subwords under MiniLM and
+      clusters by script. Carried as display and citation text.
+    canonicity:
+      - tradition: Islam (Sunni)
+        status: canonical
+        note: The Qur'an itself; the Uthmanic rasm.
+      - tradition: Islam (Shia)
+        status: canonical
+
+  - id: quran-pickthall
+    title: The Meaning of the Glorious Koran
+    tradition: Islam
+    language_of_origin: Classical Arabic
+    translation: {translator: Marmaduke Pickthall, year: 1930,
+                  title: The Meaning of the Glorious Koran}
+    address: {section_label: sura, unit_label: aya, has_books: false}
+    provenance:
+      license: public-domain
+      license_note: >-
+        Published 1930; Pickthall died 1936, so the work is public domain by age
+        in life+70 jurisdictions as well as in the United States.
+      completeness: complete
+      vendorable: true
+    source: {url: "https://tanzil.net/trans/en.pickthall", adapter: tanzil}
+    canonicity:
+      - tradition: Islam (Sunni)
+        status: canonical
+        note: >-
+          The Qur'an is canonical; a translation is not itself scripture in
+          Islamic understanding but an interpretation of the meaning. Pickthall
+          titled it so deliberately.
+      - tradition: Islam (Shia)
+        status: canonical
+
+  - id: quran-yusufali
+    title: "The Holy Qur'an: Text, Translation and Commentary"
+    tradition: Islam
+    language_of_origin: Classical Arabic
+    translation: {translator: Abdullah Yusuf Ali, year: 1934,
+                  title: "The Holy Qur'an: Text, Translation and Commentary"}
+    address: {section_label: sura, unit_label: aya, has_books: false}
+    provenance:
+      license: public-domain
+      license_note: >-
+        Published 1934; Yusuf Ali died 1953, so the translation entered the
+        public domain in life+70 jurisdictions in 2024. Tanzil distributes the
+        translation text without Yusuf Ali's commentary, which is not included here.
+      completeness: partial
+      completeness_note: >-
+        Translation only. The extensive commentary and appendices that accompany
+        the printed edition are not part of this text.
+      vendorable: true
+    source: {url: "https://tanzil.net/trans/en.yusufali", adapter: tanzil}
+    canonicity:
+      - tradition: Islam (Sunni)
+        status: canonical
+        note: As with Pickthall — the Arabic is scripture; this renders its meaning.
+      - tradition: Islam (Shia)
+        status: canonical
+
+  # ── Second Temple / pseudepigrapha ────────────────────────────────────────
+  - id: enoch1
+    title: 1 Enoch (the Ethiopic Book of Enoch)
+    tradition: Second Temple Judaism
+    language_of_origin: Ge'ez (from Aramaic and Hebrew originals)
+    translation: {translator: R. H. Charles, year: 1917, title: The Book of Enoch}
+    address: {section_label: chapter, unit_label: verse, has_books: false}
+    provenance:
+      license: public-domain
+      license_note: Charles's translation, published 1917; public domain by age.
+      completeness: complete
+      vendorable: true
+    source:
+      url: https://archive.org/details/ethiopicversiono00charuoft
+      adapter: prose
+      note: >-
+        UNPINNED. This identifier is Charles's 1906 edition of the ETHIOPIC TEXT,
+        verified to exist; the 1917 English translation has not yet been located
+        as a verified public-domain scan. Do not ingest until the identifier
+        matches the edition named above — two guessed URLs during Rung 1 returned
+        HTTP 200 for entirely different books.
+    ingested: false
+    ingest_note: >-
+      Not ingested: source edition unpinned, and no prose adapter exists yet.
+    cited_by:
+      - source: Jude 1:14-15
+        note: >-
+          Quotes 1 Enoch 1:9 as prophecy and names Enoch as its author — the
+          clearest case in the corpus of a work cited as scripture by a book that
+          later canons kept while excluding the work it quotes.
+      - source: Barnabas 16:5
+        note: Cites Enoch with a scriptural formula.
+    canonicity:
+      - tradition: Ethiopian Orthodox Tewahedo Church
+        status: canonical
+        note: Canonical, and the only tradition to transmit the complete text.
+      - tradition: Eritrean Orthodox Tewahedo Church
+        status: canonical
+      - tradition: Beta Israel
+        status: canonical
+      - tradition: Rabbinic Judaism
+        status: excluded
+      - tradition: Catholic Church
+        status: excluded
+      - tradition: Eastern Orthodox Church
+        status: excluded
+      - tradition: Protestant Christianity
+        status: excluded
+        note: Excluded despite being quoted in Jude, which is itself canonical.
+
+  - id: jubilees
+    title: The Book of Jubilees (Little Genesis)
+    tradition: Second Temple Judaism
+    language_of_origin: Ge'ez (from a Hebrew original)
+    translation: {translator: R. H. Charles, year: 1902,
+                  title: The Book of Jubilees, or The Little Genesis}
+    address: {section_label: chapter, unit_label: verse, has_books: false}
+    provenance:
+      license: public-domain
+      license_note: Charles's translation, published 1902; public domain by age.
+      completeness: complete
+      vendorable: true
+    source:
+      url: https://archive.org/download/bookofjubileesor00char/bookofjubileesor00char_djvu.txt
+      adapter: prose
+      note: Identifier verified against the archive.org metadata API.
+    ingested: false
+    ingest_note: "Not ingested: no prose adapter exists yet (Rung 1 covers the structured sources)."
+    canonicity:
+      - tradition: Ethiopian Orthodox Tewahedo Church
+        status: canonical
+      - tradition: Beta Israel
+        status: canonical
+      - tradition: Rabbinic Judaism
+        status: excluded
+        note: >-
+          Excluded, though fifteen or more copies were found at Qumran, making it
+          one of the best-attested works in the Dead Sea library.
+      - tradition: Catholic Church
+        status: excluded
+      - tradition: Protestant Christianity
+        status: excluded
+
+  # ── Mesopotamian ──────────────────────────────────────────────────────────
+  - id: enuma-elish
+    title: Enūma Eliš (The Seven Tablets of Creation)
+    tradition: Babylonian religion
+    language_of_origin: Akkadian
+    translation: {translator: Leonard W. King, year: 1902,
+                  title: The Seven Tablets of Creation}
+    address: {section_label: tablet, unit_label: line, has_books: false,
+              section_style: roman}
+    provenance:
+      license: public-domain
+      license_note: Published 1902; public domain by age.
+      completeness: fragmentary
+      completeness_note: >-
+        King worked from the tablets known in 1902. Substantial additional
+        fragments have been recovered since, and his lacunae are not the text's.
+      vendorable: true
+    source:
+      url: https://archive.org/details/the-seven-tablets-of-creation.-vol.-1
+      adapter: prose
+      note: Identifier verified to exist; volume/edition not yet pinned to a file.
+    ingested: false
+    ingest_note: "Not ingested: no prose adapter exists yet."
+    canonicity:
+      - tradition: Babylonian religion
+        status: non-canonical
+        note: >-
+          Not a canon in the scriptural sense, but liturgical: recited in full on
+          the fourth day of the Akitu new-year festival at Babylon.
+
+  - id: gilgamesh
+    title: The Epic of Gilgamesh
+    tradition: Mesopotamian literature
+    language_of_origin: Akkadian
+    translation: {translator: R. Campbell Thompson, year: 1928,
+                  title: "The Epic of Gilgamish: A New Translation"}
+    address: {section_label: tablet, unit_label: line, has_books: false,
+              section_style: roman}
+    provenance:
+      license: public-domain
+      license_note: Published 1928; public domain by age.
+      completeness: fragmentary
+      completeness_note: >-
+        The standard Babylonian version is itself broken, and Thompson predates
+        major joins. Tablet XI carries the flood narrative and is the passage the
+        v1.1 cross-reference view will set beside Genesis 6-9 and Atrahasis.
+      vendorable: true
+    source:
+      url: https://archive.org/details/thompson-1928-gilgamesh
+      adapter: prose
+      note: Identifier verified to exist.
+    ingested: false
+    ingest_note: "Not ingested: no prose adapter exists yet."
+    canonicity:
+      - tradition: Mesopotamian literature
+        status: non-canonical
+        note: >-
+          Scribal-curricular rather than scriptural; copied for a millennium
+          across Mesopotamia, Anatolia and the Levant.
+
+  - id: atrahasis
+    title: Atra-ḫasīs
+    tradition: Babylonian religion
+    language_of_origin: Akkadian
+    address: {section_label: tablet, unit_label: line, has_books: false,
+              section_style: roman}
+    provenance:
+      license: public-domain
+      license_note: Public-domain fragments only — see the completeness note.
+      completeness: fragmentary
+      completeness_note: >-
+        Only the portions appearing in pre-1929 publications are usable here. The
+        standard modern edition is Lambert & Millard, "Atra-ḫasīs: The Babylonian
+        Story of the Flood" (Oxford, 1969), which is in copyright and is NOT the
+        basis of anything stored: any answer drawn from this work is answering
+        from a partial text and should say so.
+      vendorable: true
+    source:
+      url: https://archive.org/details/the-seven-tablets-of-creation.-vol.-1
+      adapter: prose
+      note: >-
+        UNPINNED. No verified public-domain edition of Atra-ḫasīs has been
+        located; the placeholder points at King's volume, which carries related
+        material but is not this text. Must be pinned before ingest.
+    ingested: false
+    ingest_note: "Not ingested: source unpinned and no prose adapter exists."
+    canonicity:
+      - tradition: Babylonian religion
+        status: non-canonical
+        note: >-
+          A flood narrative older than the Genesis account and closely parallel
+          to Gilgamesh XI.
+
+  - id: etcsl
+    title: Electronic Text Corpus of Sumerian Literature (selections)
+    tradition: Sumerian religion and literature
+    language_of_origin: Sumerian
+    address: {section_label: composition, unit_label: line, has_books: true}
+    provenance:
+      license: scholarly-restricted
+      license_note: >-
+        © The ETCSL project, Faculty of Oriental Studies, University of Oxford.
+        Free for scholarly use with attribution; NOT public domain and NOT
+        redistributable.
+      completeness: partial
+      completeness_note: A selection, not the whole corpus.
+      vendorable: false
+    source:
+      url: https://etcsl.orinst.ox.ac.uk/
+      adapter: prose
+      note: >-
+        vendorable: false is load-bearing. The text is used locally and cited,
+        never written into this repository. If the repo is ever made public there
+        is nothing to remove, because nothing was ever committed.
+    ingested: false
+    ingest_note: "Not ingested: no prose adapter, and ingest must honour vendorable=false."
+    canonicity:
+      - tradition: Sumerian religion
+        status: non-canonical
+        note: Temple and scribal literature; no canon in the scriptural sense.
+
+  # ── Egyptian ──────────────────────────────────────────────────────────────
+  - id: book-of-the-dead
+    title: The Book of the Dead (Papyrus of Ani)
+    tradition: Ancient Egyptian religion
+    language_of_origin: Middle Egyptian
+    translation: {translator: E. A. Wallis Budge, year: 1901,
+                  title: "The Book of the Dead: An English Translation"}
+    address: {section_label: chapter, unit_label: verse, has_books: false}
+    provenance:
+      license: public-domain
+      license_note: Budge's translation, published 1901; public domain by age.
+      completeness: complete
+      completeness_note: ""
+      vendorable: true
+    source:
+      url: https://archive.org/details/bookofdeadenglis0003unse
+      adapter: prose
+      note: Identifier verified to exist.
+    ingested: false
+    ingest_note: "Not ingested: no prose adapter exists yet."
+    scholarship_note: >-
+      DATED. Budge's translations are a century old and were contested in his own
+      lifetime; his grammar predates the decipherment advances of the 1920s-30s
+      and he renders theological terms in ways modern Egyptology does not accept.
+      They are used here because they are the only freely usable English versions
+      there are, not because they are the best. Any quotation must carry this.
+    canonicity:
+      - tradition: Ancient Egyptian religion
+        status: non-canonical
+        note: >-
+          A funerary corpus, not a canon: spells were selected per burial and no
+          two papyri carry the same set in the same order.
+
+  - id: memphite-theology
+    title: The Memphite Theology (Shabaka Stone)
+    tradition: Ancient Egyptian religion
+    language_of_origin: Middle Egyptian
+    translation: {translator: James Henry Breasted, year: 1901,
+                  title: The Philosophy of a Memphite Priest}
+    address: {section_label: section, unit_label: line, has_books: false}
+    provenance:
+      license: public-domain
+      license_note: Breasted's translation, published 1901; public domain by age.
+      completeness: fragmentary
+      completeness_note: >-
+        The Shabaka Stone was reused as a millstone and the centre of the
+        inscription is destroyed. The loss is in the object.
+      vendorable: true
+    source:
+      url: https://archive.org/details/bookofdeadenglis0003unse
+      adapter: prose
+      note: >-
+        UNPINNED PLACEHOLDER — Breasted's 1901 article has not been located as a
+        verified scan. Must be pinned before ingest.
+    ingested: false
+    ingest_note: "Not ingested: source unpinned and no prose adapter exists."
+    canonicity:
+      - tradition: Ancient Egyptian religion
+        status: non-canonical
+        note: >-
+          Theological rather than funerary: creation by the speech of Ptah, the
+          nearest Egyptian parallel to a word-creates-world account.
