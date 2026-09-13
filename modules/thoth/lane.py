@@ -31,6 +31,14 @@ at all, so a line of retrieved text saying "go and do likewise" has no machinery
 to reach. `generate` MUST be such a call. The fence is the second layer, not the
 first.
 
+── DEBATE MODE SITS ON TOP, NEVER UNDERNEATH ────────────────────────────────
+Rung 3's mode (thoth.debate, off by default) adds a PROMPT LAYER and a stance
+record. It is appended to the instructions above rather than replacing them, it
+does not touch step 4, and the stance it keeps is extracted from an answer that
+has already passed the floor — a position she was not allowed to say is not a
+position she gets to hold. With the switch off, build_prompt carries no debate
+text at all, and a test asserts it.
+
 ── WHAT COMES BACK ──────────────────────────────────────────────────────────
 An `Answer` that is either ok, with text whose every quotation is the edition's
 own characters followed by the address it came from, or not ok, with a refusal
@@ -42,8 +50,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from . import citation
+from . import citation, debate
 from .citation import Cited, Violation
+from .debate import Stance
 from .index import Hit, Index
 
 log = logging.getLogger("ph3b3.thoth.lane")
@@ -86,6 +95,8 @@ class Answer:
     hits: tuple[Hit, ...] = ()
     violations: tuple[Violation, ...] = ()
     retrieved: int = 0
+    debate: bool = False          # was the mode actually engaged for this turn
+    stance: Stance | None = None  # the position held after this turn, if any
 
     def references(self) -> list[str]:
         """The distinct addresses actually quoted, in order of first use."""
@@ -97,31 +108,76 @@ class Answer:
         return out
 
 
-def build_prompt(query: str, hits, corpus=None) -> str:
-    """The full prompt: fenced passages, the rules, then the question.
+def build_prompt(query: str, hits, corpus=None, debating: bool = False,
+                 stance: Stance | None = None) -> str:
+    """The full prompt: fenced passages, the canonicity record, the rules, then
+    the question.
 
     The question goes LAST so that a passage containing "ignore the above" is
     followed by our instructions rather than preceding them, and so the model's
     attention lands on the actual ask.
+
+    Debate mode APPENDS to the rules; it never replaces them. The citation
+    floor's guarantees depend on the model having been told what the floor
+    enforces, so those instructions have to survive the mode being on.
     """
     rules = INSTRUCTIONS if hits else NO_RETRIEVAL_INSTRUCTIONS
-    return (f"{citation.fence(hits, corpus)}\n\n{rules}\n\n"
-            f"Question: {query.strip()}")
+    if debating and hits:
+        rules += debate.LAYER
+        if stance is not None:
+            rules += debate.held_layer(stance)
+    record = citation.fence_canonicity(canonicity_for(query, hits, corpus))
+    head = f"{citation.fence(hits, corpus)}\n\n"
+    if record:
+        head += f"{record}\n\n"
+    return f"{head}{rules}\n\nQuestion: {query.strip()}"
+
+
+def canonicity_for(query: str, hits, corpus) -> str:
+    """The canonicity rows worth putting in front of the model for this turn.
+
+    Works NAMED in the question, plus works whose passages were retrieved. The
+    first half is what matters: a question about the canon is usually about a
+    work rather than answerable from its verses, and for 1 Enoch it cannot be
+    answered from its verses at all because the text is not ingested. Retrieval
+    alone hands the model nothing, and it answers from memory — which on the
+    first live debate produced a confident claim that Rome and the Orthodox
+    churches receive Enoch, the exact opposite of this library's own table.
+    """
+    if corpus is None or not hasattr(corpus, "canonicity_brief"):
+        return ""
+    try:
+        ids = corpus.works_named_in(query) + [h.work_id for h in hits]
+        return corpus.canonicity_brief(ids)
+    except Exception as e:                       # never let this break an answer
+        log.warning("thoth lane: canonicity record unavailable — %s", e)
+        return ""
 
 
 def ask(query: str, generate, corpus, index: Index | None = None,
-        k: int = DEFAULT_K, work_ids: list[str] | None = None) -> Answer:
+        k: int = DEFAULT_K, work_ids: list[str] | None = None,
+        session_id: str = "", debating: bool | None = None) -> Answer:
     """Answer `query` from the corpus, with the citation floor on the output.
 
     `generate` is called with one string and must return the model's text. It
     MUST be a tools-disabled completion — see the module note.
+
+    `debating` defaults to the persisted switch (OFF unless turned on). It
+    selects a PROMPT LAYER and a stance record; it cannot reach the floor.
     """
     query = (query or "").strip()
     if not query:
         return Answer(ok=False, text="Ask me something and I'll look.", retrieved=0)
 
+    if debating is None:
+        debating = debate.enabled()
     hits = tuple(index.search(query, k=k, work_ids=work_ids)) if index else ()
-    prompt = build_prompt(query, hits, corpus)
+    # A position with nothing under it is the failure Rung 2 caught live: the
+    # model narrated Genesis 6-9 in detail having retrieved none of it. Debate
+    # does not engage on an empty retrieval.
+    engaged = bool(debating and hits)
+    stance = debate.recall_stance(corpus, session_id) if engaged else None
+    prompt = build_prompt(query, hits, corpus, debating=engaged, stance=stance)
 
     try:
         raw = generate(prompt) or ""
@@ -132,15 +188,36 @@ def ask(query: str, generate, corpus, index: Index | None = None,
         raw = ""
 
     if not raw.strip():
-        return Answer(ok=False, hits=hits, retrieved=len(hits),
+        return Answer(ok=False, hits=hits, retrieved=len(hits), debate=engaged,
+                      stance=stance,
                       text="I couldn't put an answer together for that just now.")
 
-    verdict = citation.verify(raw, hits, corpus=corpus, index=index)
+    # The floor runs on the RAW text, position marker and all. A thesis is part
+    # of the answer and can carry a fabricated quote or a pointer at something
+    # never retrieved, so it is verified before it is ever read as a thesis.
+    # References WE supplied must be known to it, or our own canonicity record
+    # ("cited by Jude 1:14-15") reads back as a fabrication.
+    supplied = tuple(citation.parse_references(
+        canonicity_for(query, hits, corpus), corpus))
+    verdict = citation.verify(raw, hits, corpus=corpus, index=index,
+                              supplied_refs=supplied)
     if not verdict.ok:
         log.info("thoth floor: refused an answer — %s",
                  sorted({v.kind for v in verdict.violations}))
         return Answer(ok=False, text=verdict.refusal(), hits=hits,
-                      violations=verdict.violations, retrieved=len(hits))
+                      violations=verdict.violations, retrieved=len(hits),
+                      debate=engaged, stance=stance)
 
-    return Answer(ok=True, text=verdict.answer, citations=verdict.citations,
-                  hits=hits, retrieved=len(hits))
+    text = verdict.answer
+    held = stance
+    if engaged:
+        # Extracted from the VERIFIED answer, so a stance is only ever kept from
+        # something she was allowed to say.
+        text, position = debate.extract_position(text)
+        if position:
+            held = debate.record_stance(corpus, session_id, query, position) or stance
+    else:
+        text = debate.strip_markers(text)
+
+    return Answer(ok=True, text=text, citations=verdict.citations,
+                  hits=hits, retrieved=len(hits), debate=engaged, stance=held)

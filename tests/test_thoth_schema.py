@@ -158,22 +158,40 @@ def test_translation_year_is_sanity_bounded():
 def test_bare_canon_never_appears_as_an_identifier_in_thoth():
     """'canon' means two other things in this codebase (shelf.py's shipped
     stories and canon.py's verbatim store) and shelf.py warns in writing against
-    unifying them. Thoth says canonicity/canon_status. A naming rule nobody
-    checks is a naming suggestion, so this greps the package.
+    unifying them. Thoth says canonicity/canon_status.
 
-    Prose in docstrings and comments may say the word — the ban is on
-    IDENTIFIERS, which is what would actually collide.
+    Parsed with ast rather than grepped, so it flags NAMES — variables,
+    functions, arguments, attributes, constants — and never prose. The prompt
+    layer legitimately contains the sentence "The Christian canon is not one
+    thing", and a rule that cannot tell an identifier from a string is a rule
+    that gets deleted the first time it cries wolf.
+
+    Case-insensitive: this fired for real during Rung 3 on a local `canon =`
+    holding the canonicity block, and a CANON_OPEN constant slipped past the
+    case-sensitive version. A rule that catches only one spelling of the word it
+    bans is most of a rule.
     """
-    bare = re.compile(r"\bcanon\b")
+    import ast
+    bare = re.compile(r"^canon$", re.I)
     offenders = []
     for path in sorted((REPO / "modules" / "thoth").rglob("*.py")):
-        src = path.read_text(encoding="utf-8")
-        # Strip docstrings and comments; what is left is code.
-        code = re.sub(r'"""..*?"""', "", src, flags=re.S)
-        code = re.sub(r"#.*", "", code)
-        for i, line in enumerate(code.splitlines(), start=1):
-            if bare.search(line):
-                offenders.append(f"{path.relative_to(REPO)}:{i}: {line.strip()}")
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Name):
+                names = [node.id]
+            elif isinstance(node, ast.arg):
+                names = [node.arg]
+            elif isinstance(node, ast.Attribute):
+                names = [node.attr]
+            elif isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                names = [node.name]
+            elif isinstance(node, ast.keyword) and node.arg:
+                names = [node.arg]
+            for n in names:
+                if bare.match(n):
+                    offenders.append(
+                        f"{path.relative_to(REPO)}:{getattr(node, 'lineno', '?')}: {n}")
     assert not offenders, (
         "bare `canon` used as an identifier in thoth/ — use canonicity or "
         "canon_status:\n" + "\n".join(offenders))

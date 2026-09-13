@@ -30,7 +30,7 @@ What's shipped, what's active, what's next. Only things that actually run on `ma
 ## Active
 
 - **Mnemosyne — persistent local memory spine.** Growing into retrieval over long-term memory (this absorbs the old "RAG memory backend" goal). Same guarantee as everything else here: embeddings are generated and stored locally, nothing leaves.
-- **Thoth — comparative sacred-text library.** Rung 1 (corpus + schema) and Rung 2 (retrieval + the citation floor) are built: 103,156 addressed passages across seven works, 73,707 of them indexed, and a verbatim-or-silence rule with no off switch — she quotes from a retrieved passage carrying the address that passage actually has, or she argues without quoting. Rung 3 is debate mode, Rung 4 the read-aloud lane.
+- **Thoth — comparative sacred-text library.** Rung 1 (corpus + schema) and Rung 2 (retrieval + the citation floor) are built: 103,156 addressed passages across seven works, 73,707 of them indexed, and a verbatim-or-silence rule with no off switch — she quotes from a retrieved passage carrying the address that passage actually has, or she argues without quoting. Rung 3 (debate mode) is built too — a toggleable, off-by-default layer that licenses her to take a position, hold it across turns, steelman what she rejects and disagree with you, with the citation floor untouched underneath and no way to hand her a side to argue. Rung 4, the read-aloud lane, is what remains.
 
 ---
 

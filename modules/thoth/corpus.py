@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 from pathlib import Path
 
@@ -507,6 +508,64 @@ class Corpus:
         English-model index without anyone having to remember why."""
         return [r[0] for r in self._db.execute(
             "SELECT id FROM works WHERE retrievable=1 AND ingested=1 ORDER BY id")]
+
+    _STOP = frozenset({"the", "of", "and", "book", "text", "texts", "holy",
+                       "scriptures", "according", "translation", "commentary",
+                       "english", "world", "new", "selections"})
+
+    def works_named_in(self, query: str) -> list[str]:
+        """Work ids whose id or title is named in `query`.
+
+        Needed because a canon question is usually ABOUT a work rather than
+        answerable from its verses — and for 1 Enoch it cannot be answered from
+        its verses at all, since the text is not ingested. Retrieval alone would
+        hand the model nothing and it would answer from memory.
+        """
+        q = re.sub(r"[^a-z0-9 ]+", " ", (query or "").casefold())
+        words = set(q.split())
+        if not words:
+            return []
+        out = []
+        for wid, title in self._db.execute("SELECT id, title FROM works"):
+            tokens = {t for t in re.split(r"[^a-z0-9]+", f"{wid} {title}".casefold())
+                      if len(t) > 3 and t not in self._STOP}
+            if tokens & words:
+                out.append(wid)
+        return out
+
+    def canonicity_brief(self, work_ids: list[str]) -> str:
+        """The canonicity table, rendered for a prompt.
+
+        Rung 1 made canonicity structured and queryable so that "who receives
+        this" would be a lookup rather than a guess. Rung 3's first live debate
+        proved the point by getting it wrong in the other direction: asked
+        whether 1 Enoch was wrongly excluded, the model announced that the
+        Catholic and Eastern Orthodox churches include it — the opposite of what
+        this table says, stated with complete confidence. The data existed and
+        was never put in front of it.
+        """
+        lines = []
+        for wid in dict.fromkeys(work_ids):
+            row = self._db.execute(
+                "SELECT title FROM works WHERE id=?", (wid,)).fetchone()
+            if not row:
+                continue
+            rows = self._db.execute(
+                "SELECT book, tradition, status, note FROM canonicity "
+                "WHERE work_id=? ORDER BY book IS NOT NULL, book, tradition",
+                (wid,)).fetchall()
+            if not rows:
+                continue
+            lines.append(f"{row[0]} [{wid}]")
+            for book, tradition, status, note in rows:
+                where = f" ({book})" if book else ""
+                tail = f" — {note}" if note else ""
+                lines.append(f"  {tradition}{where}: {status}{tail}")
+            cites = self._db.execute(
+                "SELECT source, note FROM citations WHERE work_id=?", (wid,)).fetchall()
+            for source, note in cites:
+                lines.append(f"  cited by {source}{(' — ' + note) if note else ''}")
+        return "\n".join(lines)
 
     def summary(self) -> list[dict]:
         cols = ("id", "title", "tradition", "license", "completeness",

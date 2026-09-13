@@ -6,6 +6,10 @@ Thoth's command line.
     .venv/bin/python -m thoth index                   build the vector index
     .venv/bin/python -m thoth search "the flood"      retrieval only, no model
     .venv/bin/python -m thoth ask "what does …"       the full lane, with the floor
+    .venv/bin/python -m thoth debate on|off|status    Rung 3's mode (default OFF)
+
+`ask --session X` keeps a debate stance across turns, so she can be held to a
+position she took earlier in the same conversation.
 
 `search` exists so retrieval can be judged on its own. When an answer is wrong
 it is usually retrieval that was wrong, and a lane that only ever speaks through
@@ -23,6 +27,7 @@ import os
 import sys
 import urllib.request
 
+from . import debate as debate_mod
 from . import lane
 from .corpus import Corpus, load_manifest
 from .index import Index
@@ -60,10 +65,21 @@ def main(argv: list[str] | None = None) -> int:
     p_as = sub.add_parser("ask", help="the full lane, floor included")
     p_as.add_argument("query")
     p_as.add_argument("-k", type=int, default=8)
+    p_as.add_argument("--session", default="", help="keep a debate stance across turns")
+    p_as.add_argument("--debate", dest="debate", action="store_true", default=None,
+                      help="force debate mode on for this turn")
+    p_db = sub.add_parser("debate", help="the debate-mode switch")
+    p_db.add_argument("state", choices=["on", "off", "status"], nargs="?", default="status")
     args, rest = ap.parse_known_args(argv)
 
     if args.cmd == "list":
         return ingest_main(["--list"])
+
+    if args.cmd == "debate":
+        if args.state in ("on", "off"):
+            debate_mod.set_enabled(args.state == "on")
+        print(f"debate mode: {'ON' if debate_mod.enabled() else 'OFF'}")
+        return 0
 
     corpus = Corpus()
     works, failures = load_manifest()
@@ -96,15 +112,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "ask":
-        answer = lane.ask(args.query, _generate, corpus, index, k=args.k)
+        answer = lane.ask(args.query, _generate, corpus, index, k=args.k,
+                          session_id=args.session, debating=args.debate)
         print(f"\n{answer.text}\n")
         if answer.citations:
             print("Cited:")
             for r in answer.references():
                 print(f"  {r}")
+        if answer.stance:
+            print(f"Position held: {answer.stance.position}")
         if answer.violations:
             print("Floor:", ", ".join(sorted({v.kind for v in answer.violations})))
-        print(f"\n[retrieved {answer.retrieved}]")
+        print(f"\n[retrieved {answer.retrieved}"
+              f"{', debating' if answer.debate else ''}]")
         return 0 if answer.ok else 1
 
     return 2
