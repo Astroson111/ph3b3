@@ -1,0 +1,114 @@
+"""
+Thoth's command line.
+
+    .venv/bin/python -m thoth list                    what the library holds
+    .venv/bin/python -m thoth ingest --all            fetch + parse + store
+    .venv/bin/python -m thoth index                   build the vector index
+    .venv/bin/python -m thoth search "the flood"      retrieval only, no model
+    .venv/bin/python -m thoth ask "what does …"       the full lane, with the floor
+
+`search` exists so retrieval can be judged on its own. When an answer is wrong
+it is usually retrieval that was wrong, and a lane that only ever speaks through
+a model makes that impossible to see.
+
+`ask` calls the local model with NO tools key — the Kadmos injection firewall.
+Retrieved scripture is untrusted input full of second-person imperatives, and a
+tools-enabled completion would give "go and do likewise" something to reach.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import urllib.request
+
+from . import lane
+from .corpus import Corpus, load_manifest
+from .index import Index
+from .ingest import main as ingest_main
+
+OLLAMA = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+MODEL = os.getenv("PH3B3_LIGHT_MODEL", "ph3b3-chat:latest")
+
+
+def _generate(prompt: str) -> str:
+    """One tools-disabled completion. There is deliberately no `tools` key."""
+    body = json.dumps({"model": MODEL, "prompt": prompt, "stream": False,
+                       "options": {"temperature": 0.3}}).encode()
+    req = urllib.request.Request(f"{OLLAMA}/api/generate", data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        return json.load(r).get("response", "")
+
+
+def _ref(h) -> str:
+    return f"{h.book} {h.section}:{h.unit}" if h.book else f"{h.section}:{h.unit}"
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="thoth", description="Thoth sacred-text library")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("list", help="corpus state")
+    p_ix = sub.add_parser("index", help="build the vector index")
+    p_ix.add_argument("--work", action="append", default=[])
+    p_ix.add_argument("--prune", action="store_true",
+                      help="drop embeddings for works no longer eligible")
+    p_se = sub.add_parser("search", help="retrieval only")
+    p_se.add_argument("query")
+    p_se.add_argument("-k", type=int, default=8)
+    p_as = sub.add_parser("ask", help="the full lane, floor included")
+    p_as.add_argument("query")
+    p_as.add_argument("-k", type=int, default=8)
+    args, rest = ap.parse_known_args(argv)
+
+    if args.cmd == "list":
+        return ingest_main(["--list"])
+
+    corpus = Corpus()
+    works, failures = load_manifest()
+    for ident, why in failures:
+        print(f"  MANIFEST REJECTED  {ident}: {why}", file=sys.stderr)
+    corpus.sync_metadata(works)
+    index = Index(corpus)
+
+    if args.cmd == "index":
+        if args.prune:
+            print(f"pruned {index.prune_ineligible()} ineligible embeddings")
+        before = index.stats()
+        print(f"eligible {before['eligible']:,}  indexed {before['indexed']:,}  "
+              f"missing {before['missing']:,}")
+
+        def show(done, total):
+            if done % 12800 == 0 or done == total:
+                print(f"  {done:,}/{total:,}", flush=True)
+        added = index.build(work_ids=args.work or None, progress=show)
+        print(f"added {added:,} — now {index.stats()}")
+        return 0
+
+    if args.cmd == "search":
+        hits = index.search(args.query, k=args.k)
+        if not hits:
+            print("nothing retrieved")
+            return 1
+        for h in hits:
+            print(f"  {h.score:.3f}  {h.work_id:16s} {_ref(h):24s} {h.text[:70]}")
+        return 0
+
+    if args.cmd == "ask":
+        answer = lane.ask(args.query, _generate, corpus, index, k=args.k)
+        print(f"\n{answer.text}\n")
+        if answer.citations:
+            print("Cited:")
+            for r in answer.references():
+                print(f"  {r}")
+        if answer.violations:
+            print("Floor:", ", ".join(sorted({v.kind for v in answer.violations})))
+        print(f"\n[retrieved {answer.retrieved}]")
+        return 0 if answer.ok else 1
+
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

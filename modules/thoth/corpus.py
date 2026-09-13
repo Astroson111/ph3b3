@@ -53,7 +53,6 @@ already backs up in full.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sqlite3
@@ -220,6 +219,8 @@ CREATE TABLE IF NOT EXISTS citations (
 );
 CREATE INDEX IF NOT EXISTS idx_cite_work ON citations(work_id);
 
+-- A ROWID table on purpose. The Rung 2 vector index keys its embeddings by
+-- passages.rowid, and a WITHOUT ROWID table has none to key against.
 CREATE TABLE IF NOT EXISTS passages (
     work_id TEXT NOT NULL,
     book    TEXT NOT NULL DEFAULT '',
@@ -227,9 +228,10 @@ CREATE TABLE IF NOT EXISTS passages (
     unit    INTEGER NOT NULL,
     ordinal INTEGER NOT NULL,
     text    TEXT NOT NULL,
-    PRIMARY KEY (work_id, book, section, unit)
-) WITHOUT ROWID;
+    UNIQUE (work_id, book, section, unit)
+);
 CREATE INDEX IF NOT EXISTS idx_pass_order ON passages(work_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_pass_sect ON passages(work_id, book, section, unit);
 """
 
 
@@ -241,8 +243,68 @@ class Corpus:
         self.db_path = Path(db_path or DB_PATH)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self._load_vec()
+        self._migrate_passages_to_rowid()
         self._db.executescript(_SCHEMA)
         self._db.commit()
+
+    def _load_vec(self) -> None:
+        """Load sqlite-vec on THIS connection, if it is installed.
+
+        Corpus does not search — Index does — but it must be able to DELETE from
+        vec_passages when passages are rewritten, and a vec0 table cannot be
+        touched at all from a connection without the extension. Without this,
+        `python -m thoth.ingest` crashed with "no such module: vec0" the moment
+        an index existed: the invalidation that protects against stale-rowid
+        citations was itself what broke the write path.
+        """
+        try:
+            import sqlite_vec
+        except ImportError:                       # index not installed; nothing to drop
+            return
+        try:
+            self._db.enable_load_extension(True)
+            sqlite_vec.load(self._db)
+        except Exception as e:                    # pragma: no cover
+            log.warning("thoth: sqlite-vec unavailable on this connection (%s)", e)
+        finally:
+            try:
+                self._db.enable_load_extension(False)
+            except Exception:
+                pass
+
+    def _migrate_passages_to_rowid(self) -> None:
+        """Rebuild a pre-Rung-2 WITHOUT ROWID passages table as a rowid table.
+
+        The vector index keys embeddings by passages.rowid. Stores created before
+        Rung 2 have no rowid to key against, and the bodies are re-ingestable
+        anyway, so the table is recreated and refilled from itself in one
+        transaction rather than left in a shape the index cannot use.
+        """
+        row = self._db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='passages'"
+        ).fetchone()
+        if not row or "WITHOUT ROWID" not in (row[0] or "").upper():
+            return
+        log.info("thoth: migrating passages to a rowid table for the vector index")
+        self._db.executescript("""
+            BEGIN;
+            ALTER TABLE passages RENAME TO passages_norowid;
+            CREATE TABLE passages (
+                work_id TEXT NOT NULL,
+                book    TEXT NOT NULL DEFAULT '',
+                section INTEGER NOT NULL,
+                unit    INTEGER NOT NULL,
+                ordinal INTEGER NOT NULL,
+                text    TEXT NOT NULL,
+                UNIQUE (work_id, book, section, unit)
+            );
+            INSERT INTO passages (work_id, book, section, unit, ordinal, text)
+                SELECT work_id, book, section, unit, ordinal, text
+                FROM passages_norowid ORDER BY work_id, ordinal;
+            DROP TABLE passages_norowid;
+            COMMIT;
+        """)
 
     def close(self) -> None:
         self._db.close()
@@ -269,6 +331,7 @@ class Corpus:
         stale = [r[0] for r in cur.execute("SELECT id FROM works").fetchall()
                  if r[0] not in keep]
         for wid in stale:
+            self._drop_vectors_for(wid, cur)
             for table in ("passages", "canonicity", "citations", "works"):
                 col = "id" if table == "works" else "work_id"
                 cur.execute(f"DELETE FROM {table} WHERE {col}=?", (wid,))
@@ -348,6 +411,12 @@ class Corpus:
         and turns a 31,000-verse Bible into an afternoon.
         """
         cur = self._db.cursor()
+        # Drop this work's vectors FIRST. Re-ingesting reassigns rowids, and an
+        # embedding left pointing at a recycled rowid resolves to a different
+        # verse — which the citation floor would then stamp with a correct-looking
+        # address. A stale index is not a degraded index here, it is a fabricated
+        # citation with a clean bill of health. index.build() refills it.
+        self._drop_vectors_for(work_id, cur)
         cur.execute("DELETE FROM passages WHERE work_id=?", (work_id,))
         cur.executemany(
             "INSERT INTO passages (work_id, book, section, unit, ordinal, text) "
@@ -359,6 +428,20 @@ class Corpus:
             (len(passages), work_id))
         self._db.commit()
         return len(passages)
+
+    def _drop_vectors_for(self, work_id: str, cur) -> None:
+        """Delete a work's rows from the vector index, if the index exists yet.
+
+        Lives on Corpus rather than Index because passage writes must invalidate
+        the index even when nothing has imported thoth.index in this process.
+        """
+        have = cur.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='vec_passages'").fetchone()
+        if not have:
+            return
+        cur.execute(
+            "DELETE FROM vec_passages WHERE rowid IN "
+            "(SELECT rowid FROM passages WHERE work_id=?)", (work_id,))
 
     def set_source_hash(self, work_id: str, sha256: str) -> None:
         """Record the sha256 of the bytes actually parsed into this work, so

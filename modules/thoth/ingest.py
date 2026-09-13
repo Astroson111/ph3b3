@@ -37,7 +37,6 @@ import time
 import urllib.parse
 import urllib.request
 import zipfile
-from pathlib import Path
 
 from .corpus import CACHE_DIR, Corpus, load_manifest
 from .schema import Passage, Work
