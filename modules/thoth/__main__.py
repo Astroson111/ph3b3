@@ -7,6 +7,9 @@ Thoth's command line.
     .venv/bin/python -m thoth search "the flood"      retrieval only, no model
     .venv/bin/python -m thoth ask "what does …"       the full lane, with the floor
     .venv/bin/python -m thoth debate on|off|status    Rung 3's mode (default OFF)
+    .venv/bin/python -m thoth read "John 3"           read aloud on the Nyx speaker
+    .venv/bin/python -m thoth resume                  pick the reading back up
+    .venv/bin/python -m thoth position                where the last reading got to
 
 `ask --session X` keeps a debate stance across turns, so she can be held to a
 position she took earlier in the same conversation.
@@ -29,6 +32,7 @@ import urllib.request
 
 from . import debate as debate_mod
 from . import lane
+from . import reader as reader_mod
 from .corpus import Corpus, load_manifest
 from .index import Index
 from .ingest import main as ingest_main
@@ -70,6 +74,18 @@ def main(argv: list[str] | None = None) -> int:
                       help="force debate mode on for this turn")
     p_db = sub.add_parser("debate", help="the debate-mode switch")
     p_db.add_argument("state", choices=["on", "off", "status"], nargs="?", default="status")
+    p_rd = sub.add_parser("read", help="read aloud on the Nyx speaker")
+    p_rd.add_argument("query")
+    p_rd.add_argument("--chapters", type=int, default=None,
+                      help="stop and offer to go on after N chapters, this "
+                           "reading only (0 = never stop)")
+    p_cf = sub.add_parser("reader-continue",
+                          help="persist the default chapter limit (0 = never ask)")
+    p_cf.add_argument("n", type=int, nargs="?", default=None)
+    p_rs = sub.add_parser("resume", help="resume the last reading from its marker")
+    p_rs.add_argument("--chapters", type=int, default=None,
+                      help="stop after N chapters, this reading only")
+    sub.add_parser("position", help="show the saved reading marker")
     args, rest = ap.parse_known_args(argv)
 
     if args.cmd == "list":
@@ -109,6 +125,62 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         for h in hits:
             print(f"  {h.score:.3f}  {h.work_id:16s} {_ref(h):24s} {h.text[:70]}")
+        return 0
+
+    if args.cmd == "reader-continue":
+        if args.n is not None:
+            reader_mod.set_continue_after_chapters(args.n)
+        n = reader_mod.continue_after_chapters()
+        print(f"continue prompt after {n} chapters" if n else
+              "no continue prompt — readings run until stopped")
+        return 0
+
+    if args.cmd in ("read", "resume", "position"):
+        from tts_module import TTSModule
+        speaker = TTSModule()
+        if args.cmd == "position":
+            pos = reader_mod.load_position(corpus)
+            print(f"position: {pos.spoken()} in {pos.work_id}" if pos else "no saved position")
+            return 0 if pos else 1
+
+        if args.cmd == "resume":
+            pos = reader_mod.load_position(corpus)
+            if not pos:
+                print("nothing to resume — no saved position")
+                return 1
+            title = corpus._db.execute("SELECT title FROM works WHERE id=?",
+                                       (pos.work_id,)).fetchone()
+            ref = reader_mod.Reference(work_id=pos.work_id,
+                                       work_title=title[0] if title else pos.work_id,
+                                       book=pos.book, section=pos.section)
+            from_unit = pos.unit
+        else:
+            res = reader_mod.resolve(args.query, corpus, speaker)
+            if res.question:
+                print(res.question)
+                return 2
+            if not res.ok:
+                print(res.refusal)
+                return 1
+            ref, from_unit = res.reference, 0
+            if res.note:
+                print(f"(reading the {res.note})")
+
+        if not speaker.available():
+            print("no voice model — nothing to read with")
+            return 1
+
+        def on_event(kind, detail):
+            if kind in ("start", "stop", "error", "unspoken"):
+                print(f"[{kind}] {detail}", flush=True)
+        reading = reader_mod.Reading(corpus, speaker, on_event)
+        print(f"reading {ref.spoken()} — {ref.work_title}   (ctrl-c to stop)")
+        try:
+            reading.start(ref, from_unit=from_unit, block=True,
+                          continue_after=getattr(args, "chapters", None))
+        except KeyboardInterrupt:
+            pos = reading.stop()
+            print(f"\nstopped at {pos.spoken() if pos else 'the start'}")
         return 0
 
     if args.cmd == "ask":

@@ -112,6 +112,47 @@ def _word_split(sentence, max_chars):
     return pieces
 
 
+def pack_units(units, max_chars):
+    """Greedily pack atomic pieces of text into chunks of at most `max_chars`.
+
+    Returns [(chunk_text, first_index, last_index), ...] where the indices are
+    positions in `units`, so a caller that knows what its units MEAN can map a
+    chunk back to them.
+
+    The atom is whatever the caller says it is. For a spoken reply that is a
+    sentence (see split_for_tts below). For Thoth's reader lane it is a VERSE,
+    which is why this is a shared function rather than a loop copied into the
+    reader: the packing rule is the same, and the reader additionally needs to
+    know which verses ended up in each chunk so it can keep a stop/resume marker
+    at verse granularity.
+
+    An over-long unit is split at word boundaries and its pieces all carry that
+    unit's own index — a verse longer than max_chars is still one verse.
+    """
+    if max_chars < 1:
+        raise ValueError("max_chars must be >= 1")
+    out, cur, start = [], "", 0
+    for i, unit in enumerate(units):
+        if not unit:
+            continue
+        if len(unit) > max_chars:
+            if cur:
+                out.append((cur, start, i - 1))
+                cur = ""
+            out.extend((piece, i, i) for piece in _word_split(unit, max_chars))
+            continue
+        if not cur:
+            cur, start = unit, i
+        elif len(cur) + 1 + len(unit) <= max_chars:
+            cur += " " + unit
+        else:
+            out.append((cur, start, i - 1))
+            cur, start = unit, i
+    if cur:
+        out.append((cur, start, len(units) - 1))
+    return out
+
+
 def split_for_tts(text, max_chars=DEFAULT_MAX_CHARS):
     """Return a list of TTS-ready chunks, each <= max_chars, on sentence
     boundaries where possible.
@@ -122,23 +163,5 @@ def split_for_tts(text, max_chars=DEFAULT_MAX_CHARS):
         whitespace-normalised input (nothing dropped or duplicated),
       - short input returns a single chunk; empty/blank returns [].
     """
-    if max_chars < 1:
-        raise ValueError("max_chars must be >= 1")
-    chunks, cur = [], ""
-    for sent in split_sentences(text):
-        if len(sent) > max_chars:
-            if cur:
-                chunks.append(cur)
-                cur = ""
-            chunks.extend(_word_split(sent, max_chars))
-            continue
-        if not cur:
-            cur = sent
-        elif len(cur) + 1 + len(sent) <= max_chars:
-            cur += " " + sent
-        else:
-            chunks.append(cur)
-            cur = sent
-    if cur:
-        chunks.append(cur)
-    return chunks
+    return [chunk for chunk, _first, _last
+            in pack_units(split_sentences(text), max_chars)]

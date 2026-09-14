@@ -39,6 +39,10 @@ LANG_NAMES = {
     # silent-by-surprise). They become voiced automatically the day the registry
     # gains an approved voice for them — no code change (see list_languages_for_ui).
     "ja": "Japanese", "ko": "Korean", "hi": "Hindi", "id": "Indonesian",
+    # Hebrew arrives with Thoth: the Westminster Leningrad Codex is in the
+    # corpus, so the language is offerable for response text even though Piper
+    # has no Hebrew voice and the reader lane refuses to "read" it aloud.
+    "he": "Hebrew",
 }
 
 _lock = threading.Lock()

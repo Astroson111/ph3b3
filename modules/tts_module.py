@@ -305,8 +305,16 @@ class TTSModule:
     # chunk's synth regardless of story length and no timer spans the whole reply.
     _SPEAK_MAX_CHARS = 200        # run-on cap; ~<1 s synth, ~15 s audio per chunk
 
-    def _piper_raw(self, text: str, model: str | None = None) -> bytes | None:
-        """Synthesise one chunk to raw s16le/22050/mono PCM (headerless), or None."""
+    def _piper_raw(self, text: str, model: str | None = None,
+                   length_scale: float | None = None,
+                   sentence_silence: float | None = None) -> bytes | None:
+        """Synthesise one chunk to raw s16le/22050/mono PCM (headerless), or None.
+
+        Both delivery arguments default to None and the flags are then omitted
+        entirely, so the ordinary reply path is byte-identical to before they
+        existed. They are here for Thoth's reader lane, which wants a story-like
+        pace and a real beat at each full stop over a long reading.
+        """
         model = model or VOICE_MODEL
         try:
             # NO SHELL. Piper reads its text from stdin, so the old
@@ -318,8 +326,19 @@ class TTSModule:
             # arbitrary command execution as the service user. Passing argv as a
             # list and the text via stdin removes the shell from the path entirely,
             # so there is no quoting to get right.
+            cmd = [PIPER_BIN, "--model", model, "--output-raw"]
+            if length_scale is not None:
+                cmd += ["--length-scale",
+                        f"{max(0.5, min(2.0, float(length_scale))):.3f}"]
+            if sentence_silence is not None:
+                # Snapped to a whole sample. Passing the raw value is what turned
+                # every pause in a shelf reading into static — see
+                # _safe_sentence_silence. A reader lane asks for a pause at every
+                # verse, so this path would hit it constantly.
+                cmd += ["--sentence-silence",
+                        _safe_sentence_silence(sentence_silence)]
             proc = subprocess.run(
-                [PIPER_BIN, "--model", model, "--output-raw"],
+                cmd,
                 input=text.encode("utf-8"),
                 capture_output=True, timeout=20,
                 env={**os.environ, **_XDG_ENV},
@@ -409,6 +428,55 @@ class TTSModule:
                 except queue.Empty:
                     pass
                 prod.join(timeout=2)
+
+    # ── public surface for a long-form lane ─────────────────────────────────
+    # Thoth's reader needs to synthesise and play ONE unit at a time while
+    # holding the shared speech lock only for that unit — a chapter reading that
+    # held it throughout would block every other thing Phoebe says for minutes.
+    # These exist so that lane does not have to reach into private methods.
+
+    @property
+    def speech_lock(self) -> threading.Lock:
+        """The lock that serialises access to the speaker. Take it per UNIT, not
+        per reading."""
+        return self._lock
+
+    def available(self) -> bool:
+        return self._available
+
+    def can_speak(self, text: str, voice=None) -> bool:
+        """True if the selected voice can pronounce ANY of `text`.
+
+        The honest test is the real one: run the text through the same
+        preparation synthesis uses and see whether anything survives. For a
+        Latin voice, Hebrew and Arabic reduce to the empty string — so a caller
+        that does not ask this first discovers it as silence, which is how a
+        reader lane ends up "reading" a book aloud and producing nothing.
+        """
+        _model, script = _resolve_voice(voice)
+        return bool(_prep(text or "", script).strip())
+
+    def synth_pcm(self, text: str, voice=None, length_scale: float | None = None,
+                  sentence_silence: float | None = None) -> bytes | None:
+        """One unit of raw PCM for local playback, or None.
+
+        Returns None rather than silence when there is nothing speakable — the
+        CALLER is expected to have established that the text is in a script the
+        selected voice can pronounce. _prep() drops every non-Latin codepoint for
+        a Latin voice, so handing this Hebrew returns None, and a lane that
+        treats None as "skip" would read a book as silence.
+        """
+        if not self._available or not (text or "").strip():
+            return None
+        model, script = _resolve_voice(voice)
+        prepared = _prep(text, script)
+        if not prepared:
+            return None
+        return self._piper_raw(prepared, model, length_scale, sentence_silence)
+
+    def play_pcm(self, pcm: bytes) -> bool:
+        """Play one unit of raw PCM on the local speaker."""
+        return self._play_pcm(pcm)
 
     def synthesize_to_b64(self, text: str, voice=None,
                           length_scale: float | None = None,
