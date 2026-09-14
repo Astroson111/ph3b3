@@ -36,23 +36,22 @@ it. This lane takes the same lock around ONE synthesis unit at a time, so an
 ordinary reply interleaves between verses after a second or two rather than
 waiting for Leviticus to finish.
 
-── THE LOCK IS PER PROCESS, AND THAT IS A REAL GAP ──────────────────────────
+── THE LOCK IS PER PROCESS, AND ONE CALLER STILL PAYS FOR THAT ──────────────
 Taking the speech lock per unit solves contention INSIDE one process. It does
 nothing across two, because the lock is an attribute of a TTSModule instance and
 each process builds its own.
 
-Today that is reachable: `python -m thoth read` constructs its own TTSModule
-while the ph3b3 service is running with another, so a reading started from the
-command line and a reply spoken by the service can hit `pacat` at the same time
-and overlap on the speaker. Nothing detects it and nothing recovers from it —
-you simply hear both.
+In the server this is now fine: thoth.service binds the reading to the ONE
+TTSModule that server.py already owns, so a reading and an ordinary reply share
+a lock and interleave properly. That is what wiring the lane in bought, and it
+is the reason the fix was never a bigger lock.
 
-It is not fixed here because the fix is not a bigger lock. It is wiring this
-lane into `agent/server.py` so there is ONE TTSModule and the per-unit lock
-means what it says. Until that happens, treat the CLI reader as something to run
-when the service is not talking. A cross-process lock (an abstract socket, a
-lockfile under XDG_RUNTIME_DIR) would paper over it and would then be a second
-mechanism to keep true, so it is deliberately not here either.
+The command line still has its own instance. `python -m thoth read` running
+while the service is talking can hit `pacat` at the same time as she does, and
+nothing detects or recovers from it — you simply hear both. Treat the CLI reader
+as a thing to run when the service is quiet. A cross-process lock (an abstract
+socket, a lockfile under XDG_RUNTIME_DIR) would paper over that and would then
+be a second mechanism to keep true, so it is deliberately not here.
 
 ── IT KEEPS GOING, AND THAT IS THE POINT ────────────────────────────────────
 "Read John 3" starts at chapter 3 and reads ON through the book, announcing each

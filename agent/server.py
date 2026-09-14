@@ -148,6 +148,7 @@ from stt_module import STTModule
 from paths import PH3B3_DATA  # [DBG-AUDIO] instrumentation save-dir root
 from anime_module import AnimeModule
 from stories_module import StoriesModule
+from thoth import service as thoth_svc
 import emotions                       # emotional state table (config/emotions.yaml)
 import shelf                          # permanent read-only works (stories/)
 import canon                          # verbatim store for stories SHE wrote
@@ -2412,6 +2413,36 @@ async def _run_chat_pipeline(body: dict, request: Request):
         log.info("VIDEO_RENDER_GRACE — %d min eta", _mins)
         return _reply
 
+    # ── Thoth — the sacred-text library ───────────────────────────────────────
+    # Placed AFTER the video grace on purpose: a render evicts Ollama and this
+    # lane needs it. Reader commands first, because they are commands; then
+    # scripture questions, which are FORCE-ROUTED server-side the way Metis
+    # forces a search. That is the whole point of wiring it in — a tool she MAY
+    # call is a citation floor she may skip, and an unfloored answer about
+    # scripture is exactly what this module exists to prevent.
+    _thoth_reading = thoth_svc.is_reading(tts)
+    if thoth_svc.intent.is_stop_reading(user_msg, _thoth_reading):
+        _reply = await asyncio.to_thread(thoth_svc.stop_reading, tts)
+        session.add("user", user_msg); session.add("assistant", _reply)
+        log.info("[thoth] reading stopped by chat")
+        return _reply
+    if not _thoth_reading and thoth_svc.intent.is_resume_reading(user_msg):
+        _reply = await asyncio.to_thread(thoth_svc.resume_reading, tts)
+        session.add("user", user_msg); session.add("assistant", _reply)
+        log.info("[thoth] reading resumed")
+        return _reply
+    if thoth_svc.intent.is_read_intent(user_msg):
+        _reply = await asyncio.to_thread(thoth_svc.start_reading, user_msg, tts)
+        session.add("user", user_msg); session.add("assistant", _reply)
+        log.info("[thoth] read request: %s", user_msg[:60])
+        return _reply
+    if thoth_svc.intent.is_scripture_intent(user_msg, thoth_svc.work_names()):
+        log.info("[thoth] scripture-intent → forced retrieval under the floor")
+        _reply = await asyncio.to_thread(thoth_svc.answer, user_msg,
+                                         body.get("session_id", ""))
+        session.add("user", user_msg); session.add("assistant", _reply)
+        return _reply
+
     # ── Triage gate — clarification guard, general chat path, PRE-inference ────
     # A turn a module DETERMINISTICALLY owns skips the clarifier. Triage was
     # holding "what singers can you use" and "is my song ready" to ask which
@@ -3474,6 +3505,33 @@ async def egress_set(body: dict):
 # ── Camera control (pan/tilt/zoom) — master switch, same card pattern ─────────
 # INVARIANT: default OFF. OFF means no ioctl reaches the camera AND the
 # pan/tilt/zoom tools are absent from what Phoebe is offered (tools_for_turn).
+# ── Thoth — the sacred-text library ──────────────────────────────────────────
+# Debate mode is a card like egress and the camera: default OFF, and the switch
+# is the only way it comes on. The citation floor has no switch and never will.
+@app.get("/thoth")
+async def thoth_get():
+    return await asyncio.to_thread(thoth_svc.status, tts)
+
+@app.post("/thoth/debate")
+async def thoth_debate_set(body: dict):
+    from thoth import debate as _debate
+    _debate.set_enabled(bool(body.get("debate")))
+    return {"ok": True, **await asyncio.to_thread(thoth_svc.status, tts)}
+
+@app.post("/thoth/read")
+async def thoth_read(body: dict):
+    said = await asyncio.to_thread(
+        thoth_svc.start_reading, str(body.get("reference", "")), tts)
+    return {"ok": True, "said": said,
+            **await asyncio.to_thread(thoth_svc.status, tts)}
+
+@app.post("/thoth/stop")
+async def thoth_stop():
+    said = await asyncio.to_thread(thoth_svc.stop_reading, tts)
+    return {"ok": True, "said": said,
+            **await asyncio.to_thread(thoth_svc.status, tts)}
+
+
 @app.get("/camera")
 async def camera_get():
     return await asyncio.to_thread(camera_module.status)

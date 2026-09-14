@@ -9,10 +9,18 @@ Run:  .venv/bin/python -m pytest tests/test_memory_spine.py tests/test_recall_qu
 """
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 import pytest
+
+# Thoth's store must be a scratch one for the whole session. server.py's chat
+# path consults the library on every turn, so an un-redirected suite would open
+# — and sync metadata into — the real ~/ph3b3_thoth/thoth.db. Same rule this
+# file already follows for mnemosyne.db: tests touch nothing that is real.
+os.environ.setdefault("PH3B3_THOTH_DATA",
+                      str(Path(tempfile.gettempdir()) / "ph3b3-thoth-test"))
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "agent"))
