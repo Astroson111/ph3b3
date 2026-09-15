@@ -65,6 +65,9 @@ MARK_TEXT = DEFAULT_MARK_TEXT          # kept: the default, and what tests pin
 # fraction of the image and a long string would otherwise run off the edge; see
 # apply_visible, which shrinks to fit rather than letting that happen.
 MARK_MAX_CHARS = 48
+# The roster is capped. A list that only grows is a list nobody prunes, and the
+# picker stops being useful somewhere around a dozen entries.
+MARK_ROSTER_MAX = 12
 _MARK_MAX_WIDTH_FRAC = 0.42            # of image width, before the font shrinks
 
 # One clean sans, held. DejaVu ships with the distro and is not going anywhere;
@@ -173,15 +176,67 @@ def mark_text() -> str:
         return DEFAULT_MARK_TEXT
 
 
-def set_mark_text(text: str) -> dict:
+def marks() -> list[str]:
+    """Every saved mark, active first, the default always present.
+
+    The default is in the roster unconditionally and cannot be removed: it is
+    the fallback the whole module returns to on a bad setting, so a picker that
+    could delete it would offer a state nothing else can represent.
+    """
+    saved = [m for m in (_settings().get("marks") or []) if isinstance(m, str)]
+    out, seen = [], set()
+    for m in [mark_text()] + saved + [DEFAULT_MARK_TEXT]:
+        try:
+            m = clean_mark(m)
+        except ValueError:
+            continue
+        if m.casefold() not in seen:
+            seen.add(m.casefold())
+            out.append(m)
+    return out[:MARK_ROSTER_MAX]
+
+
+def _write(cur: dict) -> None:
     import json
-    t = clean_mark(text)
     SETTING_PATH.parent.mkdir(parents=True, exist_ok=True)
-    cur = _settings()
-    cur["mark_text"] = t
     SETTING_PATH.write_text(json.dumps(cur))
-    log.info("watermark mark set (%d chars)", len(t))   # the TEXT is not logged
-    return {"mark_text": t}
+
+
+def set_mark_text(text: str) -> dict:
+    """Make `text` the active mark AND remember it in the roster.
+
+    Saving and adding are one action on purpose: a Save that set the mark
+    without listing it would make the roster something you had to curate
+    separately, and nobody would.
+    """
+    t = clean_mark(text)
+    cur = _settings()
+    roster = [m for m in (cur.get("marks") or [])
+              if isinstance(m, str) and m.casefold() != t.casefold()]
+    cur["mark_text"] = t
+    cur["marks"] = ([t] + roster)[:MARK_ROSTER_MAX]
+    _write(cur)
+    log.info("watermark mark set (%d chars), roster %d",   # the TEXT is not logged
+             len(t), len(cur["marks"]))
+    return {"mark_text": t, "marks": marks()}
+
+
+def remove_mark(text: str) -> dict:
+    """Drop a mark from the roster. The default is never removable.
+
+    Removing the ACTIVE mark falls back to the default rather than leaving the
+    setting pointing at something no longer offered.
+    """
+    t = clean_mark(text)
+    if t.casefold() == DEFAULT_MARK_TEXT.casefold():
+        raise ValueError(f"{DEFAULT_MARK_TEXT} is the fallback and stays in the list")
+    cur = _settings()
+    cur["marks"] = [m for m in (cur.get("marks") or [])
+                    if isinstance(m, str) and m.casefold() != t.casefold()]
+    if (cur.get("mark_text") or "").casefold() == t.casefold():
+        cur["mark_text"] = DEFAULT_MARK_TEXT
+    _write(cur)
+    return {"mark_text": mark_text(), "marks": marks()}
 
 
 def enabled() -> bool:
@@ -193,11 +248,9 @@ def enabled() -> bool:
 
 
 def set_enabled(on: bool) -> dict:
-    import json
-    SETTING_PATH.parent.mkdir(parents=True, exist_ok=True)
-    cur = _settings()                      # keep the mark; only the switch moves
+    cur = _settings()                      # keep the mark and roster; only the switch moves
     cur["watermark_enabled"] = bool(on)
-    SETTING_PATH.write_text(json.dumps(cur))
+    _write(cur)
     log.info("watermark %s", "ENABLED" if on else "DISABLED")
     return {"watermark_enabled": bool(on)}
 

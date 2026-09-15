@@ -1730,8 +1730,10 @@
           <option value="on">On — signed Astroson111</option>
           <option value="off">Off — unmarked</option>
         </select>
+        <select id="wmMarkSel" class="morph-eng-sel" title="Saved marks — pick the one to stamp"></select>
+        <button type="button" id="wmDelBtn" class="wg-toggle" title="Remove the selected mark">&#10005;</button>
         <input id="wmText" class="morph-eng-sel" type="text" maxlength="48"
-               placeholder="Astroson111" title="The signature stamped on new renders"
+               placeholder="Add a mark…" title="Type a new mark and press Save"
                autocomplete="off" spellcheck="false" style="min-width:12rem">
         <button type="button" id="wmSaveBtn" class="wg-toggle" disabled>Save</button>
         <span id="wmHint" class="morph-qual-hint"></span>
@@ -4646,12 +4648,25 @@ async function wmRefresh() {
     const sel  = document.getElementById('wmSel');
     const hint = document.getElementById('wmHint');
     if (!sel) return;
-    const box = document.getElementById('wmText');
-    const btn = document.getElementById('wmSaveBtn');
+    const box  = document.getElementById('wmText');
+    const btn  = document.getElementById('wmSaveBtn');
+    const pick = document.getElementById('wmMarkSel');
+    const del  = document.getElementById('wmDelBtn');
     sel.value = d.watermark_enabled ? 'on' : 'off';
-    _wmSaved = d.mark || '';
-    if (box && document.activeElement !== box) box.value = _wmSaved;
-    if (box) box.disabled = !d.watermark_enabled;
+    _wmSaved  = d.mark || '';
+    _wmDefault = d.mark_default || 'Astroson111';
+    if (pick) {
+      pick.innerHTML = '';
+      (d.marks || []).forEach(m => {
+        const o = document.createElement('option');
+        o.value = m; o.textContent = m; if (m === _wmSaved) o.selected = true;
+        pick.appendChild(o);
+      });
+      pick.disabled = !d.watermark_enabled;
+    }
+    // The default is the fallback the module returns to, so it is never deletable.
+    if (del) del.disabled = !d.watermark_enabled || _wmSaved === _wmDefault;
+    if (box) { box.value = ''; box.disabled = !d.watermark_enabled; }
     if (btn) btn.disabled = true;
     hint.textContent = d.watermark_enabled
       ? 'visible mark + hidden timestamp'
@@ -4676,6 +4691,7 @@ document.getElementById('wmSel')?.addEventListener('change', wmSet);
 // enabled only when there is something to confirm — so its state doubles as the
 // answer to "did that take?".
 let _wmSaved = '';
+let _wmDefault = 'Astroson111';
 
 function wmDirty() {
   const box  = document.getElementById('wmText');
@@ -4683,7 +4699,7 @@ function wmDirty() {
   const hint = document.getElementById('wmHint');
   if (!box || !btn) return;
   const cur = (box.value || '').trim();
-  const dirty = cur !== _wmSaved && cur.length > 0;
+  const dirty = cur.length > 0;          // the box is for ADDING now, not editing
   btn.disabled = !dirty;
   if (dirty) hint.textContent = 'unsaved — press Save';
 }
@@ -4709,10 +4725,38 @@ async function wmSaveText() {
   }
   box.disabled = false;
   await wmRefresh();
-  document.getElementById('wmHint').textContent = 'saved — new renders use it';
+  document.getElementById('wmHint').textContent = 'saved — added to the list';
 }
 
 document.getElementById('wmSaveBtn')?.addEventListener('click', wmSaveText);
+
+// Picking a saved mark makes it active immediately — it is already a mark this
+// machine has used, so there is nothing to confirm.
+async function wmPick() {
+  const pick = document.getElementById('wmMarkSel');
+  pick.disabled = true;
+  try {
+    await fetch('/watermark', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({mark: pick.value})});
+  } catch(e) {}
+  await wmRefresh();
+  document.getElementById('wmHint').textContent = 'active mark';
+}
+async function wmDelete() {
+  const pick = document.getElementById('wmMarkSel');
+  const hint = document.getElementById('wmHint');
+  const gone = pick.value;
+  if (gone === _wmDefault) return;
+  try {
+    const r = await fetch('/watermark', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({remove: gone})});
+    if (!r.ok) { const d = await r.json().catch(()=>({})); hint.textContent = d.detail || 'could not remove that'; return; }
+  } catch(e) { hint.textContent = 'could not reach the server'; return; }
+  await wmRefresh();
+  hint.textContent = 'removed';
+}
+document.getElementById('wmMarkSel')?.addEventListener('change', wmPick);
+document.getElementById('wmDelBtn')?.addEventListener('click', wmDelete);
 document.getElementById('wmText')?.addEventListener('input', wmDirty);
 document.getElementById('wmText')?.addEventListener('keydown',
   e => { if (e.key === 'Enter') { e.preventDefault(); wmSaveText(); } });

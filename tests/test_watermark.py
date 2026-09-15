@@ -333,3 +333,73 @@ def test_the_mark_text_is_never_written_to_a_log():
         probe = line.lower().replace("watermark", "")
         if "mark" in probe:
             assert "len(" in line or "%d" in line, f"may log the mark itself: {line.strip()}"
+
+
+# ── the roster ───────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def fresh(monkeypatch, tmp_path):
+    monkeypatch.setattr(wm, "SETTING_PATH", tmp_path / "watermark.json")
+    return tmp_path
+
+
+def test_the_roster_always_holds_the_default(fresh):
+    assert wm.marks() == ["Astroson111"]
+
+
+def test_saving_a_mark_adds_it_and_makes_it_active(fresh):
+    wm.set_mark_text("Nyx Studio")
+    assert wm.mark_text() == "Nyx Studio"
+    assert wm.marks()[0] == "Nyx Studio"
+    assert "Astroson111" in wm.marks()
+
+
+def test_saving_the_same_mark_twice_does_not_duplicate_it(fresh):
+    wm.set_mark_text("Nyx Studio")
+    wm.set_mark_text("Commission A")
+    wm.set_mark_text("Nyx Studio")
+    assert [m.casefold() for m in wm.marks()].count("nyx studio") == 1
+
+
+def test_a_mark_can_be_removed(fresh):
+    wm.set_mark_text("Nyx Studio")
+    wm.set_mark_text("Commission A")
+    wm.remove_mark("Nyx Studio")
+    assert "Nyx Studio" not in wm.marks()
+    assert wm.mark_text() == "Commission A", "removing an inactive mark moved the active one"
+
+
+def test_removing_the_active_mark_falls_back_to_the_default(fresh):
+    """The setting must never point at something the picker no longer offers."""
+    wm.set_mark_text("Nyx Studio")
+    wm.remove_mark("Nyx Studio")
+    assert wm.mark_text() == "Astroson111"
+    assert wm.marks() == ["Astroson111"]
+
+
+def test_the_default_cannot_be_removed(fresh):
+    """It is the fallback the whole module returns to on a bad setting — a list
+    that could delete it would offer a state nothing else can represent."""
+    with pytest.raises(ValueError, match="fallback"):
+        wm.remove_mark("Astroson111")
+    assert "Astroson111" in wm.marks()
+
+
+def test_the_roster_is_capped(fresh):
+    for i in range(wm.MARK_ROSTER_MAX + 6):
+        wm.set_mark_text(f"Mark {i}")
+    assert len(wm.marks()) <= wm.MARK_ROSTER_MAX
+
+
+def test_the_switch_survives_roster_edits(fresh):
+    wm.set_enabled(False)
+    wm.set_mark_text("Nyx Studio")
+    wm.remove_mark("Nyx Studio")
+    assert wm.enabled() is False, "a roster edit flipped the watermark back on"
+
+
+def test_junk_in_the_roster_file_is_ignored_not_crashed_on(fresh):
+    import json
+    (fresh / "watermark.json").write_text(json.dumps(
+        {"mark_text": "Nyx Studio", "marks": ["Nyx Studio", 42, None, "", "Good One"]}))
+    assert wm.marks() == ["Nyx Studio", "Good One", "Astroson111"]
