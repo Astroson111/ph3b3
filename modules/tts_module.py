@@ -85,6 +85,28 @@ def _safe_sentence_silence(sec: float, rate: int = PIPER_RATE) -> str:
     return f"{target:.6f}"               # not reachable in practice; never raise
 
 
+def _trim_lead_s16(pcm: bytes, thr: int = 350, keep_ms: int = 40,
+                   rate: int = PIPER_RATE) -> bytes:
+    """Drop Piper's ~100 ms of leading silence from a raw s16 chunk.
+
+    Only the LEAD. The tail is left alone because when a caller asked for
+    --sentence-silence the trailing pad is the pause they asked for, and eating
+    it would quietly flatten the pacing of a story into the pacing of a reply.
+    """
+    try:
+        a = array.array("h")
+        a.frombytes(pcm)
+        i, n = 0, len(a)
+        while i < n and abs(a[i]) < thr:
+            i += 1
+        if i >= n:
+            return pcm                      # all quiet: leave it, it may be a beat
+        i = max(0, i - int(rate * keep_ms / 1000))
+        return a[i:].tobytes()
+    except Exception:
+        return pcm
+
+
 def _even(pcm: bytes) -> bytes:
     """Drop a trailing odd byte from raw s16 PCM.
 
@@ -286,8 +308,22 @@ def _current_text_only() -> bool:
 
 
 class TTSModule:
+    # Above this, one Piper job is a gamble on voice speed — see _synth_long_b64.
+    #
+    # 1200 is measured, not guessed. Every chunk costs a Piper start and a model
+    # load, so smaller pieces are safer per job and slower overall: on the 5,367
+    # character story, 700 chars gave 8 chunks and 16.9 s, 1200 gave 5 chunks and
+    # 13.6 s, 1800 gave 4 chunks and 13.8 s — past 1200 the startup saving is
+    # gone and only the safety margin shrinks. At 1200 the worst single job on
+    # the slowest installed voice (Cori, 6.4 ms/char) is about 7.6 s against the
+    # 30 s cap: a four-fold margin, which is the point of the number.
+    _SYNTH_MAX_CHARS = 1200
+
     def __init__(self):
         self._lock      = threading.Lock()
+        # Why the last synthesis produced no audio, for a caller that wants to
+        # say so rather than serve an empty audio field in silence.
+        self.last_error = ""
         self._available = Path(VOICE_MODEL).exists()
         if self._available:
             log.info(f"Piper TTS ready: {Path(VOICE_MODEL).stem}")
@@ -527,6 +563,56 @@ class TTSModule:
         """Play one unit of raw PCM on the local speaker."""
         return self._play_pcm(pcm)
 
+    def _synth_long_b64(self, tts_text: str, model: str,
+                        length_scale: float | None,
+                        sentence_silence: float | None) -> str | None:
+        """Synthesise a long reply as sentence-sized jobs and join the audio.
+
+        Each piece gets the full per-job budget, so the wall-clock a reply needs
+        no longer scales with its length — which is what made a six-minute story
+        a coin toss on voice speed. Returns None only if NOTHING rendered; a
+        reply that lost one chunk still comes back, with the loss recorded in
+        last_error rather than presented as a clean read.
+        """
+        chunks = split_for_tts(tts_text, max_chars=self._SYNTH_MAX_CHARS)
+        if not chunks:
+            return None
+        pieces: list[bytes] = []
+        failed = 0
+        with self._lock:
+            for i, ch in enumerate(chunks):
+                pcm = self._piper_raw(ch, model, length_scale, sentence_silence)
+                if not pcm:
+                    failed += 1
+                    log.error("[TTS] long-form chunk %d/%d produced no audio",
+                              i + 1, len(chunks))
+                    continue
+                # Trim only the LEAD, and only at a seam: Piper pads both ends of
+                # every utterance, and without this each join adds ~200 ms of
+                # nothing. The tail is left because with --sentence-silence it is
+                # the pause the caller asked for.
+                pieces.append(_trim_lead_s16(pcm) if pieces else pcm)
+        if not pieces:
+            self.last_error = f"all {len(chunks)} chunks failed to synthesise"
+            log.error("[TTS] long-form synthesis produced nothing (%d chunks)",
+                      len(chunks))
+            return None
+        if failed:
+            self.last_error = f"{failed} of {len(chunks)} chunks produced no audio"
+        else:
+            self.last_error = ""
+        raw = _even(b"".join(pieces))
+        pcm = _resample_s16(raw, PIPER_RATE, WIRE_RATE)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(WIRE_RATE)
+            wf.writeframes(pcm)
+        log.info("[TTS] long-form: %d chars -> %d chunks -> %.1fs audio",
+                 len(tts_text), len(chunks), len(raw) / 2 / PIPER_RATE)
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+
     def synthesize_to_b64(self, text: str, voice=None,
                           length_scale: float | None = None,
                           sentence_silence: float | None = None) -> str | None:
@@ -552,6 +638,25 @@ class TTSModule:
             return None
         if unavailable:
             tts_text = unavailable_line(unavailable) + tts_text
+
+        # ── Long-form: synthesise in pieces, not in one doomed job ────────────
+        # A shelved story is ~5,400 characters and six minutes of speech. Handed
+        # to Piper whole under the fixed 30 s cap below, whether it renders at
+        # all depended on how fast the chosen voice happened to be: measured on
+        # Nyx, Alba (medium) took 9.4 s and Cori (high) took 34.2 s for the same
+        # story. Every -high voice was over the cap, so picking a better voice
+        # silently cost you the ability to be read to — and it failed as an
+        # empty audio field with the text still arriving, which is the quietest
+        # possible way to break.
+        #
+        # Chunking here rather than at the call site because this method is the
+        # primitive /chat/stream already feeds one chunk at a time: its pieces
+        # are well under the threshold, take this same single-job path, and are
+        # byte-identical to before.
+        if len(tts_text) > self._SYNTH_MAX_CHARS:
+            return self._synth_long_b64(tts_text, model, length_scale,
+                                        sentence_silence)
+
         with self._lock:
             try:
                 # Same fix as _piper_raw: no shell, text via stdin. See the note there.
@@ -590,6 +695,7 @@ class TTSModule:
                 return base64.b64encode(buf.getvalue()).decode('ascii')
             except Exception as e:
                 log.error(f"TTS synthesize error: {e}")
+                self.last_error = f"{type(e).__name__}: {e}"
                 return None
 
     def soul_line(self):
