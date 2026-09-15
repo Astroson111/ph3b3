@@ -242,15 +242,32 @@ def _resolve_sink() -> str | None:
 # bit-for-bit the old Alba path. A 'native'-script voice (e.g. Mandarin) speaks
 # its own script — never run _strip_for_piper on it, which would delete the Hanzi.
 def _resolve_voice(code=None):
-    """(model_path, script) for `code`, or the current primary voice if None.
-    Falls back to Alba (VOICE_MODEL / latin) on any failure."""
+    """(model_path, script, unavailable) for `code`, or the current primary voice.
+
+    `unavailable` is the NAME of the voice that could not be used, or "" when the
+    requested voice resolved. Falling back to Alba is right; falling back to Alba
+    without saying so is not — a person who picked Cori and hears Alba has been
+    told something false about what they are listening to. The caller announces.
+    """
+    wanted = ""
     try:
+        wanted = _voices.display_name_for(code) if code else _voices.current_display_name()
         v = _voices.resolve_voice(code) if code else _voices.current_voice()
         if v:
-            return v["model_path"], v.get("script", "latin")
+            return v["model_path"], v.get("script", "latin"), ""
     except Exception as e:
         log.warning("[TTS] voice resolve failed (%s) → Alba", e)
-    return VOICE_MODEL, "latin"
+    if wanted and Path(VOICE_MODEL).stem not in str(wanted):
+        log.warning("[TTS] %s unavailable → Alba, announced", wanted)
+        return VOICE_MODEL, "latin", wanted
+    return VOICE_MODEL, "latin", ""
+
+
+def unavailable_line(name: str) -> str:
+    """What she says when the chosen voice will not load. Names the voice — a
+    generic "voice unavailable" leaves the listener guessing which one."""
+    return (f"Quick note: {name} isn't available right now — those voice files are "
+            f"missing or unreadable, so I'm speaking with Alba instead. ")
 
 
 def _prep(text: str, script: str) -> str:
@@ -286,14 +303,16 @@ class TTSModule:
         if voice is None and _current_text_only():   # declared text-only: no speech
             log.info("[TTS] text-only language — synthesis skipped")
             return "Text-only language: no speech."
-        model, script = _resolve_voice(voice)
+        model, script, unavailable = _resolve_voice(voice)
         tts_text = _prep(text, script)
         if not tts_text:
             return "Nothing to say."
+        if unavailable:
+            tts_text = unavailable_line(unavailable) + tts_text
         if blocking:
-            self._speak_now(tts_text, model)
+            self._speak_now(tts_text, model, voice)
         else:
-            t = threading.Thread(target=self._speak_now, args=(tts_text, model), daemon=True)
+            t = threading.Thread(target=self._speak_now, args=(tts_text, model, voice), daemon=True)
             t.start()
         return f"Speaking: {text[:60]}"
 
@@ -381,7 +400,7 @@ class TTSModule:
             log.error(f"[TTS] chunk playback error: {e}")
             return False
 
-    def _speak_now(self, text, model=None):
+    def _speak_now(self, text, model=None, voice=None):
         chunks = split_for_tts(text, max_chars=self._SPEAK_MAX_CHARS)
         if not chunks:
             return
@@ -396,10 +415,29 @@ class TTSModule:
             stop = threading.Event()
 
             def _producer():
+                # A voice whose files are present but unusable yields None for
+                # every chunk, and skipping them all is a reading that plays as
+                # silence. On the first failure from a non-Alba model, fall the
+                # WHOLE stream back to Alba and say so — once, at the front.
+                use_model, announced = model, False
                 for ch in chunks:
                     if stop.is_set():
                         break
-                    pcm = self._piper_raw(ch, model)
+                    pcm = self._piper_raw(ch, use_model)
+                    if not pcm and use_model != VOICE_MODEL and not announced:
+                        announced = True
+                        use_model = VOICE_MODEL
+                        name = (_voices.display_name_for(voice) if voice
+                                else _voices.current_display_name()) or "that voice"
+                        log.warning("[TTS] %s failed mid-stream → Alba, announced", name)
+                        note = self._piper_raw(unavailable_line(name), VOICE_MODEL)
+                        if note:
+                            while not stop.is_set():
+                                try:
+                                    q.put(note, timeout=0.5); break
+                                except queue.Full:
+                                    continue
+                        pcm = self._piper_raw(ch, VOICE_MODEL)
                     if not pcm:
                         continue          # skip a failed chunk, keep the stream alive
                     while not stop.is_set():
@@ -453,7 +491,7 @@ class TTSModule:
         that does not ask this first discovers it as silence, which is how a
         reader lane ends up "reading" a book aloud and producing nothing.
         """
-        _model, script = _resolve_voice(voice)
+        _model, script, _un = _resolve_voice(voice)
         return bool(_prep(text or "", script).strip())
 
     def synth_pcm(self, text: str, voice=None, length_scale: float | None = None,
@@ -468,11 +506,22 @@ class TTSModule:
         """
         if not self._available or not (text or "").strip():
             return None
-        model, script = _resolve_voice(voice)
+        model, script, unavailable = _resolve_voice(voice)
         prepared = _prep(text, script)
         if not prepared:
             return None
-        return self._piper_raw(prepared, model, length_scale, sentence_silence)
+        if unavailable:
+            prepared = unavailable_line(unavailable) + prepared
+        pcm = self._piper_raw(prepared, model, length_scale, sentence_silence)
+        if pcm is None and model != VOICE_MODEL:
+            # Present on disk but unusable — corrupt weights, or a Piper that
+            # cannot load them. Retry on Alba with the announcement rather than
+            # hand the caller None, which every caller renders as dead air.
+            name = _voices.display_name_for(voice) if voice else "that voice"
+            log.warning("[TTS] %s failed to synthesise → Alba, announced", name)
+            pcm = self._piper_raw(unavailable_line(name) + _prep(text, "latin"),
+                                  VOICE_MODEL, length_scale, sentence_silence)
+        return pcm
 
     def play_pcm(self, pcm: bytes) -> bool:
         """Play one unit of raw PCM on the local speaker."""
@@ -497,10 +546,12 @@ class TTSModule:
             return None
         if voice is None and _current_text_only():   # declared text-only: no audio
             return None
-        model, script = _resolve_voice(voice)
+        model, script, unavailable = _resolve_voice(voice)
         tts_text = _prep(text, script)
         if not tts_text:
             return None
+        if unavailable:
+            tts_text = unavailable_line(unavailable) + tts_text
         with self._lock:
             try:
                 # Same fix as _piper_raw: no shell, text via stdin. See the note there.

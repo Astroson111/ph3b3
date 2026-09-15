@@ -43,6 +43,7 @@ mkdir -p "$VOICE_DIR"
 HF="https://huggingface.co/rhasspy/piper-voices/resolve/main"
 declare -A VOICES=(
   [en_GB-alba-medium]="en/en_GB/alba/medium"
+  [en_GB-cori-high]="en/en_GB/cori/high"            # unreviewed candidate (English GB, LibriVox/public domain)
   [es_ES-davefx-medium]="es/es_ES/davefx/medium"
   [fr_FR-siwis-medium]="fr/fr_FR/siwis/medium"
   [de_DE-thorsten-medium]="de/de_DE/thorsten/medium"
@@ -68,6 +69,7 @@ declare -A VOICES=(
 # Registry code → sha256 (onnx, then .onnx.json). Pinned at selection time.
 declare -A SHA_ONNX=(
   [en_GB-alba-medium]=401369c4a81d09fdd86c32c5c864440811dbdcc66466cde2d64f7133a66ad03b
+  [en_GB-cori-high]=470b4dd634c98f8a4850d7626ffc3dfc90774628eeef6605a6dd8f88f30a5903
   [es_ES-davefx-medium]=6658b03b1a6c316ee4c265a9896abc1393353c2d9e1bca7d66c2c442e222a917
   [fr_FR-siwis-medium]=641d1ab097da2b81128c076810edb052b385decc8be3381814802a64a73baf99
   [de_DE-thorsten-medium]=7e64762d8e5118bb578f2eea6207e1a35a8e0c30595010b666f983fc87bb7819
@@ -92,6 +94,7 @@ declare -A SHA_ONNX=(
 )
 declare -A SHA_JSON=(
   [en_US-ryan-high]=c6d3b98f08315cb4bebf0d49d50fc4ff491b503c64b940cd3d5ca28543b48011
+  [en_GB-cori-high]=9e7fb5b5671612c22f3c81cbe46c1ae87b031a4632bcb509e499dad6f1e2adec
   [en_US-lessac-high]=db42b97d9859f257bc1561b8ed980e7fb2398402050a74ddd6cbec931a92412f
   [en_GB-jenny_dioco-medium]=a9a7a93a317c9a3cb6563e37eb057df9ef09c06188a8a4341b0fcb58cba54dd4
   [en_GB-alba-medium]=aa965a2f02ecced632c2694e1fc72bbff6d65f265fab567ca945918c73dd89f4

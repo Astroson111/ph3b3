@@ -77,10 +77,43 @@ def resolve_voice(code: str) -> dict | None:
     if not mp.exists():
         log.warning("voice '%s' model missing: %s", code, mp)
         return None
+    # Piper needs the .onnx.json sidecar as much as the weights, and without it
+    # it raises and writes no audio at all. Checking only the .onnx let a
+    # half-installed voice resolve cleanly and then fail as SILENCE at synth
+    # time, which is the one failure mode this project keeps refusing to ship.
+    if not mp.with_suffix(mp.suffix + ".json").exists():
+        log.warning("voice '%s' config missing: %s.json", code, mp)
+        return None
     out = dict(entry)
     out["code"] = code
     out["model_path"] = str(mp)
     return out
+
+
+def display_name_for(code: str | None) -> str:
+    """The human name of a voice code, even when its model is missing.
+
+    Reads the REGISTRY rather than a resolved voice, because the caller that
+    needs this is the one announcing that the voice would not load — resolving
+    is exactly what just failed.
+    """
+    if not code:
+        return ""
+    e = (load_registry().get("voices") or {}).get(code) or {}
+    return e.get("display_name") or code
+
+
+def current_display_name() -> str:
+    """The SELECTED voice's name, from the registry, without resolving it.
+
+    Deliberately not active_voice_display(), which resolves and therefore reports
+    Alba once the real choice has failed — useless to a caller whose whole job is
+    to say which voice went missing.
+    """
+    try:
+        return display_name_for(get_setting().get("voice"))
+    except Exception:
+        return ""
 
 
 def alba() -> dict:

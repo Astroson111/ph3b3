@@ -248,6 +248,24 @@ voices:
     tier: strong
     sample_text: "Hello! I'm Phoebe."
     status: unreviewed
+  # Cori — added 2026-09-15. Two voices were briefed alongside her and BOTH were
+  # dropped on licence, by Astro's call ("lets just use what is public domain"):
+  #   amy  — MODEL_CARD says "License: See URL" pointing at MycroftAI/mimic3-voices,
+  #          which is CC BY-SA 4.0 at the root and does not contain an amy voice at
+  #          all. Provenance broken, and not public domain either way.
+  #   alan — sourced from mimic3 en_UK/apope, whose own LICENSE reads
+  #          "Copyright 2022 Mycroft AI / All Rights Reserved". Not open at all.
+  # Cori is the one with a real grant: trained from scratch on ~24h of LibriVox
+  # recordings, which the MODEL_CARD states as public domain.
+  en_cori:
+    model: en_GB-cori-high.onnx
+    lang: en
+    display_name: "Cori — English (Great Britain)"
+    script: latin
+    tier: strong
+    sample_text: "Hello! I'm Phoebe."
+    status: unreviewed
+
   en_jenny:
     model: en_GB-jenny_dioco-medium.onnx
     lang: en
