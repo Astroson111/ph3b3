@@ -3513,12 +3513,24 @@ async def egress_set(body: dict):
 # claim rather than a feature.
 @app.get("/watermark")
 async def watermark_get():
-    return {"watermark_enabled": watermark.enabled(), "mark": watermark.MARK_TEXT}
+    return {"watermark_enabled": watermark.enabled(),
+            "mark": watermark.mark_text(),
+            "mark_max_chars": watermark.MARK_MAX_CHARS,
+            "mark_default": watermark.DEFAULT_MARK_TEXT}
 
 @app.post("/watermark")
 async def watermark_set(body: dict):
-    watermark.set_enabled(bool(body.get("watermark_enabled")))
-    return {"ok": True, "watermark_enabled": watermark.enabled()}
+    """The switch and the mark. A rejected mark says why and changes nothing —
+    an empty one is refused rather than quietly producing 'on but invisible'."""
+    if "mark" in body:
+        try:
+            watermark.set_mark_text(str(body.get("mark") or ""))
+        except ValueError as e:
+            raise HTTPException(400, detail=str(e))
+    if "watermark_enabled" in body:
+        watermark.set_enabled(bool(body.get("watermark_enabled")))
+    return {"ok": True, "watermark_enabled": watermark.enabled(),
+            "mark": watermark.mark_text()}
 
 @app.post("/watermark/verify")
 async def watermark_verify(file: UploadFile = File(...)):

@@ -1730,6 +1730,9 @@
           <option value="on">On — signed Astroson111</option>
           <option value="off">Off — unmarked</option>
         </select>
+        <input id="wmText" class="morph-eng-sel" type="text" maxlength="48"
+               placeholder="Astroson111" title="The signature stamped on new renders"
+               autocomplete="off" spellcheck="false" style="min-width:12rem">
         <span id="wmHint" class="morph-qual-hint"></span>
       </div>
       <div id="morphVidWarn" class="morph-vid-warn" style="display:none"></div>
@@ -4642,7 +4645,10 @@ async function wmRefresh() {
     const sel  = document.getElementById('wmSel');
     const hint = document.getElementById('wmHint');
     if (!sel) return;
+    const box = document.getElementById('wmText');
     sel.value = d.watermark_enabled ? 'on' : 'off';
+    if (box && document.activeElement !== box) box.value = d.mark || '';
+    if (box) box.disabled = !d.watermark_enabled;
     hint.textContent = d.watermark_enabled
       ? 'visible mark + hidden timestamp'
       : 'new renders unmarked — existing art unchanged';
@@ -4659,6 +4665,30 @@ async function wmSet() {
   await wmRefresh();
 }
 document.getElementById('wmSel')?.addEventListener('change', wmSet);
+
+// The mark commits on blur or Enter, never per keystroke: a POST per character
+// would write the settings file a dozen times for one edit.
+async function wmSetText() {
+  const box  = document.getElementById('wmText');
+  const hint = document.getElementById('wmHint');
+  const want = (box.value || '').trim();
+  if (!want) { await wmRefresh(); return; }      // empty reverts, never blanks
+  box.disabled = true;
+  try {
+    const r = await fetch('/watermark', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({mark: want})});
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      hint.textContent = d.detail || 'that mark was refused';
+      box.disabled = false; return;
+    }
+  } catch(e) {}
+  box.disabled = false;
+  await wmRefresh();
+}
+document.getElementById('wmText')?.addEventListener('blur', wmSetText);
+document.getElementById('wmText')?.addEventListener('keydown',
+  e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
 
 // ── Camera control (pan/tilt/zoom) toggle — same pattern as Metis egress ──────
 async function cameraRefresh() {

@@ -256,3 +256,80 @@ def test_the_stamp_records_no_prompt_hash_anywhere_but_the_pixels():
             low = line.lower()
             if ("log." in low or "insert into" in low) and "sha" in low:
                 raise AssertionError(f"{name} may be recording a hash: {line.strip()}")
+
+
+# ── the mark is editable ─────────────────────────────────────────────────────
+
+def test_the_mark_defaults_to_astroson111(monkeypatch, tmp_path):
+    monkeypatch.setattr(wm, "SETTING_PATH", tmp_path / "watermark.json")
+    assert wm.mark_text() == "Astroson111"
+
+
+def test_an_edited_mark_round_trips_and_is_what_gets_stamped(monkeypatch, tmp_path):
+    monkeypatch.setattr(wm, "SETTING_PATH", tmp_path / "watermark.json")
+    wm.set_mark_text("Nyx Studio")
+    assert wm.mark_text() == "Nyx Studio"
+    a = np.asarray(wm.apply_visible(scene()), float)
+    b = np.asarray(wm.apply_visible(scene(), "Astroson111"), float)
+    assert np.abs(a - b).sum() > 0, "the edited mark was not the one drawn"
+
+
+def test_editing_the_mark_does_not_flip_the_switch(monkeypatch, tmp_path):
+    """Two settings in one file: writing either must not clobber the other."""
+    monkeypatch.setattr(wm, "SETTING_PATH", tmp_path / "watermark.json")
+    wm.set_enabled(False)
+    wm.set_mark_text("Nyx Studio")
+    assert wm.enabled() is False and wm.mark_text() == "Nyx Studio"
+    wm.set_enabled(True)
+    assert wm.mark_text() == "Nyx Studio", "the switch clobbered the mark"
+
+
+def test_an_empty_mark_is_refused_rather_than_stamping_nothing(monkeypatch, tmp_path):
+    """"On but invisible" is the half-state this whole feature avoids."""
+    monkeypatch.setattr(wm, "SETTING_PATH", tmp_path / "watermark.json")
+    for bad in ("", "   ", "\n\t"):
+        with pytest.raises(ValueError, match="needs some text"):
+            wm.set_mark_text(bad)
+    assert wm.mark_text() == "Astroson111"
+
+
+def test_an_over_long_mark_is_refused_with_the_limit():
+    with pytest.raises(ValueError, match="48 characters"):
+        wm.clean_mark("x" * 60)
+
+
+def test_control_characters_are_stripped_not_rejected():
+    assert wm.clean_mark("  Nyx\tStudio\n ") == "NyxStudio"
+
+
+def test_a_long_mark_shrinks_to_fit_instead_of_running_off_the_edge():
+    """Fraction-scaled text plus a user-supplied string is how a subtle mark
+    becomes a bar across the frame."""
+    long_mark = "Astroson111 — do not repost without credit"
+    for w, h in ((768, 768), (1536, 1536)):
+        base = Image.new("RGB", (w, h), (90, 110, 140))
+        out = wm.apply_visible(base, long_mark)
+        d = np.abs(np.asarray(out, float) - np.asarray(base, float)).sum(axis=2)
+        _ys, xs = np.nonzero(d > 8)
+        assert (xs.max() - xs.min()) / w <= 0.45, f"mark overran at {w}x{h}"
+
+
+def test_a_corrupt_settings_file_falls_back_to_the_default_mark(monkeypatch, tmp_path):
+    p = tmp_path / "watermark.json"
+    p.write_text("{ not json")
+    monkeypatch.setattr(wm, "SETTING_PATH", p)
+    assert wm.mark_text() == "Astroson111"
+
+
+def test_the_mark_text_is_never_written_to_a_log():
+    """Same no-tracking discipline as the payload: the module logs the length,
+    not the string."""
+    src = (REPO / "modules" / "watermark.py").read_text(encoding="utf-8")
+    for line in src.splitlines():
+        if "log." not in line:
+            continue
+        # "watermark" contains "mark" — strip the module's own name before
+        # asking whether a line is about the mark TEXT.
+        probe = line.lower().replace("watermark", "")
+        if "mark" in probe:
+            assert "len(" in line or "%d" in line, f"may log the mark itself: {line.strip()}"

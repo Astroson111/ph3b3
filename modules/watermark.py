@@ -57,7 +57,15 @@ from scipy.fftpack import dct, idct
 
 log = logging.getLogger("ph3b3.watermark")
 
-MARK_TEXT = "Astroson111"
+DEFAULT_MARK_TEXT = "Astroson111"
+MARK_TEXT = DEFAULT_MARK_TEXT          # kept: the default, and what tests pin
+
+# An edited mark is still ONE mark for all new renders — not a per-image caption,
+# which stays out of scope. Capped because the visible layer is sized as a
+# fraction of the image and a long string would otherwise run off the edge; see
+# apply_visible, which shrinks to fit rather than letting that happen.
+MARK_MAX_CHARS = 48
+_MARK_MAX_WIDTH_FRAC = 0.42            # of image width, before the font shrinks
 
 # One clean sans, held. DejaVu ships with the distro and is not going anywhere;
 # Noto Sans is the fallback if a slimmer image ever drops DejaVu. No font is
@@ -129,21 +137,67 @@ except ImportError:                               # tests / standalone
 SETTING_PATH = Path(PH3B3_DATA) / "watermark.json"
 
 
+def _settings() -> dict:
+    try:
+        import json
+        d = json.loads(SETTING_PATH.read_text())
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def clean_mark(text: str) -> str:
+    """Normalise a user-supplied mark, or raise if it is not usable.
+
+    Control characters and newlines are stripped rather than rejected — a
+    pasted string with a stray newline is a typo, not a decision. Empty is
+    refused outright: an empty mark would silently produce a render with no
+    visible layer while the switch still said On, and "on but invisible" is the
+    kind of half-state this feature exists to avoid. Turning it off is the
+    supported way to have no mark.
+    """
+    t = "".join(ch for ch in (text or "") if ch.isprintable()).strip()
+    if not t:
+        raise ValueError("a mark needs some text — switch the watermark off "
+                         "instead if you want renders unmarked")
+    if len(t) > MARK_MAX_CHARS:
+        raise ValueError(f"a mark can be at most {MARK_MAX_CHARS} characters")
+    return t
+
+
+def mark_text() -> str:
+    """The signature to stamp. Falls back to the default on anything unreadable."""
+    try:
+        return clean_mark(_settings().get("mark_text") or DEFAULT_MARK_TEXT)
+    except Exception:
+        return DEFAULT_MARK_TEXT
+
+
+def set_mark_text(text: str) -> dict:
+    import json
+    t = clean_mark(text)
+    SETTING_PATH.parent.mkdir(parents=True, exist_ok=True)
+    cur = _settings()
+    cur["mark_text"] = t
+    SETTING_PATH.write_text(json.dumps(cur))
+    log.info("watermark mark set (%d chars)", len(t))   # the TEXT is not logged
+    return {"mark_text": t}
+
+
 def enabled() -> bool:
     """True unless the file says otherwise. Fails OPEN — a corrupt settings file
     means a marked image, which is the safe direction here: the cost of a stamp
     nobody wanted is cosmetic, the cost of a missing one is unmarked work."""
-    try:
-        import json
-        return bool(json.loads(SETTING_PATH.read_text()).get("watermark_enabled", True))
-    except Exception:
-        return True
+    got = _settings().get("watermark_enabled", True)
+    return True if got is None else bool(got)
 
 
 def set_enabled(on: bool) -> dict:
     import json
     SETTING_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SETTING_PATH.write_text(json.dumps({"watermark_enabled": bool(on)}))
+    cur = _settings()                      # keep the mark; only the switch moves
+    cur["watermark_enabled"] = bool(on)
+    SETTING_PATH.write_text(json.dumps(cur))
     log.info("watermark %s", "ENABLED" if on else "DISABLED")
     return {"watermark_enabled": bool(on)}
 
@@ -158,23 +212,32 @@ def _font(px: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
-def apply_visible(img: Image.Image, text: str = MARK_TEXT) -> Image.Image:
+def apply_visible(img: Image.Image, text: str | None = None) -> Image.Image:
     """Corner signature, scaled to the image, composited at low opacity.
 
     Bottom-right: the corner a crop is least likely to take first, and the one
     that collides least with a subject. Drawn on its own RGBA layer and alpha
     composited so the mark rides on top of the pixels rather than replacing them.
     """
+    text = text if text is not None else mark_text()
     base = img.convert("RGBA")
     w, h = base.size
     short = min(w, h)
     px = max(_MARK_MIN_PX, int(round(short * _MARK_HEIGHT_FRAC)))
     margin = max(4, int(round(short * _MARK_MARGIN_FRAC)))
-    font = _font(px)
 
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
+    # An edited mark can be far longer than the default, so the size is fitted
+    # rather than assumed: shrink until it sits inside a fraction of the width.
+    # Without this, "Astroson111 — do not repost without credit" runs off a 768
+    # render and the mark that was meant to be subtle becomes a bar.
+    font = _font(px)
     l, t, r, b = d.textbbox((0, 0), text, font=font)
+    while (r - l) > w * _MARK_MAX_WIDTH_FRAC and px > _MARK_MIN_PX:
+        px = max(_MARK_MIN_PX, int(px * 0.9))
+        font = _font(px)
+        l, t, r, b = d.textbbox((0, 0), text, font=font)
     tw, th = r - l, b - t
     x, y = w - tw - margin - l, h - th - margin - t
 
