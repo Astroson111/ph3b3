@@ -36,6 +36,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 from content_profiles import ACTIVE_PROFILE_NAME, load_profile
+import watermark
 from paths import MORPHEUS_DATA
 
 log = logging.getLogger("ph3b3.morpheus")
@@ -1987,8 +1988,44 @@ async def comfy_wait(http: httpx.AsyncClient, prompt_id: str,
     raise RuntimeError(f"ComfyUI generation timed out after {timeout_s}s")
 
 
+def _composed_prompt(params: dict) -> str:
+    """What actually conditioned the render — positive and the resolved negative.
+
+    Hashed, never stored. This is read AFTER build_workflow has written the
+    resolved negative back into params, so it is the real conditioning rather
+    than what the caller asked for.
+    """
+    return f"{params.get('positive', '')}\n--neg--\n{params.get('negative', '')}"
+
+
+def maybe_stamp(raw: bytes, job_id: str, prompt: str) -> bytes:
+    """The watermark decision, as one testable function.
+
+    Returns the bytes to write. On ANY failure it returns the ORIGINAL bytes
+    untouched and says so loudly: an unmarked image is an honest artifact, a
+    half-marked one is a corrupt file, and the render is never the thing that
+    pays for a watermark bug.
+
+    Nothing here records the prompt or its hash. The hash goes into the pixels
+    and nowhere else — Astro's standing no-tracking rule — so this function logs
+    the job id and the outcome and never the payload.
+    """
+    if not watermark.enabled():
+        jobs.get(job_id, {}).update(watermark="off")
+        return raw
+    try:
+        marked = watermark.stamp_png(raw, prompt)
+    except Exception as exc:
+        log.error("[watermark] STAMP FAILED on job %s (%s) — saving the image "
+                  "UNMARKED rather than half-marked", job_id[:8], exc)
+        jobs.get(job_id, {}).update(watermark="failed", watermark_error=str(exc))
+        return raw
+    jobs.get(job_id, {}).update(watermark="stamped")
+    return marked
+
+
 async def fetch_and_save(http: httpx.AsyncClient, outputs: dict,
-                         job_id: str) -> Path:
+                         job_id: str, prompt: str = "") -> Path:
     img = next(
         i for node in outputs.values()
         if "images" in node
@@ -2049,6 +2086,17 @@ async def fetch_and_save(http: httpx.AsyncClient, outputs: dict,
         # miscalibrated check looks like, and that pattern is only legible if the
         # near-misses sit in the same file as the hits.
         await asyncio.to_thread(log_breach, job_id, False)
+
+    # ── Watermark, between the last gate and the only write ──────────────────
+    # Here and nowhere else. After the output check, so a flagged render is
+    # destroyed before anything is stamped onto it; before the write, so a file
+    # never exists in a half-marked state. The GPU is already free at this point
+    # (comfy_free ran above, ahead of the check) so this CPU work holds no card.
+    #
+    # A stamp failure must never cost the render. On any error the ORIGINAL bytes
+    # are written, unmarked and whole, and the failure is stated loudly — a
+    # half-marked file would be worse than an honest unmarked one.
+    raw = await asyncio.to_thread(maybe_stamp, raw, job_id, prompt)
 
     path = IMAGE_DIR / f"{job_id}.png"
     path.write_bytes(raw)
@@ -2519,7 +2567,8 @@ async def run_generation(job_id: str, params: dict) -> None:
                 outputs = await comfy_wait(http, prompt_id)
 
                 jobs[job_id]["state"] = "saving"
-                path = await fetch_and_save(http, outputs, job_id)
+                path = await fetch_and_save(http, outputs, job_id,
+                                            _composed_prompt(params))
                 await asyncio.to_thread(_db_insert, job_id, params, path)
                 jobs[job_id].update(
                     state="done",
@@ -2647,7 +2696,8 @@ async def run_edit(job_id: str, params: dict) -> None:
                 outputs = await comfy_wait(http, prompt_id)
 
                 jobs[job_id]["state"] = "saving"
-                path = await fetch_and_save(http, outputs, job_id)
+                path = await fetch_and_save(http, outputs, job_id,
+                                            _composed_prompt(params))
                 await asyncio.to_thread(_db_insert, job_id, params, path)
                 jobs[job_id].update(
                     state="done",

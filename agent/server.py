@@ -149,6 +149,7 @@ from paths import PH3B3_DATA  # [DBG-AUDIO] instrumentation save-dir root
 from anime_module import AnimeModule
 from stories_module import StoriesModule
 from thoth import service as thoth_svc
+import watermark
 import emotions                       # emotional state table (config/emotions.yaml)
 import shelf                          # permanent read-only works (stories/)
 import canon                          # verbatim store for stories SHE wrote
@@ -3505,6 +3506,36 @@ async def egress_set(body: dict):
 # ── Camera control (pan/tilt/zoom) — master switch, same card pattern ─────────
 # INVARIANT: default OFF. OFF means no ioctl reaches the camera AND the
 # pan/tilt/zoom tools are absent from what Phoebe is offered (tools_for_turn).
+# ── Watermark — the two-layer stamp on a Morpheus render ─────────────────────
+# Default ON, unlike egress and the camera: what this guards is work leaving
+# unmarked, not something reaching outward. The verifier is here because without
+# a reader the invisible layer is unverifiable and untestable — it would be a
+# claim rather than a feature.
+@app.get("/watermark")
+async def watermark_get():
+    return {"watermark_enabled": watermark.enabled(), "mark": watermark.MARK_TEXT}
+
+@app.post("/watermark")
+async def watermark_set(body: dict):
+    watermark.set_enabled(bool(body.get("watermark_enabled")))
+    return {"ok": True, "watermark_enabled": watermark.enabled()}
+
+@app.post("/watermark/verify")
+async def watermark_verify(file: UploadFile = File(...)):
+    """Feed an image back in and be told whether it carries an embed.
+
+    Deep search is on: this is a hand-run tool, and taking ten seconds to answer
+    honestly beats answering "no" in one because the crop moved the block grid.
+    """
+    data = await file.read()
+    if len(data) > 40 * 1024 * 1024:
+        raise HTTPException(413, "image too large to verify")
+    v = await asyncio.to_thread(watermark.verify_bytes, data)
+    return {"present": v.present, "timestamp": v.timestamp,
+            "prompt_sha256": v.prompt_sha256, "confidence": round(v.confidence, 3),
+            "detail": v.detail, "said": v.spoken()}
+
+
 # ── Thoth — the sacred-text library ──────────────────────────────────────────
 # Debate mode is a card like egress and the camera: default OFF, and the switch
 # is the only way it comes on. The citation floor has no switch and never will.

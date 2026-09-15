@@ -1334,6 +1334,17 @@
 
     <div class="card">
       <div class="card-title">
+        <span>Watermark (Morpheus)</span>
+        <span id="wmBadge" class="wg-badge wg-on">On</span>
+      </div>
+      <div class="wg-row">
+        <span id="wmDesc" class="wg-desc">New renders are signed <strong>Astroson111</strong> and carry a hidden timestamp</span>
+        <button class="wg-toggle wg-danger" id="wmToggleBtn">Disable</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
         <span>Web Access (Metis)</span>
         <span id="egBadge" class="wg-badge wg-off">Off</span>
       </div>
@@ -2401,7 +2412,7 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
   document.getElementById('pane' + t.dataset.pane).classList.add('active');
-  if (t.dataset.pane === 'Status') { wgRefresh(); egressRefresh(); cameraRefresh(); langInit(); acctInit(); dgInit(); }
+  if (t.dataset.pane === 'Status') { wgRefresh(); egressRefresh(); wmRefresh(); cameraRefresh(); langInit(); acctInit(); dgInit(); }
   if (t.dataset.pane === 'Amphion') { ampRefreshLibrary(); }
   if (t.dataset.pane === 'Apelles') { apInit(); }
 }));
@@ -3908,7 +3919,7 @@ async function refreshStatus() {
   }
 }
 refreshStatus();
-wgRefresh(); egressRefresh(); cameraRefresh(); acctInit(); dgInit(); qualInit(); emotionInit(); shelfInit();  // WireGuard + Account + Paired-devices + Emotion + Shelf cards live in Status (default pane)
+wgRefresh(); egressRefresh(); wmRefresh(); cameraRefresh(); acctInit(); dgInit(); qualInit(); emotionInit(); shelfInit();  // WireGuard + Account + Paired-devices + Emotion + Shelf cards live in Status (default pane)
 setInterval(refreshStatus, 10_000);
 
 // ── chat + audio ──────────────────────────────────────────────────────────────
@@ -4621,6 +4632,39 @@ async function egressToggle() {
   await egressRefresh();
 }
 document.getElementById('egToggleBtn')?.addEventListener('click', egressToggle);
+
+
+// ── Watermark (Morpheus) toggle — same pattern as Metis egress ────────────────
+// Default ON, which is why the badge starts on: this one guards work leaving
+// unmarked rather than something reaching out. Existing art is never touched.
+async function wmRefresh() {
+  try {
+    const d = await fetch('/watermark').then(r => r.json());
+    const on = d.watermark_enabled;
+    const badge = document.getElementById('wmBadge');
+    const desc  = document.getElementById('wmDesc');
+    const btn   = document.getElementById('wmToggleBtn');
+    badge.className = 'wg-badge ' + (on ? 'wg-on' : 'wg-off');
+    badge.textContent = on ? 'On' : 'Off';
+    desc.innerHTML = on
+      ? 'New renders are signed <strong>' + (d.mark || 'Astroson111') + '</strong> and carry a hidden timestamp'
+      : 'New renders are <strong>unmarked</strong> — existing art is never changed either way';
+    btn.textContent = on ? 'Disable' : 'Enable';
+    btn.className = 'wg-toggle' + (on ? ' wg-danger' : '');
+  } catch {}
+}
+async function wmToggle() {
+  const btn = document.getElementById('wmToggleBtn');
+  const turnOn = btn.textContent === 'Enable';
+  btn.disabled = true; btn.textContent = turnOn ? 'Enabling…' : 'Disabling…';
+  try {
+    await fetch('/watermark', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({watermark_enabled: turnOn})});
+  } catch(e) {}
+  btn.disabled = false;
+  await wmRefresh();
+}
+document.getElementById('wmToggleBtn')?.addEventListener('click', wmToggle);
 
 // ── Camera control (pan/tilt/zoom) toggle — same pattern as Metis egress ──────
 async function cameraRefresh() {
