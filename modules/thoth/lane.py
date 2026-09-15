@@ -57,7 +57,13 @@ from .index import Hit, Index
 
 log = logging.getLogger("ph3b3.thoth.lane")
 
-DEFAULT_K = 8
+# Six, not eight. Every passage in the prompt is another address the model can
+# point at, and this one points at addresses it was told not to write: measured
+# live on ph3b3-chat, k=8 refused every attempt at "what does the bible say
+# about loving your enemies", while k=6 and k=4 answered about half the time.
+# Small sample and it only moves the odds — the refusals are the floor working,
+# not a bug — but there is no reason to hand it more rope than it needs.
+DEFAULT_K = 6
 
 # The neutral prompt layer. Rung 3's debate mode adds its own on top of this;
 # it does not replace these rules, because the citation floor's guarantees
