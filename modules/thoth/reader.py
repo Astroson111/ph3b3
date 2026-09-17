@@ -90,6 +90,8 @@ from pathlib import Path
 
 from tts_chunker import pack_units
 
+from .booknames import normalize as normalize_book
+
 log = logging.getLogger("ph3b3.thoth.reader")
 
 try:
@@ -135,12 +137,33 @@ _EDITION_ALIASES = {
 # well mean it — Astro's brief lists it among the things to disambiguate.
 _ALSO_OFFER = {"john": ("1 John", "2 John", "3 John", "Revelation")}
 
+# Filler a person puts around a reference without meaning anything by it.
+# "the chapter on Luke" parsed as a book called "on Luke" and then got that
+# mangled token quoted back as though it were a title — the failure mode (d)
+# exists to kill.
+_LEAD_FILLER = re.compile(
+    r"^(?:\s*(?:the|a|an|me|us|from|out\s+of|in|of|please)\b\s*)+", re.I)
+_CHAPTER_ON = re.compile(
+    r"^\s*(?:chapter|passage|bit|part|section)\s+(?:on|about|from|in|of)\s+", re.I)
+_BOOK_OF = re.compile(
+    r"^\s*(?:gospel|book|epistle|letter|first\s+letter|writings?)\s+of\s+", re.I)
+_TAIL_FILLER = re.compile(
+    r"\s*\b(?:please|for\s+me|out\s+loud|aloud|to\s+me|thanks?|thank\s+you)\b\s*$", re.I)
+
 _READ_VERB = re.compile(
     r"^\s*(?:please\s+)?(?:can\s+you\s+)?(?:read|recite|say|speak)"
     r"(?:\s+me)?(?:\s+out)?(?:\s+aloud)?(?:\s+from)?\s+", re.I)
 _EDITION_IN = re.compile(r"\s+(?:in|from)\s+the\s+([A-Za-z0-9 ']+?)\s*$", re.I)
 _TRAILING_NUM = re.compile(r"^(.*?)[\s:]*(\d{1,3})\s*$")
 _LEADING_NUM_OF = re.compile(r"^(\d{1,3})\s+of\s+(.+)$", re.I)
+
+# "first John" -> "1 John". People speak ordinals; the corpus stores digits.
+_ORDINAL_WORDS = re.compile(r"^(first|second|third|fourth)\s+", re.I)
+_ORDINALS = {"first": "1", "second": "2", "third": "3", "fourth": "4"}
+
+
+def _ordinal_digit(m) -> str:
+    return _ORDINALS[m.group(1).casefold()] + " "
 _CHAPTER_WORD = re.compile(r"\bchapters?\b", re.I)
 _SURA_WORD = re.compile(r"\b(?:sura|surah)\b", re.I)
 
@@ -213,14 +236,24 @@ def parse(text: str) -> tuple[str, int | None, str | None, bool]:
     if m:
         edition = m.group(1).strip().casefold()
         s = s[:m.start()].strip()
+    # Filler FIRST, and specifically before the bare word "chapter" is deleted.
+    # Order was the whole bug in "the chapter on Luke": _CHAPTER_WORD removed
+    # "chapter", leaving "the on Luke", and by the time the filler pass ran there
+    # was no "chapter on" left to recognise — so "on Luke" survived as a book.
+    # Strip repeatedly: each layer can expose the next.
+    for _ in range(4):
+        before = s
+        s = _TAIL_FILLER.sub("", s)
+        s = _CHAPTER_ON.sub("", s)
+        s = _LEAD_FILLER.sub("", s)
+        if s == before:
+            break
     s = _CHAPTER_WORD.sub(" ", s)
     is_sura = bool(_SURA_WORD.search(s))
     s = _SURA_WORD.sub(" ", s)
-    s = re.sub(r"^(?:the|a)\s+", "", s.strip(), flags=re.I)
     # "the Gospel of John" is a person being explicit, not ambiguous. Naming the
     # genre resolves the John family on its own, so record that it was named.
-    s, named_genre = re.subn(r"^(?:gospel|book|epistle|letter)\s+of\s+", "", s,
-                             flags=re.I)
+    s, named_genre = _BOOK_OF.subn("", s)
     s = re.sub(r"\s+", " ", s).strip(" ,.:;")
     chapter = None
     # "chapter 4 of Psalms" — the number leads and the book follows. Natural to
@@ -255,14 +288,23 @@ def resolve(text: str, corpus, speaker=None) -> Resolution:
                                             "chapter, like 'read John 3'.")
 
     books = _books_of(corpus)
-    folded = {b.casefold(): b for b in books}
+    # Match through the SAME normaliser the corpus was ingested with, so the
+    # three spellings of a numbered book all land: "I Samuel" (Sefaria's),
+    # "Samuel I" (tanach.us's) and "1 Samuel" (eBible's). booknames.py already
+    # centralises that folding for ingest; not reusing it here meant a user
+    # could type the exact spelling one of our own sources uses and be told the
+    # book does not exist. Spelled-out ordinals are folded first — a person says
+    # "first John", not "1 John".
+    phrase = normalize_book(_ORDINAL_WORDS.sub(_ordinal_digit, phrase))
+    folded = {normalize_book(b).casefold(): b for b in books}
     exact = folded.get(phrase.casefold())
 
     # Ambiguity by name: "John" is five books here.
     also = () if genre_named else _ALSO_OFFER.get(phrase.casefold(), ())
     candidates = ([exact] if exact else []) + [b for b in also if b in books]
     if not exact:
-        loose = [b for b in books if phrase.casefold() in b.casefold()]
+        loose = [b for b in books
+                 if phrase.casefold() in normalize_book(b).casefold()]
         candidates = loose or candidates
     candidates = list(dict.fromkeys(c for c in candidates if c))
 
@@ -272,14 +314,20 @@ def resolve(text: str, corpus, speaker=None) -> Resolution:
     # than careful. Only the genuinely ambiguous names (the John family) ask.
     if len(candidates) > 1 and (genre_named or phrase.casefold() not in _ALSO_OFFER):
         near = [b for b in candidates
-                if b.casefold() in (phrase.casefold(), phrase.casefold() + "s")]
+                if normalize_book(b).casefold()
+                in (phrase.casefold(), phrase.casefold() + "s")]
         if len(near) == 1:
             candidates = near
 
     if not candidates:
-        return Resolution(ok=False, refusal=(
-            f"I don't have a book called \"{phrase}\". I can read from the Bible, "
-            f"the Apocrypha, the Tanakh in JPS 1917, or the Qur'an."))
+        # Deliberately does NOT echo the phrase. Quoting the leftover token back
+        # invents a title — "I don't have a book called 'on Luke'" tells the user
+        # their own words were misparsed as a book, which reads as the library
+        # being wrong rather than the parser. Ask instead, and say what is here.
+        return Resolution(ok=False, question=(
+            "Which book did you mean? I have the Bible and its Apocrypha, the "
+            "Tanakh in JPS 1917, and the Qur'an — say a book and a chapter, "
+            "like \"Luke 12\"."))
     if len(candidates) > 1:
         listed = ", ".join(candidates[:-1]) + f", or {candidates[-1]}"
         return Resolution(ok=False, options=tuple(candidates), question=(

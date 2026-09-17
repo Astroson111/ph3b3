@@ -96,7 +96,12 @@ def store(tmp_path, monkeypatch):
         + [Passage(work_id="web", book="Psalms", section=23, unit=1,
                    text="Yahweh is my shepherd.", ordinal=300)]
         + [Passage(work_id="web", book="Genesis", section=1, unit=1,
-                   text="In the beginning.", ordinal=400)])
+                   text="In the beginning.", ordinal=400)]
+        + [Passage(work_id="web", book="Luke", section=sec, unit=1,
+                   text=f"Luke chapter {sec}, verse one.", ordinal=500 + sec)
+           for sec in (1, 12)]
+        + [Passage(work_id="web", book="Song of Songs", section=2, unit=1,
+                   text="Let him kiss me.", ordinal=600)])
     c.replace_passages("jps1917", [
         Passage(work_id="jps1917", book="Genesis", section=1, unit=1,
                 text="In the beginning God created.", ordinal=1)])
@@ -164,8 +169,16 @@ def test_an_unspeakable_edition_is_refused_out_loud_not_played_as_silence(store)
 
 
 def test_an_unknown_book_says_what_is_available(store):
+    """Says what IS here, without quoting back what the user typed.
+
+    This used to assert the opposite — that the refusal echoed "Hezekiah" — and
+    that was the bug: a mangled token echoed as a title reads as the library
+    being wrong rather than the parser. Updated with the behaviour, deliberately.
+    """
     r = reader.resolve("read Hezekiah 4", store, FakeSpeaker())
-    assert not r.ok and "Hezekiah" in r.refusal and "Qur'an" in r.refusal
+    assert not r.ok
+    assert r.question and "Qur'an" in r.question
+    assert "Hezekiah" not in r.question
 
 
 def test_a_missing_chapter_is_refused(store):
@@ -324,3 +337,69 @@ def test_a_per_reading_limit_does_not_rewrite_the_setting(store):
     reader.set_continue_after_chapters(0)
     _read(store, FakeSpeaker(), continue_after=1)
     assert reader.continue_after_chapters() == 0
+
+
+# ── the grammar, widened — tonight's live failures ───────────────────────────
+
+def test_tonights_utterances_all_resolve(store):
+    """The exact strings that failed live, plus the one that worked.
+
+    The resolver accepted one phrasing and rejected the rest, and the rejection
+    quoted the user's mangled words back as though they were a book title.
+    """
+    spk = FakeSpeaker()
+    for phrase, section in (("Luke 12", 12),
+                            ("Luke chapter 12", 12),
+                            ("the chapter on Luke", 1),
+                            ("read the chapter on Luke", 1),
+                            ("read me the chapter on Luke please", 1)):
+        r = reader.resolve(phrase, store, spk)
+        assert r.ok, f"{phrase!r} -> {r.question or r.refusal}"
+        assert r.reference.book == "Luke" and r.reference.section == section, phrase
+
+
+def test_a_bare_number_after_a_book_is_a_chapter(store):
+    spk = FakeSpeaker()
+    for phrase, book, section in (("Psalm 23", "Psalms", 23),
+                                  ("Genesis 1", "Genesis", 1),
+                                  ("1 John 1", "1 John", 1)):
+        r = reader.resolve(phrase, store, spk)
+        assert r.ok and r.reference.book == book and r.reference.section == section, phrase
+
+
+def test_numbered_books_resolve_in_every_spelling_our_sources_use(store):
+    """eBible writes "1 Samuel", Sefaria "I Samuel", tanach.us "Samuel I".
+    booknames.py already folds those for ingest; the resolver has to use the
+    same folding or a user can type one of our own sources' spellings and be
+    told the book does not exist."""
+    spk = FakeSpeaker()
+    for phrase in ("1 John 1", "I John 1", "John I 1", "first John 1"):
+        r = reader.resolve(phrase, store, spk)
+        assert r.ok and r.reference.book == "1 John", f"{phrase} -> {r.question or r.refusal}"
+
+
+def test_a_failed_parse_never_invents_a_book_title(store):
+    """It used to answer 'I don't have a book called "on Luke"', which tells the
+    user their own words were misparsed as a title and reads as the library
+    being wrong rather than the parser."""
+    spk = FakeSpeaker()
+    r = reader.resolve("read Blorptown 4", store, spk)
+    assert not r.ok
+    assert r.question and "Which book" in r.question
+    assert "Blorptown" not in (r.question + r.refusal), "echoed a phantom title"
+    assert not r.refusal, "a bad parse should ask, not refuse"
+
+
+def test_the_disambiguation_path_still_asks(store):
+    """Widening the grammar must not swallow the one case that should ask."""
+    spk = FakeSpeaker()
+    r = reader.resolve("John 3", store, spk)
+    assert not r.ok and r.question and "1 John" in r.question
+
+
+def test_filler_does_not_eat_a_real_book_name(store):
+    """'the' and 'of' are filler; 'Song of Songs' is a book."""
+    spk = FakeSpeaker()
+    r = reader.resolve("read Song of Songs 2", store, spk)
+    assert r.ok is False or r.reference.book != "Songs", \
+        "stripping 'of' mangled a real title"
