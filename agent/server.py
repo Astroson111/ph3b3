@@ -172,6 +172,7 @@ from screenshot_module import ScreenshotModule
 from kadmos_module import KadmosModule, KadmosError  # Kadmos — PDF reader (untrusted-input firewall)
 from recipes import RecipeStore
 import morpheus
+import herakles                  # GPU eviction — explicit ask only, never automatic
 import amphion                    # song generation (ACE-Step 1.5) — Morpheus's sibling (shares gpu_lock + floor)
 import orpheus                    # karaoke: stems, word-timed lyrics, the stage. NO floor import by design.
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
@@ -679,6 +680,7 @@ TOOLS = [
     {"type":"function","function":{"name":"start_monitoring","description":"GHOST-HUNTING ONLY (requires an active investigation): begin background camera anomaly monitoring on a timer. This is the only vision path that looks WITHOUT a fresh prompt, so it is gated to an active investigation and stops when it ends. Refuses otherwise.","parameters":{"type":"object","properties":{"interval":{"type":"integer","default":30}}}}},
     {"type":"function","function":{"name":"speak","description":"Speak text aloud using Piper TTS","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}},
     {"type":"function","function":{"name":"listen","description":"Listen via microphone using Whisper","parameters":{"type":"object","properties":{"duration":{"type":"integer","default":10}}}}},
+    {"type":"function","function":{"name":"free_gpu","description":"Release VRAM held by MY OWN backends. level 'cached' releases idle model weights and disturbs nothing that is running; level 'running' ALSO CANCELS the ComfyUI job currently executing. Only ever call this when the user has explicitly asked to free the GPU, and only use 'running' when they have accepted that it cancels work in progress. Never touches processes that are not ours.","parameters":{"type":"object","properties":{"level":{"type":"string","enum":["cached","running"],"default":"cached"}}}}},
     {"type":"function","function":{"name":"anime_lookup","description":"Look up anime or get recommendations","parameters":{"type":"object","properties":{"query":{"type":"string"},"mode":{"type":"string","default":"lookup"}},"required":["query"]}}},
     {"type":"function","function":{"name":"anime_random","description":"Random anime recommendation","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"add_story","description":"Save a story told to Ph3b3","parameters":{"type":"object","properties":{"name":{"type":"string"},"story":{"type":"string"}},"required":["name","story"]}}},
@@ -865,6 +867,53 @@ def _format_recall(hits: list[dict]) -> str:
     return "Relevant memories:\n" + "\n".join(lines)
 
 
+# ── GPU calls must not own the event loop ─────────────────────────────────────
+# Whisper runs on CUDA and its Python API is synchronous. Called straight from an
+# `async def`, it owns the only event loop this process has: /panel, /health, the
+# chat stream — nothing is answered until it returns, and nothing ever is if it
+# does not. /transcribe did precisely that on ~560 clips in three weeks, and the
+# `listen` tool would add its whole recording duration on top.
+#
+# Two guards, because they fix two different failures:
+#   to_thread  frees the LOOP    — this is the panel fix, and it holds even when
+#                                  the call never returns at all.
+#   wait_for   frees the CALLER  — without it a wedged call leaves the request
+#                                  hanging with no answer and no log line.
+#
+# The honest limit: wait_for cancels the await, NOT the worker thread. A stuck
+# CUDA call keeps running until the driver returns it. What this guarantees is
+# that the server stays reachable and the caller is told — NOT that the card is
+# freed. Freeing the card is Herakles' job, and it stays an explicit ask.
+
+# Measured on Nyx (RTX 4060 Ti, Whisper medium, idle card): 110.9s of speech
+# transcribed in 7.82s — 0.071s per audio-second, ~14x realtime. The budget below
+# allows twenty times that, so contention has to make the card twenty times
+# slower before a legitimate turn is cut off.
+_STT_S_PER_AUDIO_S = 0.071 * 20
+_STT_MIN_BUDGET_S  = 60.0
+_STT_MAX_BUDGET_S  = 300.0
+
+
+def _stt_budget(audio_seconds: float) -> float:
+    """Wall clock a transcription gets, scaled to how much audio it actually is."""
+    return max(_STT_MIN_BUDGET_S,
+               min(_STT_MAX_BUDGET_S, float(audio_seconds) * _STT_S_PER_AUDIO_S))
+
+
+async def _gpu_bound(fn, *args, timeout: float, what: str, **kw):
+    """Run a synchronous GPU call off the loop, under a wall clock.
+
+    Raises asyncio.TimeoutError on expiry. Callers turn that into something a
+    person can hear or read — never into silence.
+    """
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(fn, *args, **kw), timeout)
+    except asyncio.TimeoutError:
+        log.error("[gpu] %s exceeded %.0fs — event loop released, "
+                  "worker may still hold the card", what, timeout)
+        raise
+
+
 async def execute_tool(name, args, device="nyx", session_id=""):
     log.info(f"Tool: {name}")
     result = None
@@ -925,12 +974,37 @@ async def execute_tool(name, args, device="nyx", session_id=""):
             result = (await asyncio.to_thread(vision.start_monitoring, args.get("interval",30))) if investigation.is_active() else "Background camera monitoring is ghost-hunting gear — start an investigation first."
         elif name == "speak": result = tts.speak(args["text"], blocking=False)
         elif name == "listen":
-            r = stt.listen(args.get("duration",10))
-            if r.get("error"):
-                tts.speak("I couldn't hear that, my local voice recognition failed.")
-                result = f"Error: {r['error']}"
+            # Two blocking calls lived here. stt.listen() records for `duration`
+            # seconds and THEN transcribes on CUDA, so it froze the loop for ten
+            # seconds minimum by design; the failure line below spoke with the
+            # default blocking=True, freezing it again through a Piper subprocess.
+            # The budget covers the recording plus room to transcribe it.
+            _dur = args.get("duration", 10)
+            try:
+                r = await _gpu_bound(stt.listen, _dur,
+                                     timeout=_dur + _stt_budget(_dur),
+                                     what=f"listen {_dur}s")
+            except asyncio.TimeoutError:
+                tts.speak("My hearing stalled and I had to let it go. I'm still here.",
+                          blocking=False)
+                result = ("Error: listening timed out — the microphone or Whisper "
+                          "never came back. Nothing was heard.")
             else:
-                result = f"Heard: {r.get('text','')}"
+                if r.get("error"):
+                    tts.speak("I couldn't hear that, my local voice recognition failed.",
+                              blocking=False)
+                    result = f"Error: {r['error']}"
+                else:
+                    result = f"Heard: {r.get('text','')}"
+        elif name == "free_gpu":
+            # Explicit ask only. The model reaches this because a person said so;
+            # nothing in the codebase calls it on a threshold or a timer.
+            _lvl = str(args.get("level") or "cached")
+            try:
+                _r = await herakles.free_gpu(_lvl)
+                result = _r["line"] + (f" ({'; '.join(_r['failed'])})" if _r["failed"] else "")
+            except herakles.HeraklesError as _e:
+                result = f"I couldn't free the card: {_e}"
         elif name == "anime_lookup": result = anime.lookup(args["query"], args.get("mode","lookup"))
         elif name == "anime_random": result = anime.random_rec()
         elif name == "add_story": result = stories.add_story_from_person(args["name"], args["story"])
@@ -1009,7 +1083,13 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "bluetooth_scan": result = bluetooth.scan()
         elif name == "bluetooth_status": result = bluetooth.status()
         elif name == "system_status": result = system.full_status()
-        elif name == "gpu_status": result = system.gpu_status()
+        elif name == "gpu_status":
+            # Herakles reads the same card the old CSV wrapper did, and adds who
+            # is holding it. Read-only: this path frees nothing, ever.
+            try:
+                result = await asyncio.to_thread(herakles.status_line)
+            except herakles.HeraklesError:
+                result = system.gpu_status()      # fall back to the plain readout
         elif name == "ollama_status": result = system.ollama_status()
         elif name == "cve_lookup": result = cybersec.cve_lookup(args["cve_id"])
         elif name == "hash_string": result = cybersec.hash_string(args["text"])
@@ -3331,6 +3411,7 @@ async def transcribe_audio(request: Request, body: dict):
             pass
     # [DBG-MIC] characterise captured audio: mic-dead (near-zero level) vs STT-mishear (real level, wrong text)
     _rms = None
+    _n = 0            # sample count; stays 0 if the fmt-chunk parse below fails
     _peak = 0
     _hdr_rate = 16000  # WAV fmt-chunk sample rate; falls back to the firmware assumption
     try:
@@ -3388,7 +3469,21 @@ async def transcribe_audio(request: Request, body: dict):
         f.write(audio_bytes)
         tmp_path = f.name
     try:
-        result = stt.transcribe_file(tmp_path)
+        # The hot path: ~560 clips in three weeks, every one of them a
+        # synchronous CUDA call on the only event loop this process has. Off the
+        # loop now, and under a budget scaled to the length of the audio.
+        _audio_s = (_n / float(_hdr_rate)) if (_rms is not None and _n) else 0.0
+        try:
+            result = await _gpu_bound(stt.transcribe_file, tmp_path,
+                                      timeout=_stt_budget(_audio_s),
+                                      what=f"transcribe {_audio_s:.1f}s from {_device}")
+        except asyncio.TimeoutError:
+            # Say it rather than 500 it: the caller gets a turn it can render and
+            # the capture is kept on record, labelled, like every other discard.
+            _persist_capture(_device, audio_bytes, "",
+                             discarded=f"stt timeout after {_stt_budget(_audio_s):.0f}s")
+            return {"text": "", "error": "Transcription timed out — I never got it back.",
+                    "speak": "My hearing stalled on that one. Say it again?"}
         _text = result.get("text") or ""
         _discard = result.get("discard_reason")
         # Post-gate: Whisper decoded something but the hallucination gate rejected
