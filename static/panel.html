@@ -974,6 +974,14 @@
     .ari-actions { display: flex; gap: .6rem; }
     .amp-tog { cursor: pointer; user-select: none; }
     .amp-row { display: flex; align-items: center; gap: .6rem; margin-bottom: .5rem; }
+    .pyth-row { display:flex; gap:.6rem; flex-wrap:wrap; align-items:flex-end; margin:.5rem 0; }
+    .pyth-row .morph-adv-lbl { flex:1 1 7rem; }
+    .pyth-preview { margin:.6rem 0; min-height:180px; display:flex; align-items:center;
+      justify-content:center; border:1px solid rgba(255,255,255,.08); border-radius:8px;
+      background:repeating-conic-gradient(#1a1a1a 0% 25%, #222 0% 50%) 50%/16px 16px; }
+    .pyth-preview svg { max-width:100%; max-height:320px; height:auto; }
+    .pyth-notes { font-size:.78rem; opacity:.65; line-height:1.45; }
+    .pyth-btn { flex:1 1 8rem; margin-top:.2rem; }
     .amp-row label { flex: 0 0 5.5rem; font-size: .82rem; opacity: .8; }
     .amp-row input { flex: 1; }
     .amp-lib { display: flex; flex-direction: column; gap: .7rem; }
@@ -1792,6 +1800,39 @@
         <button id="morphCancelBtn" class="morph-cancel-btn" style="display:none" type="button" data-i18n="morpheus.cancel">Cancel</button>
       </div>
       <div id="morphError" class="morph-error" style="display:none"></div>
+    </div>
+
+    <!-- Pythagoras: construction, not generation. No GPU, no queue, no lock —
+         the preview is vector and redraws on every change, which is why there is
+         no Generate button here. -->
+    <div class="card">
+      <div class="card-title">Pythagoras <span class="badge" style="opacity:.7">geometry</span></div>
+      <div class="pyth-row">
+        <label class="morph-adv-lbl" style="flex:1">Figure
+          <select class="morph-adv-in" id="pythFigure"></select>
+        </label>
+        <label class="morph-adv-lbl" id="pythSolidWrap" style="flex:1;display:none">Solid
+          <select class="morph-adv-in" id="pythSolid"></select>
+        </label>
+      </div>
+      <div class="pyth-row" id="pythParams"></div>
+      <div class="pyth-row">
+        <label class="morph-adv-lbl">Palette <select class="morph-adv-in" id="pythPalette"></select></label>
+        <label class="morph-adv-lbl">Background <select class="morph-adv-in" id="pythBg"></select></label>
+        <label class="morph-adv-lbl">Line <input class="morph-adv-in" id="pythWeight" type="number" value="2" min="0.5" max="12" step="0.5"></label>
+      </div>
+      <div class="pyth-row">
+        <label class="morph-adv-lbl">Width <input class="morph-adv-in" id="pythWidth" type="number" value="1024" min="512" max="2048" step="64"></label>
+        <label class="morph-adv-lbl">Height <input class="morph-adv-in" id="pythHeight" type="number" value="1024" min="512" max="2048" step="64"></label>
+      </div>
+      <div id="pythPreview" class="pyth-preview"></div>
+      <div id="pythNotes" class="pyth-notes"></div>
+      <div id="pythError" class="morph-error" style="display:none"></div>
+      <div class="pyth-row">
+        <button class="morph-gen-btn pyth-btn" id="pythSvgBtn" type="button">Export SVG</button>
+        <button class="morph-gen-btn pyth-btn" id="pythPngBtn" type="button">Export PNG</button>
+        <button class="morph-gen-btn pyth-btn" id="pythFramesBtn" type="button">Frames</button>
+      </div>
     </div>
 
     <div class="card">
@@ -6385,5 +6426,146 @@ if ('serviceWorker' in navigator) {
 })();
 </script>
 <audio id="kar-preview-audio" preload="none"></audio>
+
+<script>
+/* Pythagoras — construction panel.
+   Everything here is cheap: the preview is an SVG built from maths on the CPU,
+   so it redraws on every change instead of hiding behind a Generate button.
+   PNG export is the only call that shells out to a rasteriser. */
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const fig = $("pythFigure"), solid = $("pythSolid"), solidWrap = $("pythSolidWrap");
+  const params = $("pythParams"), preview = $("pythPreview"), notes = $("pythNotes");
+  const err = $("pythError");
+  if (!fig) return;
+  let CAT = null, timer = null;
+
+  const PARAMS = {
+    flower_of_life: [{k:"ring_count", label:"Rings", type:"number", v:2, min:1, max:8}],
+    golden_spiral:  [{k:"turns", label:"Turns", type:"number", v:8, min:2, max:14},
+                     {k:"show_scaffold", label:"Scaffold", type:"check", v:true}],
+    penrose:        [{k:"depth", label:"Depth", type:"number", v:4, min:1, max:7},
+                     {k:"seed", label:"Seed", type:"select", v:"sun", opts:["sun","star"]}],
+    metatrons_cube: [{k:"show_circles", label:"Circles", type:"check", v:true}],
+    platonic_solid: [{k:"projection", label:"View", type:"select", v:"orthographic",
+                      opts:["orthographic","perspective"]},
+                     {k:"faceted", label:"Faceted", type:"check", v:false}],
+  };
+
+  const fill = (el, list, sel) => {
+    el.innerHTML = "";
+    list.forEach((o) => {
+      const opt = document.createElement("option");
+      opt.value = o; opt.textContent = o.replace(/_/g, " ");
+      if (o === sel) opt.selected = true;
+      el.appendChild(opt);
+    });
+  };
+
+  function buildParams() {
+    params.innerHTML = "";
+    solidWrap.style.display = fig.value === "platonic_solid" ? "" : "none";
+    (PARAMS[fig.value] || []).forEach((d) => {
+      const lab = document.createElement("label");
+      lab.className = "morph-adv-lbl";
+      lab.textContent = d.label + " ";
+      let inp;
+      if (d.type === "select") { inp = document.createElement("select"); fill(inp, d.opts, d.v); }
+      else {
+        inp = document.createElement("input");
+        inp.type = d.type === "check" ? "checkbox" : "number";
+        if (d.type === "check") inp.checked = d.v;
+        else { inp.value = d.v; inp.min = d.min; inp.max = d.max; }
+      }
+      inp.className = "morph-adv-in"; inp.dataset.k = d.k; inp.dataset.t = d.type;
+      inp.addEventListener("input", schedule);
+      inp.addEventListener("change", schedule);
+      lab.appendChild(inp); params.appendChild(lab);
+    });
+  }
+
+  function body() {
+    const b = {
+      figure: fig.value,
+      width: +$("pythWidth").value, height: +$("pythHeight").value,
+      palette: $("pythPalette").value, background: $("pythBg").value,
+      line_weight: +$("pythWeight").value,
+    };
+    if (fig.value === "platonic_solid") b.solid = solid.value;
+    params.querySelectorAll("[data-k]").forEach((i) => {
+      b[i.dataset.k] = i.dataset.t === "check" ? i.checked
+        : (i.dataset.t === "number" ? +i.value : i.value);
+    });
+    return b;
+  }
+
+  async function draw() {
+    err.style.display = "none";
+    try {
+      const r = await fetch("/pythagoras/render", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body()),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        /* Refusals are shown verbatim. The module names what it will not draw
+           and why; paraphrasing that in the UI would lose the reason. */
+        preview.innerHTML = ""; notes.textContent = "";
+        err.textContent = j.error || "Could not construct that."; err.style.display = "";
+        return;
+      }
+      preview.innerHTML = j.data;
+      notes.textContent = (j.notes || []).join("  ");
+    } catch (e) {
+      err.textContent = String(e); err.style.display = "";
+    }
+  }
+  function schedule() { clearTimeout(timer); timer = setTimeout(draw, 120); }
+
+  async function save(fmt) {
+    const r = await fetch("/pythagoras/render", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(Object.assign(body(), {format: fmt})),
+    });
+    const j = await r.json();
+    if (!r.ok) { err.textContent = j.error; err.style.display = ""; return; }
+    const blob = j.encoding === "base64"
+      ? new Blob([Uint8Array.from(atob(j.data), (c) => c.charCodeAt(0))], {type: j.mime})
+      : new Blob([j.data], {type: j.mime});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = j.figure + "." + fmt;
+    a.click(); URL.revokeObjectURL(a.href);
+  }
+
+  $("pythSvgBtn").onclick = () => save("svg");
+  $("pythPngBtn").onclick = () => save("png");
+  $("pythFramesBtn").onclick = async () => {
+    const r = await fetch("/pythagoras/frames", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(Object.assign(body(), {png: true})),
+    });
+    const j = await r.json();
+    if (!r.ok) { err.textContent = j.error; err.style.display = ""; return; }
+    notes.textContent = j.frames + " frames written to " + (j.frames_dir || "?")
+      + " — " + j.watermark + ".  Assemble with: " + j.ffmpeg;
+  };
+
+  [fig, solid, $("pythPalette"), $("pythBg"), $("pythWeight"),
+   $("pythWidth"), $("pythHeight")].forEach((el) => {
+    el.addEventListener("change", () => { if (el === fig) buildParams(); schedule(); });
+    el.addEventListener("input", schedule);
+  });
+
+  fetch("/pythagoras/figures").then((r) => r.json()).then((j) => {
+    CAT = j;
+    fill(fig, j.figures, "metatrons_cube");
+    fill(solid, j.solids, "icosahedron");
+    fill($("pythPalette"), j.palettes, "gold");
+    fill($("pythBg"), j.backgrounds, "transparent");
+    buildParams(); draw();
+  }).catch(() => { err.textContent = "Pythagoras is not answering."; err.style.display = ""; });
+})();
+</script>
 </body>
 </html>

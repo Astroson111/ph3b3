@@ -173,6 +173,7 @@ from kadmos_module import KadmosModule, KadmosError  # Kadmos — PDF reader (un
 from recipes import RecipeStore
 import morpheus
 import herakles                  # GPU eviction — explicit ask only, never automatic
+import pythagoras                # sacred geometry — CPU only, no lock, no ComfyUI
 import amphion                    # song generation (ACE-Step 1.5) — Morpheus's sibling (shares gpu_lock + floor)
 import orpheus                    # karaoke: stems, word-timed lyrics, the stage. NO floor import by design.
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
@@ -4413,6 +4414,83 @@ async def login_submit(request: Request):
         return resp
     _auth_note_failure(_ckey, "/login", "")
     return HTMLResponse(content=_login_html(error=True), status_code=401)
+
+
+# ── Pythagoras ────────────────────────────────────────────────────────────────
+# Construction, not generation: no GPU, no gpu_lock, no ComfyUI. These routes run
+# the maths on the event loop only long enough to build an SVG (microseconds);
+# rasterising shells out to Inkscape and goes through to_thread like any other
+# subprocess, so a slow export cannot hold the loop.
+
+@app.get("/pythagoras/figures")
+async def pythagoras_figures(request: Request):
+    _require_human(request)
+    return {
+        "figures": list(pythagoras.READY),
+        "deferred": {"sri_yantra": pythagoras.SRI_YANTRA_STATUS},
+        "palettes": sorted(pythagoras.PALETTES),
+        "backgrounds": sorted(pythagoras.BACKGROUNDS),
+        "solids": list(pythagoras.SOLIDS),
+        "size": {"min": pythagoras.SIZE_MIN, "max": pythagoras.SIZE_MAX,
+                 "step": pythagoras.SIZE_STEP, "default": pythagoras.SIZE_DEFAULT},
+        "ffmpeg_hint": pythagoras.FFMPEG_HINT,
+    }
+
+
+@app.post("/pythagoras/render")
+async def pythagoras_render(request: Request, body: dict):
+    """Build a figure and return it inline. SVG by default — it is the canonical
+    form and cheap enough to preview live."""
+    _require_human(request)
+    fmt = str(body.pop("format", "svg"))
+    figure = str(body.pop("figure", ""))
+    try:
+        fig = await asyncio.to_thread(lambda: pythagoras.build(figure, **body))
+        data, mime = await asyncio.to_thread(pythagoras.export, fig, fmt)
+    except pythagoras.PythagorasError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {
+        "figure": fig.name, "params": fig.params, "notes": fig.notes,
+        "exact": fig.exact, "mime": mime, "shapes": len(fig.shapes),
+        "data": base64.b64encode(data).decode() if fmt == "png" else data.decode(),
+        "encoding": "base64" if fmt == "png" else "utf-8",
+    }
+
+
+@app.post("/pythagoras/frames")
+async def pythagoras_frames(request: Request, body: dict):
+    """Construction-order frames. Returns the animated SVG inline and writes the
+    numbered PNGs to disk — a hundred base64 frames in one response helps nobody."""
+    _require_human(request)
+    steps = body.pop("steps", None)
+    want_png = bool(body.pop("png", False))
+    figure = str(body.pop("figure", ""))
+    try:
+        fig = await asyncio.to_thread(lambda: pythagoras.build(figure, **body))
+        anim = await asyncio.to_thread(pythagoras.frames_svg, fig, steps)
+    except pythagoras.PythagorasError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    out = {"figure": fig.name, "frames": pythagoras.frame_count(fig, steps),
+           "animated_svg": anim, "ffmpeg": pythagoras.FFMPEG_HINT,
+           "watermark": "frames are intermediates and are not stamped"}
+    if want_png:
+        d = Path.home() / "ph3b3_data" / "pythagoras" / fig.name
+        d.mkdir(parents=True, exist_ok=True)
+        pngs = await asyncio.to_thread(pythagoras.frames_png, fig, steps)
+        for i, raw in enumerate(pngs):
+            (d / f"frame_{i:04d}.png").write_bytes(raw)
+        out["frames_dir"] = str(d)
+    return out
+
+
+@app.post("/pythagoras/compose")
+async def pythagoras_compose(request: Request, body: dict):
+    """Language -> figure, or a question. Never a nearest-match guess."""
+    _require_human(request)
+    c = await asyncio.to_thread(pythagoras.compose, str(body.get("text", "")))
+    if c.figure is None:
+        return {"figure": None, "question": c.question}
+    return {"figure": c.figure, "params": c.params}
 
 
 @app.get("/logout")
