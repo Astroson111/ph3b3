@@ -174,6 +174,7 @@ from recipes import RecipeStore
 import morpheus
 import herakles                  # GPU eviction — explicit ask only, never automatic
 import pythagoras                # sacred geometry — CPU only, no lock, no ComfyUI
+import calliope                  # speech renders — Piper/CPU, lives in the Amphion pane
 import amphion                    # song generation (ACE-Step 1.5) — Morpheus's sibling (shares gpu_lock + floor)
 import orpheus                    # karaoke: stems, word-timed lyrics, the stage. NO floor import by design.
 import metis                      # web-search egress (SearXNG); first deliberate-egress module
@@ -6757,6 +6758,79 @@ async def amphion_job(job_id: str):
 @app.delete("/amphion/job/{job_id}")
 async def amphion_cancel(job_id: str):
     return {"cancelled": await amphion.cancel(job_id)}
+
+
+# ── Calliope: the Speech tab ──────────────────────────────────────────────────
+# Inside the Amphion pane, but NOT on Amphion's queue. Piper is a CPU subprocess:
+# these routes never take gpu_lock and a speech render completes while a song is
+# rendering. Routes are /amphion/speech/* rather than /amphion/voice/* because
+# /amphion/voices already means ACE-Step singing descriptors.
+#
+# Astro's ruling 2026-09-17: ungated with logging. Arbitrary text renders — the
+# only path in the system that does — and every render stores its full script in
+# a sidecar beside the audio, permanently.
+
+@app.get("/amphion/speech/catalogue")
+async def speech_catalogue(request: Request):
+    _require_human(request)
+    return {"voices": await asyncio.to_thread(calliope.roster),
+            "presets": {k: {"length_scale": v[0], "sentence_silence": v[1]}
+                        for k, v in calliope.PRESETS.items()},
+            "default_preset": calliope.DEFAULT_PRESET,
+            "max_chars": calliope.MAX_CHARS}
+
+
+@app.post("/amphion/speech/estimate")
+async def speech_estimate(request: Request, body: dict):
+    """How long this will take to say, before committing to it. This figure is
+    what locks a music brief downstream, so it is offered up front."""
+    _require_human(request)
+    try:
+        ls, _ss = calliope.resolve_pace(body.get("preset"),
+                                        body.get("length_scale"),
+                                        body.get("sentence_silence"))
+    except calliope.CalliopeError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    text = str(body.get("text", ""))
+    return {"seconds": calliope.estimate_seconds(text, ls),
+            "words": len(text.split()), "chars": len(text)}
+
+
+@app.post("/amphion/speech/render")
+async def speech_render(request: Request, body: dict):
+    _require_human(request)
+    try:
+        rec = await asyncio.to_thread(
+            calliope.render,
+            str(body.get("text", "")), body.get("voice"), body.get("preset"),
+            body.get("length_scale"), body.get("sentence_silence"),
+            body.get("title"))
+    except calliope.CalliopeError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return rec
+
+
+@app.get("/amphion/speech/library")
+async def speech_library(request: Request, limit: int = 50):
+    _require_human(request)
+    return {"speech": await asyncio.to_thread(calliope.library, limit)}
+
+
+@app.get("/amphion/speech/file/{speech_id}")
+async def speech_file(request: Request, speech_id: str):
+    _require_human(request)
+    p = await asyncio.to_thread(calliope.wav_path, speech_id)
+    if not p:
+        raise HTTPException(404, f"no speech render {speech_id}")
+    return FileResponse(p, media_type="audio/wav", filename=p.name)
+
+
+@app.delete("/amphion/speech/{speech_id}")
+async def speech_delete(request: Request, speech_id: str):
+    _require_human(request)
+    if not await asyncio.to_thread(calliope.delete, speech_id):
+        raise HTTPException(404, f"no speech render {speech_id}")
+    return {"deleted": speech_id}
 
 
 @app.get("/amphion/library")

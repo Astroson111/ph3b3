@@ -974,6 +974,18 @@
     .ari-actions { display: flex; gap: .6rem; }
     .amp-tog { cursor: pointer; user-select: none; }
     .amp-row { display: flex; align-items: center; gap: .6rem; margin-bottom: .5rem; }
+    .sp-lib { margin-top:.8rem; border-top:1px solid rgba(255,255,255,.08); }
+    .sp-item { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;
+      padding:.55rem 0; border-bottom:1px solid rgba(255,255,255,.06); }
+    .sp-item .sp-t { flex:1 1 11rem; min-width:0; font-size:.9rem;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .sp-item .sp-m { font-size:.76rem; opacity:.6; font-variant-numeric:tabular-nums;
+      white-space:nowrap; }
+    .sp-item audio { height:30px; flex:1 1 11rem; min-width:0; }
+    .sp-act { background:none; border:1px solid rgba(255,255,255,.18); color:inherit;
+      border-radius:5px; padding:.2rem .5rem; font-size:.74rem; cursor:pointer; }
+    .sp-act:hover { border-color:var(--magenta,#c6f); }
+    .sp-empty { padding:.8rem 0; font-size:.82rem; opacity:.55; }
     .pyth-row { display:flex; gap:.6rem; flex-wrap:wrap; align-items:flex-end; margin:.5rem 0; }
     .pyth-row .morph-adv-lbl { flex:1 1 7rem; }
     .pyth-preview { margin:.6rem 0; min-height:180px; display:flex; align-items:center;
@@ -2000,6 +2012,45 @@
   </section>
 
   <section id="paneAmphion" class="pane">
+
+    <!-- Speech (Calliope). Lives in this pane but NOT on Amphion's queue:
+         Piper is a CPU subprocess, so a speech render finishes in seconds and
+         never waits on a song. Called "Speech" and not "Voice" because
+         /amphion/voices already means ACE-Step singing descriptors. -->
+    <div class="card" id="speechCard">
+      <div class="card-title">
+        Speech <span class="badge" style="opacity:.75">CPU · no queue</span>
+      </div>
+      <div class="ari-note">Type a script, pick a voice, get a WAV. Renders in seconds and
+        <b>never waits on a song</b>. Every render is kept below with its script, so you can
+        find it again and re-render with edited wording.</div>
+
+      <textarea id="spText" class="ari-ta" rows="6"
+        placeholder="You're wading through chest-deep water. Each step is slow and heavy…"
+        autocomplete="off"></textarea>
+
+      <div class="pyth-row">
+        <label class="morph-adv-lbl" style="flex:2 1 12rem">Title
+          <input class="morph-adv-in" id="spTitle" type="text" placeholder="optional">
+        </label>
+        <label class="morph-adv-lbl" style="flex:1 1 9rem">Voice
+          <select class="morph-adv-in" id="spVoice"></select>
+        </label>
+        <label class="morph-adv-lbl" style="flex:1 1 8rem">Pace
+          <select class="morph-adv-in" id="spPreset"></select>
+        </label>
+      </div>
+
+      <div class="pyth-row" style="justify-content:space-between;align-items:center">
+        <span id="spEstimate" class="ari-note" style="margin:0">&mdash;</span>
+        <button class="morph-gen-btn" id="spRenderBtn" type="button"
+                style="flex:0 0 11rem">Render speech</button>
+      </div>
+      <div id="spError" class="morph-error" style="display:none"></div>
+
+      <div id="spLibrary" class="sp-lib"></div>
+    </div>
+
     <div class="card">
       <div class="card-title" data-i18n="amphion.title">Amphion — song generation</div>
       <div class="ari-note" data-i18n-html="amphion.note">Full songs are generated <b>locally and never leave this machine</b> — your prompt and lyrics <b>are never uploaded</b>. There's <b>no cost per song</b>, so generate as many times as it takes.</div>
@@ -6565,6 +6616,120 @@ if ('serviceWorker' in navigator) {
     fill($("pythBg"), j.backgrounds, "transparent");
     buildParams(); draw();
   }).catch(() => { err.textContent = "Pythagoras is not answering."; err.style.display = ""; });
+})();
+</script>
+
+<script>
+/* Calliope — the Speech tab.
+   CPU render, no queue: the button does not disable the pane or poll a job,
+   because there is nothing to wait behind. The library below is the point —
+   a render you cannot find again is the bug this card was built to fix. */
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const text = $("spText"), voice = $("spVoice"), preset = $("spPreset");
+  const est = $("spEstimate"), err = $("spError"), lib = $("spLibrary");
+  const btn = $("spRenderBtn"), title = $("spTitle");
+  if (!text) return;
+  let PRESETS = {}, estTimer = null;
+
+  const say = (m) => { err.textContent = m; err.style.display = m ? "" : "none"; };
+  const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+
+  async function estimate() {
+    const t = text.value.trim();
+    if (!t) { est.textContent = "—"; return; }
+    try {
+      const r = await fetch("/amphion/speech/estimate", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({text: t, preset: preset.value}),
+      });
+      const j = await r.json();
+      if (r.ok) est.textContent = `${j.words} words — about ${mmss(j.seconds)} spoken`;
+    } catch (e) { /* the estimate is a courtesy; never block on it */ }
+  }
+  const scheduleEst = () => { clearTimeout(estTimer); estTimer = setTimeout(estimate, 250); };
+
+  function row(rec) {
+    const d = document.createElement("div");
+    d.className = "sp-item";
+    const t = document.createElement("div");
+    t.className = "sp-t"; t.textContent = rec.title; t.title = rec.text || rec.title;
+    const m = document.createElement("span");
+    m.className = "sp-m";
+    m.textContent = `${mmss(rec.seconds)} · ${rec.voice_name} · ${rec.preset}`;
+    const a = document.createElement("audio");
+    a.controls = true; a.preload = "none"; a.src = `/amphion/speech/file/${rec.id}`;
+    const dl = document.createElement("a");
+    dl.className = "sp-act"; dl.textContent = "Download";
+    dl.href = `/amphion/speech/file/${rec.id}`; dl.download = "";
+    const re = document.createElement("button");
+    re.className = "sp-act"; re.type = "button"; re.textContent = "Reopen script";
+    re.onclick = () => {
+      text.value = rec.text || ""; title.value = rec.title || "";
+      if (rec.preset) preset.value = rec.preset;
+      if (rec.voice) voice.value = rec.voice;
+      text.scrollIntoView({behavior: "smooth", block: "center"});
+      estimate();
+    };
+    const del = document.createElement("button");
+    del.className = "sp-act"; del.type = "button"; del.textContent = "Delete";
+    del.onclick = async () => {
+      if (!confirm(`Delete "${rec.title}"? The audio and its script both go.`)) return;
+      await fetch(`/amphion/speech/${rec.id}`, {method: "DELETE"});
+      loadLibrary();
+    };
+    d.append(t, m, a, dl, re, del);
+    return d;
+  }
+
+  async function loadLibrary() {
+    try {
+      const r = await fetch("/amphion/speech/library");
+      const j = await r.json();
+      lib.innerHTML = "";
+      if (!(j.speech || []).length) {
+        lib.innerHTML = '<div class="sp-empty">No speech renders yet.</div>';
+        return;
+      }
+      j.speech.forEach((rec) => lib.appendChild(row(rec)));
+    } catch (e) { say("Could not load the speech library."); }
+  }
+
+  btn.onclick = async () => {
+    const t = text.value.trim();
+    if (!t) { say("There's nothing to say — the script is empty."); return; }
+    say(""); btn.disabled = true; btn.textContent = "Rendering…";
+    try {
+      const r = await fetch("/amphion/speech/render", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({text: t, voice: voice.value || null,
+                              preset: preset.value, title: title.value || null}),
+      });
+      const j = await r.json();
+      if (!r.ok) { say(j.error || "The render failed."); return; }
+      est.textContent = `Rendered ${mmss(j.seconds)} in ${j.synth_seconds}s — ${j.voice_name}`;
+      loadLibrary();
+    } catch (e) { say(String(e)); }
+    finally { btn.disabled = false; btn.textContent = "Render speech"; }
+  };
+
+  text.addEventListener("input", scheduleEst);
+  preset.addEventListener("change", scheduleEst);
+
+  fetch("/amphion/speech/catalogue").then((r) => r.json()).then((j) => {
+    PRESETS = j.presets || {};
+    (j.voices || []).forEach((v) => {
+      const o = document.createElement("option");
+      o.value = v.code; o.textContent = v.name; voice.appendChild(o);
+    });
+    Object.keys(PRESETS).forEach((k) => {
+      const o = document.createElement("option");
+      o.value = k; o.textContent = k[0].toUpperCase() + k.slice(1);
+      if (k === j.default_preset) o.selected = true;
+      preset.appendChild(o);
+    });
+    loadLibrary();
+  }).catch(() => say("Speech is not answering."));
 })();
 </script>
 </body>
