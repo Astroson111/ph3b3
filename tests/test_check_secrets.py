@@ -55,6 +55,35 @@ def test_a_real_credential_shape_flags(line):
     assert cs.findings("+" + line), f"missed: {line}"
 
 
+@pytest.mark.parametrize("line", [
+    "_NOT_A_SECRET = re.compile(",
+    'API_KEY = os.environ["PH3B3_KEY"]',
+    'password = f"{user}:{pw}"',
+])
+def test_code_on_the_right_hand_side_is_not_a_literal(line):
+    """A call or an f-string is not a pasted credential. The checker's own
+    _NOT_A_SECRET pattern flagged itself, which is about as clear a signal as a
+    word-matcher can give that it is matching words."""
+    assert not cs.findings("+" + line)
+
+
+def test_an_inline_allowlist_pragma_is_honoured():
+    assert not cs.findings('+token = "xxxxxxxxxxxx"  # pragma: allowlist secret')
+
+
+def test_the_checkers_own_fixtures_do_not_trip_it():
+    """It fired 14 times on the commit that introduced it — every hit a fake key
+    written to prove the patterns work. A tripwire that cannot be added to the
+    repo without flagging itself is the cry-wolf failure all over again."""
+    diff = ("+++ b/tests/test_check_secrets.py\n"
+            "+    'PH3B3_PASSWORD = \"hunter2correcthorse\"',\n")
+    assert not cs.findings(diff)
+    # the same line in ordinary code still flags
+    other = ("+++ b/agent/server.py\n"
+             "+PH3B3_PASSWORD = \"hunter2correcthorse\"\n")
+    assert cs.findings(other)
+
+
 def test_removed_lines_are_never_flagged():
     """A diff that DELETES a secret is the fix, not the problem."""
     assert not cs.findings('-PH3B3_PASSWORD = "hunter2correcthorse"')

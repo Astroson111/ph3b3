@@ -68,6 +68,18 @@ _NOT_A_SECRET = re.compile(
     r"argv|args\.|body\.get|params\.get|_PATH|_FILE",
     re.I)
 
+# Files whose JOB is to contain credential specimens. A tripwire that fires on
+# its own fixtures is the cry-wolf failure this script exists to end — it flagged
+# 14 lines on the very commit that introduced it, all of them fake keys written
+# to prove the patterns work.
+_SPECIMEN_FILES = ("scripts/check_secrets.py", "tests/test_check_secrets.py")
+
+# An escape hatch for anywhere else a specimen is genuinely needed.
+_ALLOW = re.compile(r"(?:pragma|noqa)\s*:\s*allowlist[ _-]?secret", re.I)
+
+# A value that is CODE rather than a literal: a call, an f-string, an expression.
+_LOOKS_LIKE_CODE = re.compile(r"[(\[]|^re\.|^f[\"']")
+
 # Comment openers per language. A secret in a comment is still a secret, but a
 # WORD in a comment is what kept firing, so comments are held to the hard
 # patterns only.
@@ -77,10 +89,18 @@ _COMMENT = re.compile(r"^\s*(?:#|//|/\*|\*|<!--|--)")
 def findings(diff: str) -> list[tuple[int, str, str]]:
     """(line_no_in_diff, reason, text) for each added line worth a look."""
     out = []
+    current = ""
     for i, raw in enumerate(diff.splitlines(), start=1):
-        if not raw.startswith("+") or raw.startswith("+++"):
+        if raw.startswith("+++ "):
+            current = raw[4:].lstrip("b/").strip()
+            continue
+        if not raw.startswith("+"):
+            continue
+        if any(current.endswith(f) for f in _SPECIMEN_FILES):
             continue
         line = raw[1:]
+        if _ALLOW.search(line):
+            continue
         for pat, why in _HARD:
             if pat.search(line):
                 out.append((i, why, line.strip()[:160]))
@@ -89,7 +109,9 @@ def findings(diff: str) -> list[tuple[int, str, str]]:
             if _COMMENT.match(line):
                 continue          # prose: hard patterns only, checked above
             m = _ASSIGNED.search(line)
-            if m and not _NOT_A_SECRET.match(m.group("val").strip()):
+            val = m.group("val").strip() if m else ""
+            if (m and not _NOT_A_SECRET.match(val)
+                    and not _LOOKS_LIKE_CODE.search(val)):
                 out.append((i, "literal assigned to a credential name",
                             line.strip()[:160]))
     return out
@@ -111,6 +133,10 @@ def _self_test() -> int:
         "# set your api_key here",
         'self.token = body.get("token")',
         "PH3B3_PASSWORD=<set>",
+        "_NOT_A_SECRET = re.compile(",                  # a pattern, not a secret
+        'API_KEY = os.environ["PH3B3_KEY"]',
+        'password = f"{user}:{pw}"',
+        'token = "xxxxxxxxxxxx"  # pragma: allowlist secret',
     ]
     loud = [
         'PH3B3_PASSWORD = "hunter2correcthorse"',
