@@ -1762,6 +1762,15 @@
         <button type="button" id="wmSaveBtn" class="wg-toggle" disabled>Save</button>
         <span id="wmHint" class="morph-qual-hint"></span>
       </div>
+      <div class="sr">
+        <span class="sr-l">Clip mark</span>
+        <select id="wmClipSel" class="morph-eng-sel"
+                title="Sign clips with the visible mark. Video cannot carry the hidden layer.">
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+        <span id="wmClipHint" class="morph-qual-hint"></span>
+      </div>
       <div id="morphVidWarn" class="morph-vid-warn" style="display:none"></div>
       <div id="morphSrcRow" class="morph-src-row" style="display:none">
         <img id="morphSrcThumb" alt="source still">
@@ -4792,6 +4801,19 @@ async function wmRefresh() {
     hint.textContent = d.watermark_enabled
       ? 'visible mark + hidden timestamp'
       : 'new renders unmarked — existing art unchanged';
+
+
+    // Clips: their own switch, and their own honest hint. The visible mark is
+    // all a video can carry — saying otherwise would promise a verification
+    // that re-encoding destroys.
+    const cSel = document.getElementById('wmClipSel');
+    const cHint = document.getElementById('wmClipHint');
+    if (cSel) {
+      cSel.value = d.clip_watermark_enabled ? 'on' : 'off';
+      if (cHint) cHint.textContent = d.clip_watermark_enabled
+        ? 'Visible mark only — video re-encoding destroys the hidden layer.'
+        : 'Clips go out unmarked.';
+    }
   } catch {}
 }
 async function wmSet() {
@@ -4805,6 +4827,21 @@ async function wmSet() {
   await wmRefresh();
 }
 document.getElementById('wmSel')?.addEventListener('change', wmSet);
+
+// Clips have their own switch and their own POST key, so turning one off never
+// touches the other.
+async function wmClipSet() {
+  const cs = document.getElementById('wmClipSel');
+  if (!cs) return;
+  cs.disabled = true;
+  try {
+    await fetch('/watermark', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({clip_watermark_enabled: cs.value === 'on'})});
+  } catch(e) {}
+  cs.disabled = false;
+  await wmRefresh();
+}
+document.getElementById('wmClipSel')?.addEventListener('change', wmClipSet);
 
 // The mark commits on an explicit Save, never on blur. Clicking away from a
 // text box is not consent to change a setting, and a field that saved silently

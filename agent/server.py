@@ -3611,6 +3611,11 @@ async def egress_set(body: dict):
 @app.get("/watermark")
 async def watermark_get():
     return {"watermark_enabled": watermark.enabled(),
+            # Clips are a SEPARATE switch: they can only carry the visible mark,
+            # and stamping one costs a whole extra encode. Its own key so turning
+            # clips off never quietly unstamps the stills.
+            "clip_watermark_enabled": watermark.clip_enabled(),
+            "clip_note": watermark.clip_note(),
             "mark": watermark.mark_text(),
             "marks": watermark.marks(),
             "mark_max_chars": watermark.MARK_MAX_CHARS,
@@ -3629,7 +3634,10 @@ async def watermark_set(body: dict):
         raise HTTPException(400, detail=str(e))
     if "watermark_enabled" in body:
         watermark.set_enabled(bool(body.get("watermark_enabled")))
+    if "clip_watermark_enabled" in body:
+        watermark.set_clip_enabled(bool(body.get("clip_watermark_enabled")))
     return {"ok": True, "watermark_enabled": watermark.enabled(),
+            "clip_watermark_enabled": watermark.clip_enabled(),
             "mark": watermark.mark_text(), "marks": watermark.marks()}
 
 @app.post("/watermark/verify")

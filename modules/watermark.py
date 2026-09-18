@@ -255,6 +255,44 @@ def set_enabled(on: bool) -> dict:
     return {"watermark_enabled": bool(on)}
 
 
+# ── clips: the same mark, its own switch ─────────────────────────────────────
+# Stills auto-stamp by the 2026-09-15 ruling. Clips are a SEPARATE switch, at
+# Astro's call on 2026-09-18, for two honest reasons.
+#
+# The mark is weaker here. A still carries two layers — a visible corner mark and
+# a DCT embed measured against JPEG re-encoding. A clip can only carry the first:
+# H.264 predicts most frames from their neighbours rather than coding them
+# independently, so a per-frame embed has nothing stable to live in, and there is
+# no survival measurement for it. Claiming an invisible layer a video cannot hold
+# would be the same mistake as claiming one for SVG.
+#
+# And the cost is different. Stamping a clip means a second encode of the whole
+# file — real time, and a generation of quality that the still path never pays.
+#
+# So it is opt-out rather than assumed. Default ON, because it is still Ph3b3
+# work leaving the building, but on its own key so turning it off does not
+# quietly unstamp every still as well.
+
+def clip_enabled() -> bool:
+    got = _settings().get("clip_watermark_enabled", True)
+    return bool(got) if isinstance(got, bool) else True
+
+
+def set_clip_enabled(on: bool) -> dict:
+    cur = _settings()
+    cur["clip_watermark_enabled"] = bool(on)
+    _write(cur)
+    return {"clip_watermark_enabled": bool(on)}
+
+
+def clip_note() -> str:
+    """What a clip's mark actually promises. Said plainly wherever it is shown."""
+    return ("Clips carry the visible mark only. The invisible layer is for stills "
+            "— video re-encoding destroys it, and a mark that cannot be verified "
+            "is worse than no mark at all.")
+
+
+
 def _font(px: int) -> ImageFont.FreeTypeFont:
     for path in _FONT_CANDIDATES:
         if Path(path).exists():

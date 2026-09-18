@@ -2811,6 +2811,68 @@ async def fetch_and_save_video(http: httpx.AsyncClient, outputs: dict, job_id: s
     return path
 
 
+_MARK_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+
+def maybe_stamp_clip(path: Path, job_id: str) -> Path:
+    """Burn the visible mark into a finished clip. Returns the path either way.
+
+    Mirrors maybe_stamp() for stills: one testable function, and a FAILURE NEVER
+    LOSES THE RENDER. A clip that took forty minutes on the card must not be
+    thrown away because a font was missing — an unstamped clip is a smaller
+    problem than no clip, and the job record says which happened.
+
+    CPU only — ffmpeg, no CUDA. It does however run INSIDE gpu_lock, because
+    run_video holds the lock for its whole body and restructuring a working
+    render path to shave a few seconds off was not worth the risk. On the ~5s
+    clips this lane produces the extra encode is a couple of seconds against a
+    render of 90s to 40 minutes. If clip length ever grows, move this out of the
+    lock rather than letting the cost grow with it.
+    """
+    if not watermark.clip_enabled():
+        jobs.get(job_id, {}).update(watermark="off")
+        return path
+    text = watermark.mark_text()
+    if not text or not Path(_MARK_FONT).exists():
+        log.warning("[watermark] clip %s not stamped — %s", job_id,
+                    "no mark text" if not text else f"font missing at {_MARK_FONT}")
+        jobs.get(job_id, {}).update(watermark="failed",
+                                    watermark_error="no mark text or font")
+        return path
+    out = path.with_suffix(".marked.mp4")
+    # Bottom-right, padded off the edge, sized to the frame so it reads the same
+    # on a 480p clip and a 1080p one. Escaping matters: drawtext takes ':' and
+    # '\' as syntax, and a mark like "Astroson111" is fine but an arbitrary one
+    # is not guaranteed to be.
+    safe = text.replace("\\", "\\\\").replace(":", r"\:").replace("'", r"\'")
+    vf = (f"drawtext=fontfile={_MARK_FONT}:text='{safe}'"
+          f":fontcolor=white@0.55:fontsize=h/28:box=1:boxcolor=black@0.28:boxborderw=8"
+          f":x=w-tw-h/36:y=h-th-h/36")
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(path), "-vf", vf,
+             "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+             "-pix_fmt", "yuv420p", "-c:a", "copy", str(out)],
+            capture_output=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        log.error("[watermark] clip %s stamp timed out — keeping the unmarked render", job_id)
+        out.unlink(missing_ok=True)
+        jobs.get(job_id, {}).update(watermark="failed", watermark_error="ffmpeg timeout")
+        return path
+    if r.returncode != 0 or not out.exists() or out.stat().st_size == 0:
+        log.error("[watermark] clip %s stamp FAILED — keeping the unmarked render: %s",
+                  job_id, (r.stderr or b"").decode("utf-8", "replace")[-200:])
+        out.unlink(missing_ok=True)
+        jobs.get(job_id, {}).update(watermark="failed",
+                                    watermark_error="ffmpeg returned non-zero")
+        return path
+    out.replace(path)
+    jobs.get(job_id, {}).update(watermark="stamped", watermark_layers="visible")
+    log.info("[watermark] clip %s stamped (visible only — video cannot hold the embed)",
+             job_id)
+    return path
+
+
 async def run_video(job_id: str, params: dict) -> None:
     """Video GPU-swap lifecycle. Always call as a FastAPI BackgroundTask.
     Holds gpu_lock for the whole render (2–40 min) so Ollama stays evicted."""
@@ -2838,6 +2900,9 @@ async def run_video(job_id: str, params: dict) -> None:
 
                 jobs[job_id]["state"] = "saving"
                 path = await fetch_and_save_video(http, outputs, job_id)
+                # Stamp BEFORE the thumbnail, or the gallery tile shows an
+                # unmarked frame of a marked clip.
+                path = await asyncio.to_thread(maybe_stamp_clip, path, job_id)
                 await asyncio.to_thread(_make_video_thumb, path, job_id)   # middle-frame jpg for the gallery
                 await asyncio.to_thread(_db_insert_video, job_id, params, path)  # record → visible in gallery
                 jobs[job_id].update(state="done",
