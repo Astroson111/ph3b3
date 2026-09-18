@@ -111,7 +111,8 @@ def test_reingesting_a_work_drops_its_vectors(store):
 def test_dropping_a_work_from_the_manifest_drops_its_vectors(store):
     c, ix = store
     ix.build()
-    c.sync_metadata([_work("heb", retrievable=False)])       # 'eng' removed
+    # 'eng' removed on purpose — allow_drop, per the partial-manifest guard.
+    c.sync_metadata([_work("heb", retrievable=False)], allow_drop=True)
     assert ix.stats()["indexed"] == 0
     assert ix.search("in the beginning", k=5) == []
 

@@ -1,0 +1,329 @@
+# ── Thoth Rung 5: Western esoterica ──────────────────────────────────────────
+# NOT YET MERGED into thoth_corpus.yaml. Kept separate so Rungs 1-4 cannot be
+# disturbed by an edit here, and so merging is a deliberate act rather than a
+# side effect of drafting.
+#
+# Every entry below was pinned on 2026-09-18 by:
+#   1. searching archive.org for the work
+#   2. fetching https://archive.org/metadata/<id> for each candidate
+#   3. running thoth.source_policy.archive_item_ok() on it — which refuses
+#      access-restricted items, the printdisabled/inlibrary/internetarchivebooks
+#      lending shelves, and anything not marked NOT_IN_COPYRIGHT (silence included)
+#   4. recording the identifier, the exact _djvu.txt file, its sha1 and its size
+#      from the metadata, so the download can be verified without having been
+#      made yet
+#
+# Requests were serialised 2s apart with a contact address in the User-Agent,
+# per archive.org's own guidance. A 429 would have stopped the run; none occurred.
+#
+# THREE WORKS WERE SOUGHT AND REFUSED, and are dropped rather than recorded as
+# gaps, per the Rung 1 rule:
+#   Key of Solomon (Mathers)      every candidate was a lending or modern edition
+#   Pictorial Key (Waite)         every candidate was access-restricted; the one
+#                                 freely downloadable copy on Gutenberg is
+#                                 de Laurence's plagiarism and is refused by id
+#   Goetia (Mathers/Crowley)      same as Key of Solomon
+#
+# EDITIONS DIFFER FROM THE BRIEF in three places, recorded rather than smoothed:
+# the brief named Westcott 1887, Mathers 1887 and Freake 1651; what is actually
+# available and clean is 1893, 1912 and Whitehead 1898. The last is not a
+# reprint but a different edition, and is flagged as such below.
+
+works:
+  - id: euclid-heath-1908
+    title: "The Thirteen Books of Euclid's Elements — Vol. I (Books I-II)"
+    tradition: Greek mathematics
+    language_of_origin: Koine Greek
+    translation:
+      translator: "Thomas L. Heath"
+      year: 1908
+      title: "The Thirteen Books of Euclid's Elements — Vol. I (Books I-II)"
+    address: {section_label: book, unit_label: proposition, has_books: true}
+    provenance:
+      license: public-domain
+      license_note: >-
+        archive.org item thirteenbookseu02heibgoog reports possible-copyright-status
+        NOT_IN_COPYRIGHT and sits in an open collection, checked 2026-09-18.
+      completeness: complete
+      vendorable: true
+      text_source: ocr
+      text_source_note: >-
+        Optical scan of a printed book, not a digital edition. Measured on these
+        files: roughly 1% of word tokens carry broken capitalisation, proper
+        names are the commonest casualty (Mead's "Hermas" appears as "Hennas"
+        and "Hernias", "Irenaeus" as "Irenseus"), and end-of-line hyphenation is
+        rejoined by the adapter. Quotations are verbatim from what was stored,
+        and what was stored is a machine's reading of a photograph — so a
+        misspelt name in a quotation is the scan's error, not the author's.
+    source:
+      url: "https://archive.org/download/thirteenbookseu02heibgoog/thirteenbookseu02heibgoog_djvu.txt"
+      adapter: archive_txt
+      sha1: "7650274af94e6d40f029d40486a91558956d213e"
+      size: 1272730
+      note: >-
+        VOLUME I ONLY - Books I-II. I pinned this before checking which books it
+        held: "Book XIII" appears in it 4 times, all in the contents and
+        cross-references within the first quarter of the file, while "Book I"
+        appears 125 times throughout. Heath is three volumes and the Platonic
+        solids are in the third. See euclid-heath-1908-v3 below, which is the one
+        the Pythagoras cross-check actually needs.
+    currents:
+      - {current: "Sacred geometry", standing: foundational, note: "Book XIII constructs the five regular solids - the same 4/6/8/12/20 Pythagoras derives from coordinates, so claims from this work are checkable against code rather than only citable."}
+      - {current: "Hermeticism", standing: received}
+  - id: hermetica-mead-1906
+    title: "Thrice-Greatest Hermes"
+    tradition: Hermeticism
+    language_of_origin: Koine Greek
+    translation:
+      translator: "G. R. S. Mead"
+      year: 1906
+      title: "Thrice-Greatest Hermes"
+    address: {section_label: tractate, unit_label: section, has_books: true}
+    provenance:
+      license: public-domain
+      license_note: >-
+        archive.org item thricegreatesth00hermgoog reports possible-copyright-status
+        NOT_IN_COPYRIGHT and sits in an open collection, checked 2026-09-18.
+      completeness: complete
+      vendorable: true
+      text_source: ocr
+      text_source_note: >-
+        Optical scan of a printed book, not a digital edition. Measured on these
+        files: roughly 1% of word tokens carry broken capitalisation, proper
+        names are the commonest casualty (Mead's "Hermas" appears as "Hennas"
+        and "Hernias", "Irenaeus" as "Irenseus"), and end-of-line hyphenation is
+        rejoined by the adapter. Quotations are verbatim from what was stored,
+        and what was stored is a machine's reading of a photograph — so a
+        misspelt name in a quotation is the scan's error, not the author's.
+    source:
+      url: "https://archive.org/download/thricegreatesth00hermgoog/thricegreatesth00hermgoog_djvu.txt"
+      adapter: archive_txt
+      sha1: "4f1b8cd62c93e6b581b8da62dcf5bd2715db2f32"
+      size: 632839
+      note: >-
+        Mead's three-volume study; the Corpus Hermeticum proper is in volume II.
+    currents:
+      - {current: "Hermeticism", standing: foundational}
+      - {current: "Golden Dawn", standing: formative, note: "Read through Mead and Mathers rather than from the Greek."}
+      - {current: "Theosophy", standing: received, note: "Cited selectively and reinterpreted."}
+  - id: sefer-yetzirah-westcott-1893
+    title: "Sepher Yetzirah - The Book of Formation"
+    tradition: Judaism
+    language_of_origin: Hebrew
+    translation:
+      translator: "W. Wynn Westcott"
+      year: 1893
+      title: "Sepher Yetzirah"
+    address: {section_label: chapter, unit_label: verse, has_books: false}
+    provenance:
+      license: public-domain
+      license_note: >-
+        archive.org item sepheryetzirahb00rittgoog reports possible-copyright-status
+        NOT_IN_COPYRIGHT and sits in an open collection, checked 2026-09-18.
+      completeness: complete
+      vendorable: true
+      text_source: ocr
+      text_source_note: >-
+        Optical scan of a printed book, not a digital edition. Measured on these
+        files: roughly 1% of word tokens carry broken capitalisation, proper
+        names are the commonest casualty (Mead's "Hermas" appears as "Hennas"
+        and "Hernias", "Irenaeus" as "Irenseus"), and end-of-line hyphenation is
+        rejoined by the adapter. Quotations are verbatim from what was stored,
+        and what was stored is a machine's reading of a photograph — so a
+        misspelt name in a quotation is the scan's error, not the author's.
+    source:
+      url: "https://archive.org/download/sepheryetzirahb00rittgoog/sepheryetzirahb00rittgoog_djvu.txt"
+      adapter: archive_txt
+      sha1: "e793bbc443c359f28149b39aecec77bda8832876"
+      size: 68217
+      note: >-
+        1893 printing, not the 1887 the brief named. Same translator.
+    currents:
+      - {current: "Hermeticism", standing: foundational}
+      - {current: "Golden Dawn", standing: foundational, note: "Westcott was a founder; this translation was made for that use."}
+      - {current: "Jewish mysticism", standing: contested, note: "An occultist's rendering, not a scholarly one, and not how the text is read in its own tradition. Recorded because the Western reception IS this translation."}
+  - id: kabbalah-unveiled-1912
+    title: "Kabbala Denudata - The Kabbalah Unveiled"
+    tradition: Kabbalah
+    language_of_origin: Latin and Aramaic
+    translation:
+      translator: "S. L. MacGregor Mathers"
+      year: 1912
+      title: "The Kabbalah Unveiled"
+    address: {section_label: book, unit_label: section, has_books: true}
+    provenance:
+      license: public-domain
+      license_note: >-
+        archive.org item kabbaladenudata00rosegoog reports possible-copyright-status
+        NOT_IN_COPYRIGHT and sits in an open collection, checked 2026-09-18.
+      completeness: complete
+      vendorable: true
+      text_source: ocr
+      text_source_note: >-
+        Optical scan of a printed book, not a digital edition. Measured on these
+        files: roughly 1% of word tokens carry broken capitalisation, proper
+        names are the commonest casualty (Mead's "Hermas" appears as "Hennas"
+        and "Hernias", "Irenaeus" as "Irenseus"), and end-of-line hyphenation is
+        rejoined by the adapter. Quotations are verbatim from what was stored,
+        and what was stored is a machine's reading of a photograph — so a
+        misspelt name in a quotation is the scan's error, not the author's.
+    source:
+      url: "https://archive.org/download/kabbaladenudata00rosegoog/kabbaladenudata00rosegoog_djvu.txt"
+      adapter: archive_txt
+      sha1: "29041bca6d8dce56309a04a62c66c856c7ed9ac6"
+      size: 660331
+      note: >-
+        1912 printing of Mathers' 1887 translation.
+    currents:
+      - {current: "Hermeticism", standing: received}
+      - {current: "Golden Dawn", standing: foundational}
+      - {current: "Jewish mysticism", standing: contested, note: "Mathers works from Knorr von Rosenroth's Latin, not the Aramaic."}
+  - id: agrippa-whitehead-1898
+    title: "Three Books of Occult Philosophy — Book One: Natural Magic (Whitehead ed.)"
+    tradition: Western esotericism
+    language_of_origin: Latin
+    translation:
+      translator: "Willis F. Whitehead"
+      year: 1898
+      title: "Three Books of Occult Philosophy — Book One: Natural Magic (Whitehead ed.)"
+    address: {section_label: book, unit_label: chapter, has_books: true}
+    provenance:
+      license: public-domain
+      license_note: >-
+        archive.org item threebooksoccul00whitgoog reports possible-copyright-status
+        NOT_IN_COPYRIGHT and sits in an open collection, checked 2026-09-18.
+      completeness: complete
+      vendorable: true
+      text_source: ocr
+      text_source_note: >-
+        Optical scan of a printed book, not a digital edition. Measured on these
+        files: roughly 1% of word tokens carry broken capitalisation, proper
+        names are the commonest casualty (Mead's "Hermas" appears as "Hennas"
+        and "Hernias", "Irenaeus" as "Irenseus"), and end-of-line hyphenation is
+        rejoined by the adapter. Quotations are verbatim from what was stored,
+        and what was stored is a machine's reading of a photograph — so a
+        misspelt name in a quotation is the scan's error, not the author's.
+    source:
+      url: "https://archive.org/download/threebooksoccul00whitgoog/threebooksoccul00whitgoog_djvu.txt"
+      adapter: archive_txt
+      sha1: "c111337aaf1dd0a0e70a1b904a6054345c0895c3"
+      size: 610194
+      note: >-
+        PROVEN Book One only, from the text: its own title page reads "SEVENTY-FOUR
+        CHAPTERS ON NATURAL MAGIC" and the body runs chapters I-LXXIV with a single
+        reset; "BOOK ONE" appears twice and Books Two and Three never. Agrippa's
+        Book One IS Natural Magic and has exactly 74 chapters. The volume title
+        says "Three Books" because that is the name of the WORK, not the contents
+        of this edition - ingesting it under that title would have made every
+        citation claim a scope it does not have. It also carries Whitehead's own
+        notes and "other original and selected matter", so a citation must be able
+        to distinguish Agrippa from his editor.
+    currents:
+      - {current: "Western ceremonial magic", standing: foundational}
+      - {current: "Hermeticism", standing: received}
+  - id: paracelsus-waite-1894
+    title: "The Hermetic and Alchemical Writings of Paracelsus"
+    tradition: Alchemy
+    language_of_origin: Latin and German
+    translation:
+      translator: "A. E. Waite"
+      year: 1894
+      title: "The Hermetic and Alchemical Writings of Paracelsus"
+    address: {section_label: volume, unit_label: section, has_books: true}
+    provenance:
+      license: public-domain
+      license_note: >-
+        archive.org item hermeticandalch00paragoog reports possible-copyright-status
+        NOT_IN_COPYRIGHT and sits in an open collection, checked 2026-09-18.
+      completeness: complete
+      vendorable: true
+      text_source: ocr
+      text_source_note: >-
+        Optical scan of a printed book, not a digital edition. Measured on these
+        files: roughly 1% of word tokens carry broken capitalisation, proper
+        names are the commonest casualty (Mead's "Hermas" appears as "Hennas"
+        and "Hernias", "Irenaeus" as "Irenseus"), and end-of-line hyphenation is
+        rejoined by the adapter. Quotations are verbatim from what was stored,
+        and what was stored is a machine's reading of a photograph — so a
+        misspelt name in a quotation is the scan's error, not the author's.
+    source:
+      url: "https://archive.org/download/hermeticandalch00paragoog/hermeticandalch00paragoog_djvu.txt"
+      adapter: archive_txt
+      sha1: "5369a853046e4caca31d710577ee60d29a064cb9"
+      size: 1253484
+      note: >-
+        Exactly the edition the brief specified.
+    currents:
+      - {current: "Alchemy", standing: foundational}
+      - {current: "Hermeticism", standing: received}
+  - id: euclid-heath-1908-v2
+    title: "The Thirteen Books of Euclid's Elements — Vol. II (Books III-IX)"
+    tradition: Greek mathematics
+    language_of_origin: Koine Greek
+    translation:
+      translator: "Thomas L. Heath"
+      year: 1908
+      title: "The Thirteen Books of Euclid's Elements"
+    address: {section_label: book, unit_label: proposition, has_books: true}
+    provenance:
+      license: public-domain
+      license_note: >-
+        archive.org item thirteenbookseu00heibgoog reports possible-copyright-status
+        NOT_IN_COPYRIGHT and sits in an open collection, checked 2026-09-18.
+      completeness: complete
+      vendorable: true
+      text_source: ocr
+      text_source_note: >-
+        Optical scan of a printed book, not a digital edition. Measured on these
+        files: roughly 1% of word tokens carry broken capitalisation, proper
+        names are the commonest casualty (Mead's "Hermas" appears as "Hennas"
+        and "Hernias", "Irenaeus" as "Irenseus"), and end-of-line hyphenation is
+        rejoined by the adapter. Quotations are verbatim from what was stored,
+        and what was stored is a machine's reading of a photograph — so a
+        misspelt name in a quotation is the scan's error, not the author's.
+    source:
+      url: "https://archive.org/download/thirteenbookseu00heibgoog/thirteenbookseu00heibgoog_djvu.txt"
+      adapter: archive_txt
+      sha1: "33c3434bb4b017ce16ac3c757447dafc146a58da"
+      size: 1065570
+      note: >-
+        Body-book counts confirm Books V-VIII dominate this volume.
+    currents:
+      - {current: "Sacred geometry", standing: received}
+
+  - id: euclid-heath-1908-v3
+    title: "The Thirteen Books of Euclid's Elements — Vol. III (Books X-XIII)"
+    tradition: Greek mathematics
+    language_of_origin: Koine Greek
+    translation:
+      translator: "Thomas L. Heath"
+      year: 1908
+      title: "The Thirteen Books of Euclid's Elements"
+    address: {section_label: book, unit_label: proposition, has_books: true}
+    provenance:
+      license: public-domain
+      license_note: >-
+        archive.org item thirteenbookseu01heibgoog reports possible-copyright-status
+        NOT_IN_COPYRIGHT and sits in an open collection, checked 2026-09-18.
+      completeness: complete
+      vendorable: true
+      text_source: ocr
+      text_source_note: >-
+        Optical scan of a printed book, not a digital edition. Measured on these
+        files: roughly 1% of word tokens carry broken capitalisation, proper
+        names are the commonest casualty (Mead's "Hermas" appears as "Hennas"
+        and "Hernias", "Irenaeus" as "Irenseus"), and end-of-line hyphenation is
+        rejoined by the adapter. Quotations are verbatim from what was stored,
+        and what was stored is a machine's reading of a photograph — so a
+        misspelt name in a quotation is the scan's error, not the author's.
+    source:
+      url: "https://archive.org/download/thirteenbookseu01heibgoog/thirteenbookseu01heibgoog_djvu.txt"
+      adapter: archive_txt
+      sha1: "ac56f402c8af4d7458d4404a0a1789e6bc63745f"
+      size: 1240967
+      note: >-
+        THE VOLUME THE PYTHAGORAS CROSS-CHECK NEEDS. Book XIII propositions 13-18 construct the five regular solids and its body carries all five by name - pyramid 462, cube 94, icosahedron 88, dodecahedron 67, octahedron 34. Verified present in the body, not only the contents.
+    currents:
+      - {current: "Sacred geometry", standing: foundational, note: "Book XIII constructs the five regular solids - the same 4/6/8/12/20 Pythagoras derives from coordinates, so claims from this volume are checkable against code rather than only citable."}
+      - {current: "Hermeticism", standing: received}
+

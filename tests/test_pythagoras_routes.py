@@ -106,3 +106,38 @@ def test_every_pythagoras_route_requires_a_human():
     for path in ("/pythagoras/render", "/pythagoras/frames", "/pythagoras/compose"):
         r = client.post(path, json={"figure": "vesica"})
         assert r.status_code in (401, 403), f"{path} answered {r.status_code}"
+
+
+# ── the panel card is folded away by default ─────────────────────────────────
+# It is an occasional tool in a pane that gets scrolled past constantly, so it
+# earns its height only when opened.
+
+PANEL = (REPO / "static" / "panel.html").read_text(encoding="utf-8")
+
+
+def test_the_pythagoras_card_is_collapsed_by_default():
+    seg = PANEL[PANEL.index('class="card pyth-card"'):]
+    seg = seg[:seg.index("</details>")]
+    assert '<details class="pyth-fold">' in seg
+    assert "<summary" in seg
+    # An `open` attribute would defeat the point.
+    assert '<details class="pyth-fold" open' not in PANEL
+
+
+def test_the_controls_and_preview_live_inside_the_fold():
+    """Collapsing only the title would save no space at all."""
+    start = PANEL.index('<details class="pyth-fold">')
+    end = PANEL.index("</details>", start)
+    inside = PANEL[start:end]
+    for control in ('id="pythFigure"', 'id="pythPreview"', 'id="pythSvgBtn"',
+                    'id="pythFramesBtn"', 'id="pythParams"'):
+        assert control in inside, f"{control} is outside the fold"
+
+
+def test_nothing_renders_until_the_card_is_opened():
+    """A collapsed card that still POSTs a figure on every page load is not
+    actually free — the comment claims it costs nothing while shut, so it has
+    to be true."""
+    assert "buildParams(); draw();" not in PANEL, \
+        "the preview still renders on page load"
+    assert 'fold.addEventListener("toggle"' in PANEL

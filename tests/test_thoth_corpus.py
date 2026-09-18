@@ -273,7 +273,11 @@ def test_a_work_removed_from_the_manifest_is_dropped_from_the_store(corpus, work
     assert corpus.passage("gilgamesh", 11, 1) is not None
     assert corpus.canonicity_of("gilgamesh")
 
-    corpus.sync_metadata([w for w in works if w.id != "gilgamesh"])
+    # allow_drop: this test IS the deliberate-removal case the flag exists for.
+    # Without it the partial-manifest guard refuses, which is the point of the
+    # guard — a caller that means to drop a work has to say so.
+    corpus.sync_metadata([w for w in works if w.id != "gilgamesh"],
+                         allow_drop=True)
 
     assert corpus.passage("gilgamesh", 11, 1) is None
     assert corpus.canonicity_of("gilgamesh") == []

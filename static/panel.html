@@ -986,6 +986,10 @@
       border-radius:5px; padding:.2rem .5rem; font-size:.74rem; cursor:pointer; }
     .sp-act:hover { border-color:var(--magenta,#c6f); }
     .sp-empty { padding:.8rem 0; font-size:.82rem; opacity:.55; }
+    .pyth-card { padding-bottom:.35rem; }
+    .pyth-fold > summary { cursor:pointer; list-style:none; margin-bottom:0; }
+    .pyth-fold > summary::-webkit-details-marker { display:none; }
+    .pyth-fold[open] > summary { margin-bottom:.6rem; }
     .pyth-row { display:flex; gap:.6rem; flex-wrap:wrap; align-items:flex-end; margin:.5rem 0; }
     .pyth-row .morph-adv-lbl { flex:1 1 7rem; }
     .pyth-preview { margin:.6rem 0; min-height:180px; display:flex; align-items:center;
@@ -1817,8 +1821,16 @@
     <!-- Pythagoras: construction, not generation. No GPU, no queue, no lock —
          the preview is vector and redraws on every change, which is why there is
          no Generate button here. -->
-    <div class="card">
-      <div class="card-title">Pythagoras <span class="badge" style="opacity:.7">geometry</span></div>
+    <div class="card pyth-card">
+      <!-- Collapsed by default: this is an occasional tool sitting in a pane you
+           scroll past constantly, so it earns its space only when opened. The
+           live preview is deliberately INSIDE the fold — it redraws on open, and
+           costs nothing while shut. -->
+      <details class="pyth-fold">
+        <summary class="card-title morph-adv-sum">
+          <span class="morph-adv-chev">&#9658;</span>
+          Pythagoras <span class="badge" style="opacity:.7">geometry</span>
+        </summary>
       <div class="pyth-row">
         <label class="morph-adv-lbl" style="flex:1">Figure
           <select class="morph-adv-in" id="pythFigure"></select>
@@ -1845,6 +1857,7 @@
         <button class="morph-gen-btn pyth-btn" id="pythPngBtn" type="button">Export PNG</button>
         <button class="morph-gen-btn pyth-btn" id="pythFramesBtn" type="button">Frames</button>
       </div>
+      </details>
     </div>
 
     <div class="card">
@@ -1878,8 +1891,17 @@
     <div id="morphEditMode" style="display:none">
       <div class="card">
         <div class="card-title" data-i18n="morpheus.edit.title">Edit — img2img</div>
-        <div id="editClipNote" class="morph-vid-warn" style="display:none" data-i18n="morpheus.edit.clipnote">
-          Clip editing isn't supported yet — Edit works on stills only. Pick an image, or drop one below.
+        <!-- Mode here is a MIRROR of Generate's selector, not a second copy of
+             the list: the options are cloned from #morphModeSel at load and the
+             value is two-way bound, so a mode added there appears here with no
+             second edit. -->
+        <div class="sr">
+          <span class="sr-l" data-i18n="morpheus.modelbl">Mode</span>
+          <select id="editModeSel" class="morph-eng-sel"></select>
+        </div>
+        <div id="editClipNote" class="morph-vid-warn" style="display:none">
+          Clip from this image — it becomes the first frame, and the prompt below
+          describes the <b>motion</b>. Your image is safety-checked before anything is queued.
         </div>
         <div class="edit-drop" id="editDrop" tabindex="0" role="button" aria-label="Upload an image">
           <input type="file" id="editFile" accept="image/png,image/jpeg,image/webp" hidden>
@@ -1935,7 +1957,14 @@
         <div id="editOutputEmpty" class="morph-output-empty" data-i18n="morpheus.edit.empty">Upload an image and hit Edit.</div>
         <div id="editBA" class="edit-ba" style="display:none">
           <figure class="edit-ba-fig"><img id="editBefore" class="edit-ba-img" alt="Before"><figcaption data-i18n="morpheus.before">Before</figcaption></figure>
-          <figure class="edit-ba-fig"><img id="editAfter" class="edit-ba-img" alt="After"><figcaption data-i18n="morpheus.after">After</figcaption></figure>
+          <figure class="edit-ba-fig">
+            <img id="editAfter" class="edit-ba-img" alt="After">
+            <!-- Clip output. An <img> cannot show an mp4, so the After slot has
+                 both and shows whichever the finished job actually produced. -->
+            <video id="editAfterVid" class="edit-ba-img" style="display:none"
+                   controls loop muted playsinline></video>
+            <figcaption data-i18n="morpheus.after">After</figcaption>
+          </figure>
         </div>
         <div id="editDlRow" class="morph-dl-row" style="display:none">
           <select id="editFmtSel" class="morph-dl-sel">
@@ -5760,11 +5789,46 @@ document.querySelectorAll('.morph-mode-tab').forEach(t => t.addEventListener('cl
   const mode = t.dataset.mode;
   document.getElementById('morphGenMode').style.display  = mode === 'gen'  ? '' : 'none';
   document.getElementById('morphEditMode').style.display = mode === 'edit' ? '' : 'none';
-  if (mode === 'edit') {
-    const clip = window.__morphClipSelected && window.__morphClipSelected();
-    document.getElementById('editClipNote').style.display = clip ? '' : 'none';
-  }
+  if (mode === 'edit') window.__editSyncMode && window.__editSyncMode();
 }));
+
+// ── One mode list, two places to see it ──────────────────────────────────────
+// Edit's selector is populated FROM Generate's and kept in lock-step both ways.
+// Cloning the options at runtime rather than duplicating the markup is what
+// makes "add a mode once" true — there is no second list to forget.
+(function () {
+  const gen  = document.getElementById('morphModeSel');
+  const edit = document.getElementById('editModeSel');
+  if (!gen || !edit) return;
+
+  function mirror() {
+    edit.innerHTML = '';
+    Array.from(gen.options).forEach(o => {
+      const c = document.createElement('option');
+      c.value = o.value; c.textContent = o.textContent;
+      edit.appendChild(c);
+    });
+    edit.value = gen.value;
+    paint();
+  }
+  function paint() {
+    const clip = edit.value !== 'image';
+    const note = document.getElementById('editClipNote');
+    const btn  = document.getElementById('editRunBtn');
+    if (note) note.style.display = clip ? '' : 'none';
+    if (btn)  btn.innerHTML = clip ? '✦ Make clip from image' : '✎ Edit image';
+    const st = document.querySelector('.edit-strength');
+    if (st) st.style.display = clip ? 'none' : '';   // strength is img2img-only
+  }
+  // Two-way: changing either one changes the other. Same state, two views.
+  gen.addEventListener('change',  () => { edit.value = gen.value; paint(); });
+  edit.addEventListener('change', () => { gen.value = edit.value;
+                                          gen.dispatchEvent(new Event('change')); paint(); });
+  window.__editSyncMode = () => { edit.value = gen.value; paint(); };
+  window.__editIsClip   = () => edit.value !== 'image';
+  window.__editPreset   = () => edit.value;
+  mirror();
+})();
 
 // ── Morpheus Edit (img2img) ───────────────────────────────────────────────────
 (function () {
@@ -5785,6 +5849,7 @@ document.querySelectorAll('.morph-mode-tab').forEach(t => t.addEventListener('cl
   const baEl        = document.getElementById('editBA');
   const beforeImg   = document.getElementById('editBefore');
   const afterImg    = document.getElementById('editAfter');
+  const afterVid    = document.getElementById('editAfterVid');
   const dlRow       = document.getElementById('editDlRow');
   const dlBtn       = document.getElementById('editDlBtn');
   const fmtSel      = document.getElementById('editFmtSel');
@@ -5843,6 +5908,36 @@ document.querySelectorAll('.morph-mode-tab').forEach(t => t.addEventListener('cl
 
   function stopPoll() { if (pollId) { clearInterval(pollId); pollId = null; } }
 
+  // Clip jobs are NOT image jobs. They live at /morpheus/jobs/{id}, they finish
+  // as an mp4 at /morpheus/video/file/{id}, and an <img> cannot display one.
+  // Reusing the still poll here showed nothing and downloaded nothing.
+  let clipMode = false;
+
+  async function pollClip(jobId) {
+    try {
+      const d = await fetch('/morpheus/jobs/' + jobId).then(r => r.json());
+      setPill(d.state);
+      if (d.state === 'done') {
+        stopPoll();
+        outEmpty.style.display = 'none';
+        baEl.style.display = 'grid';
+        beforeImg.src = previewURL;                 // the conditioning frame
+        afterImg.style.display = 'none';
+        afterVid.style.display = '';
+        afterVid.src = '/morpheus/video/file/' + jobId + '?t=' + Date.now();
+        currentJobId = jobId;
+        fmtSel.style.display = 'none';              // an mp4 has one format
+        dlRow.style.display = '';
+        runBtn.disabled = false;
+      } else if (d.state === 'error' || d.state === 'cancelled') {
+        stopPoll(); runBtn.disabled = false;
+        const note = document.getElementById('editClipNote');
+        if (note) { note.textContent = d.error || 'The clip did not finish.';
+                    note.style.display = ''; }
+      }
+    } catch (e) { console.warn('[edit] clip poll error:', e); }
+  }
+
   async function poll(jobId) {
     try {
       const data = await fetch('/image/status/' + jobId).then(r => r.json());
@@ -5852,8 +5947,12 @@ document.querySelectorAll('.morph-mode-tab').forEach(t => t.addEventListener('cl
         outEmpty.style.display = 'none';
         baEl.style.display = 'grid';
         beforeImg.src = previewURL;
+        afterVid.style.display = 'none';
+        afterVid.removeAttribute('src');            // stop a previous clip playing
+        afterImg.style.display = '';
         afterImg.src = '/image/file/' + jobId + '?t=' + Date.now();
         currentJobId = jobId;
+        fmtSel.style.display = '';
         dlRow.style.display = '';
         runBtn.disabled = false;
       } else if (data.state === 'error') {
@@ -5866,6 +5965,43 @@ document.querySelectorAll('.morph-mode-tab').forEach(t => t.addEventListener('cl
     if (!uploadId) { drop.focus(); return; }
     const prompt = promptEl.value.trim();
     if (!prompt) { promptEl.focus(); return; }
+
+    // Clip mode: the staged upload becomes the conditioning frame and the
+    // prompt describes motion. Same upload_id, different endpoint — the server
+    // safety-checks the image before it queues anything.
+    if (window.__editIsClip && window.__editIsClip()) {
+      runBtn.disabled = true; setPill('queued');
+      try {
+        const res = await fetch('/morpheus/video', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            positive: prompt,
+            negative_prompt: negEl.value.trim(),
+            preset: window.__editPreset(),
+            source_upload_id: uploadId,
+            seed: seedEl.value.trim() !== '' ? parseInt(seedEl.value) : -1,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          // Refusals and "could not run" say different things and must not be
+          // collapsed into one red pill.
+          setPill('error'); runBtn.disabled = false;
+          const note = document.getElementById('editClipNote');
+          if (note) { note.textContent = data.detail || 'That clip could not be started.';
+                      note.style.display = ''; }
+          return;
+        }
+        clipMode = true;
+        stateCard.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+        stopPoll(); pollId = setInterval(() => pollClip(data.job_id), 1500);
+      } catch (e) {
+        console.warn('[edit] clip error:', e); setPill('error'); runBtn.disabled = false;
+      }
+      return;
+    }
+
+    clipMode = false;
     const payload = {
       upload_id: uploadId,
       prompt,
@@ -5888,7 +6024,11 @@ document.querySelectorAll('.morph-mode-tab').forEach(t => t.addEventListener('cl
 
   runBtn.addEventListener('click', run);
   dlBtn.addEventListener('click', () => {
-    if (currentJobId) window.location.href = `/image/file/${currentJobId}?download=1&format=${fmtSel.value}`;
+    if (!currentJobId) return;
+    // A clip downloads from the video route; /image/file has no mp4 to give.
+    window.location.href = clipMode
+      ? `/morpheus/video/file/${currentJobId}?download=1`
+      : `/image/file/${currentJobId}?download=1&format=${fmtSel.value}`;
   });
 })();
 
@@ -6614,7 +6754,16 @@ if ('serviceWorker' in navigator) {
     fill(solid, j.solids, "icosahedron");
     fill($("pythPalette"), j.palettes, "gold");
     fill($("pythBg"), j.backgrounds, "transparent");
-    buildParams(); draw();
+    buildParams();
+    // Draw on FIRST OPEN, not on page load. The card is collapsed by default,
+    // so rendering here would POST a figure nobody asked to see, every reload.
+    const fold = document.querySelector(".pyth-fold");
+    if (!fold || fold.open) { draw(); return; }
+    fold.addEventListener("toggle", function once() {
+      if (!fold.open) return;
+      fold.removeEventListener("toggle", once);
+      draw();
+    });
   }).catch(() => { err.textContent = "Pythagoras is not answering."; err.style.display = ""; });
 })();
 </script>

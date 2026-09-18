@@ -83,15 +83,46 @@ def _canon_rows(raw: list | None, where: str) -> tuple[CanonStatus, ...]:
         out.append(CanonStatus(tradition=str(r["tradition"]),
                                status=str(r["status"]),
                                note=str(r.get("note", ""))))
-    if not out:
-        raise ValueError(f"{where}: no canonicity rows")
+    # Emptiness is legal HERE and refused on the Work: a Rung 5 entry supplies
+    # `currents` instead, and Work.__post_init__ is the single place that
+    # decides whether a work has stated its standing at all. Raising here would
+    # reject esoterica before that check ever ran.
     return tuple(out)
+
+
+def _check_source_policy(d: dict, wid: str) -> None:
+    """Refuse a blocked host or a tainted edition AT LOAD, before any fetch.
+
+    Deliberately here rather than in the downloader: by the time something is
+    downloading it has already been treated as legitimate, and the whole point
+    is that these never get that far. A refusal raises, so the manifest loader
+    reports it as a rejected entry like any other validation failure.
+    """
+    from .source_policy import check_source
+    check_source(str((d.get("source") or {}).get("url", "")), f"work {wid!r}")
+
+
+def _current_rows(raw: list | None) -> tuple:
+    """Rung 5's currents. Unlike canonicity, ABSENCE IS LEGAL.
+
+    Every scriptural work has a canonicity position by definition, so no rows
+    there is a manifest bug and _canon_rows raises. An esoteric work may simply
+    have no current that claims it, and a fabricated 'foundational to
+    Hermeticism' row would be worse than an empty list.
+    """
+    from .schema import CurrentPosition
+    return tuple(
+        CurrentPosition(current=str(r["current"]),
+                        standing=str(r["standing"]),
+                        note=str(r.get("note", "")))
+        for r in raw or [])
 
 
 def _work_from_dict(d: dict) -> Work:
     """Build one validated Work from a manifest entry. Raises on anything the
     schema refuses — the caller isolates the failure."""
     wid = str(d.get("id", "")).strip()
+    _check_source_policy(d, wid)
     tr = d.get("translation")
     translation = None
     if tr:
@@ -113,12 +144,15 @@ def _work_from_dict(d: dict) -> Work:
                                b.get("canonicity"),
                                f"work {wid!r} book {b.get('book')!r}"))
             for b in d.get("book_canonicity") or []),
+        currents=_current_rows(d.get("currents")),
         provenance=Provenance(
             license=str(prov["license"]),
             license_note=str(prov["license_note"]),
             completeness=str(prov["completeness"]),
             vendorable=bool(prov["vendorable"]),
-            completeness_note=str(prov.get("completeness_note", ""))),
+            completeness_note=str(prov.get("completeness_note", "")),
+            text_source=str(prov.get("text_source", "digital")),
+            text_source_note=str(prov.get("text_source_note", ""))),
         address=AddressScheme(
             section_label=str(addr["section_label"]),
             unit_label=str(addr["unit_label"]),
@@ -127,6 +161,8 @@ def _work_from_dict(d: dict) -> Work:
         source=SourceSpec(url=str(src["url"]), adapter=str(src["adapter"]),
                           sha256=str(src.get("sha256", "")),
                           note=str(src.get("note", "")),
+                          sha1=str(src.get("sha1", "")),
+                          size=int(src.get("size", 0) or 0),
                           subset=str(src.get("subset", ""))),
         translation=translation,
         cited_by=tuple(Citation(source=str(c["source"]), note=str(c.get("note", "")))
@@ -186,6 +222,8 @@ CREATE TABLE IF NOT EXISTS works (
     vendorable         INTEGER NOT NULL,
     completeness       TEXT NOT NULL,
     completeness_note  TEXT,
+    text_source        TEXT NOT NULL DEFAULT 'digital',
+    text_source_note   TEXT,
     retrievable        INTEGER NOT NULL,
     retrievable_note   TEXT,
     scholarship_note   TEXT,
@@ -212,6 +250,19 @@ CREATE TABLE IF NOT EXISTS canonicity (
 );
 CREATE INDEX IF NOT EXISTS idx_canon_work ON canonicity(work_id);
 CREATE INDEX IF NOT EXISTS idx_canon_trad ON canonicity(tradition, status);
+
+-- Rung 5. A peer of canonicity, not a column on it: a work can carry both
+-- (the I Ching is scripture to some traditions and a working text to Western
+-- occultists), and one table pretending to be the other would lose whichever
+-- question it was not shaped for.
+CREATE TABLE IF NOT EXISTS currents (
+    work_id  TEXT NOT NULL,
+    current  TEXT NOT NULL,
+    standing TEXT NOT NULL,
+    note     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_current_work ON currents(work_id);
+CREATE INDEX IF NOT EXISTS idx_current_name ON currents(current, standing);
 
 CREATE TABLE IF NOT EXISTS citations (
     work_id TEXT NOT NULL,
@@ -312,7 +363,7 @@ class Corpus:
 
     # ── metadata ─────────────────────────────────────────────────────────────
 
-    def sync_metadata(self, works: list[Work]) -> int:
+    def sync_metadata(self, works: list[Work], *, allow_drop: bool = False) -> int:
         """Materialise work metadata from the manifest. Passages of works that
         are STILL in the manifest are untouched.
 
@@ -329,6 +380,35 @@ class Corpus:
         """
         cur = self._db.cursor()
         keep = {w.id for w in works}
+
+        # ── the partial-manifest guard ───────────────────────────────────────
+        # Dropping a work is CORRECT when the manifest really no longer lists it
+        # (Astro's 2026-09-13 ruling: the manifest describes the corpus that
+        # exists). It is a disaster when the caller simply passed a subset.
+        #
+        # Those two cases are indistinguishable from inside this method, so it
+        # stops and makes the caller say which one it is. On 2026-09-18 an ingest
+        # script called this with only the 8 Rung 5 works and silently deleted 15
+        # works and 103,156 passages; it was recoverable only because the source
+        # cache happened to be intact.
+        #
+        # The failure mode that matters is that deletion is SILENT and looks like
+        # success, so the refusal names the works and the passage count — the
+        # cost, not just the fact.
+        doomed = [(r[0], r[1] or 0) for r in cur.execute(
+            "SELECT id, COALESCE(passage_count, 0) FROM works")
+            if r[0] not in keep]
+        if doomed and not allow_drop:
+            lost = sum(n for _i, n in doomed)
+            names = ", ".join(i for i, _n in sorted(doomed))
+            raise ValueError(
+                f"sync_metadata would drop {len(doomed)} work(s) and {lost:,} "
+                f"passages that are in the store but not in the {len(works)} "
+                f"work(s) you passed: {names}.\n"
+                f"If the manifest really no longer lists them, say so with "
+                f"allow_drop=True. If you meant to sync only part of the corpus, "
+                f"load every manifest and pass the union — this method takes the "
+                f"WHOLE corpus, not a slice of it.")
         stale = [r[0] for r in cur.execute("SELECT id FROM works").fetchall()
                  if r[0] not in keep]
         for wid in stale:
@@ -346,11 +426,12 @@ class Corpus:
                 INSERT INTO works (id, title, tradition, language_of_origin,
                     translator, translation_year, translation_title,
                     license, license_note, vendorable, completeness,
-                    completeness_note, retrievable, retrievable_note,
+                    completeness_note, text_source, text_source_note,
+                    retrievable, retrievable_note,
                     scholarship_note, section_label, unit_label, has_books,
                     section_style, source_url, source_adapter, source_sha256,
                     ingested, ingest_note, passage_count)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title, tradition=excluded.tradition,
                     language_of_origin=excluded.language_of_origin,
@@ -358,6 +439,8 @@ class Corpus:
                     translation_year=excluded.translation_year,
                     translation_title=excluded.translation_title,
                     license=excluded.license, license_note=excluded.license_note,
+                    text_source=excluded.text_source,
+                    text_source_note=excluded.text_source_note,
                     vendorable=excluded.vendorable,
                     completeness=excluded.completeness,
                     completeness_note=excluded.completeness_note,
@@ -379,7 +462,9 @@ class Corpus:
                 w.translation.title if w.translation else None,
                 w.provenance.license, w.provenance.license_note,
                 int(w.provenance.vendorable), w.provenance.completeness,
-                w.provenance.completeness_note, int(w.retrievable),
+                w.provenance.completeness_note,
+                w.provenance.text_source, w.provenance.text_source_note,
+                int(w.retrievable),
                 w.retrievable_note, w.scholarship_note,
                 w.address.section_label, w.address.unit_label,
                 int(w.address.has_books), w.address.section_style,
@@ -395,12 +480,24 @@ class Corpus:
                 [(w.id, None, c.tradition, c.status, c.note) for c in w.canonicity]
                 + [(w.id, bc.book, c.tradition, c.status, c.note)
                    for bc in w.book_canonicity for c in bc.canonicity])
+            cur.execute("DELETE FROM currents WHERE work_id=?", (w.id,))
+            cur.executemany(
+                "INSERT INTO currents (work_id, current, standing, note) "
+                "VALUES (?,?,?,?)",
+                [(w.id, c.current, c.standing, c.note) for c in w.currents])
             cur.execute("DELETE FROM citations WHERE work_id=?", (w.id,))
             cur.executemany(
                 "INSERT INTO citations (work_id, source, note) VALUES (?,?,?)",
                 [(w.id, c.source, c.note) for c in w.cited_by])
         self._db.commit()
         return len(works)
+
+    def text_source(self, work_id: str) -> str:
+        """'digital' or 'ocr' for one work. Used by the citation fence to mark
+        scanned passages, so it stays cheap and never raises on a miss."""
+        row = self._db.execute(
+            "SELECT text_source FROM works WHERE id=?", (work_id,)).fetchone()
+        return (row[0] if row and row[0] else "digital")
 
     # ── passages ─────────────────────────────────────────────────────────────
 

@@ -68,7 +68,7 @@ def store() -> tuple[Corpus, Index]:
             works, failures = load_manifest()
             for ident, why in failures:
                 log.warning("thoth: manifest entry %s rejected — %s", ident, why)
-            c.sync_metadata(works)
+            c.sync_metadata(works, allow_drop=True)   # loads the full manifest
             _corpus, _index = c, Index(c)
             log.info("thoth: library open — %s", _index.stats())
         return _corpus, _index

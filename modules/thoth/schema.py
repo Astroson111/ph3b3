@@ -72,6 +72,53 @@ CanonicityStatus = Literal[
     "non-canonical",    # never a candidate; read as literature or liturgy
 ]
 
+# ── CURRENTS ─────────────────────────────────────────────────────────────────
+# Rung 5's equivalent of canonicity, and first-class for the same reason.
+#
+# Canonicity asks: does this tradition receive this work AS SCRIPTURE. That
+# question does not apply to the esoteric corpus — nobody canonises Agrippa. The
+# question that does apply is which CURRENT reads a work, and how central it is
+# to them, because the same text carries different weight in different hands:
+# the Corpus Hermeticum is foundational to Hermeticism, formative for the Golden
+# Dawn, and read selectively by Theosophy. Flattening that into one `tradition`
+# string would state one reading and silently discard the others, which is the
+# failure BookCanonicity exists to prevent one rung down.
+#
+# A current is NOT the work's own tradition. Sefer Yetzirah is a Jewish text
+# whose standing rows are mostly Hermetic and Golden Dawn — both are recorded,
+# separately, exactly as CanonStatus does it.
+CurrentStanding = Literal[
+    "foundational",   # the current is unthinkable without this work
+    "received",       # read and relied on, not a cornerstone
+    "formative",      # shaped the current historically, may now be superseded
+    "contested",      # read, and its standing is argued within the current
+    "rejected",       # known to the current and explicitly repudiated
+]
+
+# ── HOW THE TEXT WAS OBTAINED ────────────────────────────────────────────────
+# Rung 5 needed this and Rungs 1-4 did not, which is the whole point of adding
+# it rather than assuming it.
+#
+# The citation floor promises VERBATIM quotation, and for a digital source that
+# promise is complete: USFM, Tanzil and Sefaria ship the text as text, so what
+# is stored is what the translator wrote. An OCR'd scan breaks that quietly. The
+# floor still works perfectly — it guarantees she quotes what we STORED — but
+# what we stored is a machine's reading of a photograph of a page.
+#
+# Measured on the Rung 5 downloads: Mead's Hermetica renders "Hermas" as
+# "Hennas" and "Hernias", and "Irenaeus" as "Irenseus"; 1.1% of Euclid vol III's
+# word tokens have broken capitalisation; the Sefer Yetzirah carries "Hosted by
+# Google" inline. Every one of those would be quoted faithfully, attributed
+# correctly, and still be wrong about what the author wrote — and nothing in the
+# floor could catch it, because the floor is checking the wrong question.
+#
+# So the fact is recorded per work and DISCLOSED at citation time. Astro's
+# ruling, 2026-09-18: flag the provenance and disclose it.
+TextSource = Literal[
+    "digital",   # the source shipped text as text; verbatim means verbatim
+    "ocr",       # machine-read from a scan; quotations may carry scan errors
+]
+
 LicenseClass = Literal[
     "public-domain",          # PD by age or by dedication; vendorable
     "open-licensed",          # explicit open licence; vendorable, terms recorded
@@ -144,6 +191,24 @@ class CanonStatus:
     def __post_init__(self) -> None:
         if not self.tradition.strip():
             raise ValueError("CanonStatus.tradition is required")
+
+
+@dataclass(frozen=True)
+class CurrentPosition:
+    """One esoteric current's standing toward one work.
+
+    Deliberately shaped like CanonStatus rather than folded into it: the two
+    answer different questions and a work can have both (the I Ching is
+    scripture to some traditions AND a working text to Western occultists).
+    Keeping them separate means neither has to pretend to be the other.
+    """
+    current: str
+    standing: CurrentStanding
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.current.strip():
+            raise ValueError("CurrentPosition.current is required")
 
 
 @dataclass(frozen=True)
@@ -223,6 +288,11 @@ class Provenance:
     completeness: Completeness
     vendorable: bool
     completeness_note: str = ""
+    # Defaults to "digital" so Rungs 1-4 are unchanged and unaffected; a work
+    # that is really OCR has to say so, and saying nothing cannot quietly mean
+    # "scanned".
+    text_source: TextSource = "digital"
+    text_source_note: str = ""
 
     def __post_init__(self) -> None:
         if not self.license_note.strip():
@@ -232,6 +302,13 @@ class Provenance:
             raise ValueError("Provenance.completeness_note is required when the "
                              "text is not complete (say what is missing, and where "
                              "a fuller edition is)")
+        # An OCR source with no note is indistinguishable from an oversight, and
+        # the note is what the reader is eventually shown — so silence here
+        # becomes silence at citation time.
+        if self.text_source == "ocr" and not self.text_source_note.strip():
+            raise ValueError("Provenance.text_source is 'ocr' with no "
+                             "text_source_note. Say what the scan quality is; "
+                             "that note is disclosed with every citation.")
 
 
 @dataclass(frozen=True)
@@ -247,6 +324,12 @@ class SourceSpec:
     url: str
     adapter: str                  # dotted name under thoth.sources
     sha256: str = ""              # pinned once fetched; "" = not yet pinned
+    # Pinned from the PUBLISHER'S metadata before the file was ever fetched, so
+    # the download is checked against what was inspected rather than against
+    # itself. archive.org publishes a sha1 per file; sha256 above is what we
+    # compute afterwards. Different questions, both kept.
+    sha1: str = ""
+    size: int = 0
     note: str = ""
     # Which part of a multi-work source this entry takes. One archive can hold
     # two works: eng-web_usfm.zip ships the protocanon and the deuterocanon
@@ -281,6 +364,8 @@ class Work:
     source: SourceSpec
     translation: Translation | None = None    # None => original-language text
     book_canonicity: tuple[BookCanonicity, ...] = ()   # per-book overrides
+    # Rung 5. Empty for the scriptural works, which have canonicity instead.
+    currents: tuple[CurrentPosition, ...] = ()
     cited_by: tuple[Citation, ...] = ()
     retrievable: bool = True
     retrievable_note: str = ""
@@ -300,13 +385,23 @@ class Work:
         for f in ("title", "tradition", "language_of_origin"):
             if not getattr(self, f).strip():
                 raise ValueError(f"Work.{f} is required (work {self.id!r})")
-        # Canonicity is first-class: a work with no recorded position from any
-        # tradition is not describable by this library and is refused outright.
-        if not self.canonicity:
+        # Standing is first-class: a work with no recorded position from anyone
+        # is not describable by this library and is refused outright.
+        #
+        # Which VOCABULARY says so depends on the rung. Scripture has canonicity
+        # — does this tradition receive it as scripture. Rung 5's esoterica does
+        # not: nobody canonises Agrippa, and padding him with a 'non-canonical'
+        # row to satisfy this check would be noise dressed as data. Those works
+        # carry `currents` instead, which answers the question that does apply.
+        #
+        # The guard's real intent is that standing is never SILENT, so it is
+        # stated that way: at least one of the two, never neither.
+        if not self.canonicity and not self.currents:
             raise ValueError(
-                f"Work {self.id!r} declares no canonicity. Every work must record "
-                "at least one tradition's position — 'non-canonical' with a note "
-                "is a position; silence is not.")
+                f"Work {self.id!r} declares neither canonicity nor currents. Every "
+                "work must record at least one position — 'non-canonical' with a "
+                "note is a position, and so is a current's standing; silence is "
+                "not. Scriptural works use canonicity; esoteric works use currents.")
         # A declared gap must say why, or it is indistinguishable from an oversight.
         if not self.retrievable and not self.retrievable_note.strip():
             raise ValueError(
@@ -391,5 +486,6 @@ class Passage:
 __all__ = [
     "AddressScheme", "CanonStatus", "BookCanonicity", "Citation", "Translation",
     "Provenance", "SourceSpec", "Work", "Passage",
-    "CanonicityStatus", "LicenseClass", "Completeness",
+    "CanonicityStatus", "CurrentStanding", "CurrentPosition", "TextSource",
+    "LicenseClass", "Completeness",
 ]

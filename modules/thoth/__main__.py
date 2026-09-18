@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     works, failures = load_manifest()
     for ident, why in failures:
         print(f"  MANIFEST REJECTED  {ident}: {why}", file=sys.stderr)
-    corpus.sync_metadata(works)
+    corpus.sync_metadata(works, allow_drop=True)   # the CLI loads the complete manifest
     index = Index(corpus)
 
     if args.cmd == "index":

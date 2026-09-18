@@ -193,7 +193,34 @@ def _ingest_sefaria(work: Work, refresh: bool) -> tuple[list[Passage], str]:
     return _numbered(rows, work.id), digest.hexdigest()
 
 
+def _ingest_archive_txt(work: Work, refresh: bool) -> tuple[list[Passage], str]:
+    """An OCR'd scan from archive.org.
+
+    The sha1 pinned in the manifest is checked against the bytes BEFORE they are
+    parsed, so a file that changed under us is caught here rather than becoming
+    quietly different passages. sha256 is still what the corpus records, because
+    that is what every other adapter records.
+    """
+    from .sources import archive_txt
+    name = work.source.url.rstrip("/").split("/")[-1]
+    data = fetch(work.source.url, f"esoterica/{name}", refresh)
+    pinned = getattr(work.source, "sha1", "") or ""
+    if pinned:
+        got = hashlib.sha1(data).hexdigest()
+        if got != pinned:
+            raise IngestError(
+                f"{work.id}: the file at {work.source.url} no longer matches the "
+                f"sha1 pinned in the manifest (pinned {pinned[:16]}…, got "
+                f"{got[:16]}…). Re-verify the item before ingesting it.")
+    raw = data.decode("utf-8", "replace")
+    rows = archive_txt.parse(raw, fallback_book=work.title.split("—")[0].strip())
+    if not rows:
+        raise IngestError(f"{work.id}: the scan parsed to zero passages")
+    return _numbered(rows, work.id), _sha(data)
+
+
 _ADAPTERS = {
+    "archive_txt": _ingest_archive_txt,
     "usfm": _ingest_usfm,
     "wlc": _ingest_wlc,
     "tanzil": _ingest_tanzil,
@@ -236,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  MANIFEST REJECTED  {ident}: {why}", file=sys.stderr)
 
     corpus = Corpus()
-    corpus.sync_metadata(works)
+    corpus.sync_metadata(works, allow_drop=True)   # the CLI loads the complete manifest
 
     if args.list or not (args.work or args.all):
         print(f"{'id':20s} {'lic':22s} {'retr':5s} {'ing':4s} {'passages':>9s}  title")

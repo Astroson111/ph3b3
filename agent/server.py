@@ -6152,10 +6152,68 @@ async def morpheus_video(request: Request, body: dict, background_tasks: Backgro
     params = {"positive": positive, "negative": negative, "preset": preset,
               "seed": int(body.get("seed", -1))}
     job_id = morpheus.create_job()
-    # I2V: animate an EXISTING Morpheus render (already floored at creation). The
-    # input-image floor gate for arbitrary uploads is Phase 4 — only existing
-    # gallery renders are accepted here.
+    # ── I2V sources: TWO provenances, each with its own reason to be trusted ──
+    #
+    #   source_job_id     an existing gallery render. Trusted because it was
+    #                     floor-passed when it was CREATED — the check already
+    #                     happened, upstream, and cannot be skipped now.
+    #
+    #   source_upload_id  a staged Edit upload. Trusted because it is checked
+    #                     RIGHT HERE, by the same describe-then-judge pass that
+    #                     /image/edit/run runs on the same kind of file.
+    #
+    # Adding the second one was the whole point of the Edit+Clip brief, and the
+    # honest framing is that it IS a new branch — the old comment here said the
+    # upload gate was "Phase 4", and this is Phase 4. What makes it safe is not
+    # that the file came from the Edit tab; it is that the verdict travels with
+    # it. An upload has been through nothing at upload time: /image/edit/upload
+    # checks decodability and size, never content.
+    #
+    # Both run PRE-LOCK, before create_job/queueing, so a refusal never takes the
+    # GPU and never occupies the queue-of-one.
     src_job = (body.get("source_job_id") or "").strip()
+    src_upload = (body.get("source_upload_id") or "").strip()
+    if src_job and src_upload:
+        raise HTTPException(400, "give a gallery render or an upload, not both")
+
+    _upload_src: Path | None = None
+    if src_upload:
+        _edit_lane_gate()        # same switch that gates every other upload path
+        # Accept ONLY the 32-hex id we minted, for the same reason the gallery
+        # branch pins its UUID shape: no separators, no dots, no traversal.
+        if not (len(src_upload) == 32 and all(c in "0123456789abcdef" for c in src_upload)):
+            raise HTTPException(400, "invalid source_upload_id")
+        _upload_src = EDIT_SCRATCH / f"{src_upload}.png"
+        if _upload_src.resolve().parent != EDIT_SCRATCH.resolve():
+            raise HTTPException(400, "invalid source_upload_id")
+        if not _upload_src.exists():
+            raise HTTPException(404, "upload not found or expired — re-upload the image")
+        try:
+            _src_raw = _upload_src.read_bytes()
+        except OSError:
+            raise HTTPException(400, "could not read the uploaded image")
+        # A check that could not RUN is not a refusal — same rule, same wording as
+        # the edit lane. The judge shares the card, and this runs pre-lock, so a
+        # video job holding VRAM can starve it; reporting that as a safety refusal
+        # sends you hunting a floor bug instead of a memory one. The upload is
+        # deliberately kept so the retry has something to retry with.
+        try:
+            _blocked = await asyncio.to_thread(morpheus.source_minor_check, _src_raw)
+        except morpheus.SafetyCheckUnavailable as exc:
+            log.error("[safety] clip source check UNAVAILABLE — %s (upload kept)", exc)
+            raise HTTPException(
+                503,
+                detail=("The safety check that has to look at your image could not "
+                        "run just now — the vision model could not load, usually "
+                        "because something else is using the GPU. Your upload is "
+                        "still here; try again in a moment. This is not a refusal."),
+                headers={"Retry-After": "30"})
+        if _blocked:
+            log.warning("[safety] clip source image blocked — category: child-depiction")
+            _upload_src.unlink(missing_ok=True)      # a real verdict destroys it
+            raise HTTPException(
+                403, "That image can't be used as the first frame of a clip.")
+
     if src_job:
         # I2V input-image gate: accept ONLY a real gallery-render job UUID. The
         # strict UUID shape (36 chars, hex+hyphen) forbids path separators/dots,
@@ -6170,6 +6228,11 @@ async def morpheus_video(request: Request, body: dict, background_tasks: Backgro
             raise HTTPException(404, "source render not found")
         params["_comfy_image"] = await asyncio.to_thread(
             morpheus.prepare_video_source, str(src_path), job_id)
+    elif _upload_src is not None:
+        # Checked above. Same preparation as a gallery source from here on — the
+        # two provenances converge once the verdict exists.
+        params["_comfy_image"] = await asyncio.to_thread(
+            morpheus.prepare_video_source, str(_upload_src), job_id)
 
     _video_seq += 1
     eta = morpheus.video_eta(preset)
@@ -6177,7 +6240,8 @@ async def morpheus_video(request: Request, body: dict, background_tasks: Backgro
     background_tasks.add_task(morpheus.run_video, job_id, params)
     return {"job_id": job_id, "preset": preset, "eta_s": eta,
             "label": morpheus.VIDEO_PRESETS[preset]["label"],
-            "mode": "i2v" if src_job else "t2v"}
+            "mode": "i2v" if (src_job or src_upload) else "t2v",
+            "source": "render" if src_job else ("upload" if src_upload else None)}
 
 
 @app.get("/morpheus/jobs/{job_id}")
