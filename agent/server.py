@@ -184,7 +184,8 @@ import intent_registry           # dedicated-module intent claims (precedence ov
 import device_auth               # per-device auth keys (Iris/Dio), decoupled from the human login
 import dnd_dice                  # dice-notation roller behind the utility tray
 import device_commands           # Iris track-playback voice-command gate (pre-LLM intercept)
-import vad_turns                 # per-turn VAD diagnostics (metadata only — never audio)
+import vad_turns
+from vad_turns import END_CAP, END_VADEND                 # per-turn VAD diagnostics (metadata only — never audio)
 import camera_module          # webcam pan/tilt/zoom (UVC v4l2); master switch, default OFF
 import apelles                   # photo editor — edits only, never generates (ruling A)
 import audio_monitor             # Silero VAD endpointing + level meter (chat cutoff / ghost readout)
@@ -3303,7 +3304,17 @@ async def vad_stream(websocket: WebSocket):
         return
     await websocket.accept()
     dev = websocket.headers.get("X-Ph3b3-Device", "stackchan")
-    mon = audio_monitor.AudioMonitor()
+    # Tuning is read HERE, per stream, not at import — so editing
+    # config/vad_tuning.json takes effect on the next turn without a restart.
+    # Dio's room has a fan and a HEPA unit, and the right numbers for it are not
+    # knowable from here; they have to be tried, and trying them should not cost
+    # a deploy.
+    _tune = audio_monitor.load_tuning()
+    mon = audio_monitor.AudioMonitor(**{k: v for k, v in _tune.items()
+                                        if not k.startswith("_")})
+    log.info("[vad] %s tuning — rule=%s speech_off=%.2f min_silence=%dms window=%.0f%%",
+             dev, _tune["endpoint_rule"], _tune["speech_off"],
+             _tune["min_silence_ms"], _tune["window_frac"] * 100)
     sent_endpoint = False
     _dmax_prob = 0.0; _dmax_rms = -120.0   # DIAG: received-frame telemetry (numbers only, no audio)
     _diag_first = True
@@ -3349,6 +3360,44 @@ async def vad_stream(websocket: WebSocket):
         # Splits "Silero never fired" (had_speech / endpoint_sent) from "Dio didn't receive it".
         log.info("[vad] %s closed — frames=%d had_speech=%s endpoint_sent=%s max_prob=%.3f max_rms_db=%.1f",
                  dev, mon._n, mon.had_speech, sent_endpoint, _dmax_prob, _dmax_rms)
+        # Phase 3c — WHY it did or didn't fire. Numbers about the turn, never
+        # audio. Logged only when speech was seen, because a no-speech stream
+        # has nothing to explain and this would just be noise in the journal.
+        if mon.had_speech:
+            try:
+                d = mon.endpoint_diag()
+                log.info("[vad] %s diag — max_sub_run=%d/%d runs=%d sub_pct=%.1f "
+                         "active=%d shadow_at=%s verdict=%s",
+                         dev, d["max_sub_run"], d["need"], d["sub_runs"],
+                         d["sub_pct"], d["active_frames"],
+                         f'{d["shadow_at_s"]}s' if d["shadow_at_s"] is not None else "never",
+                         # the one-word reading, so the journal is greppable
+                         "fired" if sent_endpoint else
+                         ("never-paused" if d["max_sub_run"] == 0 else
+                          "counter-reset" if d["max_sub_run"] < d["need"] else "unclear"))
+                # ── logged and forgotten ─────────────────────────────────
+                # Written into the store that already exists for this question
+                # (bounded, self-trimming, already served at /vad/turns) rather
+                # than left in a journal that rotates away and has to be
+                # grepped. Deliberately NOT Mnemosyne: that is her memory of her
+                # own life, and device telemetry in it would be the same kind of
+                # collision as two meanings of "canon".
+                #
+                # The device posts its own row for the turn with the end reason;
+                # this is the server's side of the same event. It accumulates
+                # and waits — nothing reads it to decide anything.
+                vad_turns.record(dev, {
+                    "why": "shadow",
+                    "sh_at_ms": (int(d["shadow_at_s"] * 1000)
+                                 if d["shadow_at_s"] is not None else None),
+                    "sh_run": d["max_sub_run"], "sh_need": d["need"],
+                    "sh_pct": int(d["sub_pct"]), "sh_runs": d["sub_runs"],
+                    "dur_ms": int(mon._n * 32),
+                    "end": END_VADEND if sent_endpoint else END_CAP,
+                    "ok": True,
+                })
+            except Exception as _e:      # diagnostics must never break the stream
+                log.info("[vad] %s diag unavailable: %s", dev, _e)
         mon.reset()   # drop state + the sub-frame byte tail immediately; nothing persists
 
 

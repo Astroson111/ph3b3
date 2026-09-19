@@ -1,0 +1,15 @@
+{
+  "_comment": "Dio's voice endpointing. Read fresh when a stream opens, so a change takes effect on the NEXT turn — no restart. A broken file is ignored and the defaults apply; a typo here must never take her hearing offline.",
+
+  "_rule": "consecutive = the shipped rule: min_silence_ms of UNBROKEN quiet, reset to zero by any single frame above speech_off. windowed = at least window_frac of the last min_silence_ms below speech_off, so one breath or fan transient no longer restarts the count. Whichever is set, the diagnostics evaluate the OTHER as a shadow and log what it would have done.",
+
+  "_why_it_matters": "13 of 59 speech turns rode Dio's 8s backstop with Silero reporting 0.999 confidence throughout — she was heard, and the turn never got declared over. Grep the journal for 'verdict=counter-reset'; if that is what you see, 'windowed' is the fix.",
+
+  "speech_on": 0.5,
+  "speech_off": 0.35,
+  "min_speech_ms": 250,
+  "min_silence_ms": 700,
+
+  "endpoint_rule": "consecutive",
+  "window_frac": 0.8
+}

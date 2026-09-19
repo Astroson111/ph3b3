@@ -46,7 +46,15 @@ KEEP_LINES = 2_000
 # the backstop, so tapping made the endpoint's hit rate look worse than it is.
 # "dropped" is the device's own count of diagnostic rows it failed to deliver —
 # an instrument that loses data should say how much, not quietly under-report.
-_INT_FIELDS = ("ep_ms", "dur_ms", "heap_free", "heap_max", "samples", "dropped")
+# Shadow fields, written by the SERVER at stream close rather than reported by
+# the device — the device cannot know what an alternative rule would have done.
+# They exist so a proposed endpoint change can be judged on real traffic before
+# it changes any behaviour: sh_at_ms is when a windowed-majority rule WOULD have
+# ended the turn, sh_run/sh_need is how close the live consecutive-run counter
+# got, and sh_pct is how much of the active turn was below the speech floor.
+# Nothing reads these to make a decision. They accumulate and wait.
+_INT_FIELDS = ("ep_ms", "dur_ms", "heap_free", "heap_max", "samples", "dropped",
+               "sh_at_ms", "sh_run", "sh_need", "sh_pct", "sh_runs")
 _STR_FIELDS = ("why", "fw", "end")
 _BOOL_FIELDS = ("ok",)
 
@@ -128,6 +136,35 @@ def recent(limit: int = 50) -> list[dict]:
     return out
 
 
+def _shadow_report(rows: list[dict]) -> dict:
+    """What the alternative rule would have done on the turns that went wrong.
+
+    Scoped to CAP-ended turns on purpose: those are the genuine misses. A turn
+    that ended by tap or by a working endpoint is not evidence either way, and
+    folding them in would flatter whichever rule is being tested.
+    """
+    missed = [r for r in rows if r.get("end") == END_CAP and r.get("sh_need")]
+    if not missed:
+        return {"shadow_turns": 0, "shadow_would_fire": None,
+                "shadow_saved_ms_avg": None, "shadow_verdict": "no data yet"}
+    fired = [r for r in missed if isinstance(r.get("sh_at_ms"), int)]
+    saved = [r["dur_ms"] - r["sh_at_ms"] for r in fired
+             if isinstance(r.get("dur_ms"), int) and r["dur_ms"] > r["sh_at_ms"]]
+    # Why the live rule missed, from how far its counter got.
+    never_paused = sum(1 for r in missed if (r.get("sh_run") or 0) == 0)
+    reset = len(missed) - never_paused
+    return {
+        "shadow_turns": len(missed),
+        "shadow_would_fire": len(fired),
+        "shadow_saved_ms_avg": (round(sum(saved) / len(saved)) if saved else None),
+        # The one-line reading, so nobody has to interpret the numbers.
+        "shadow_verdict": (
+            f"{len(fired)}/{len(missed)} missed turns would have ended"
+            + (f", avg {round(sum(saved) / len(saved))}ms sooner" if saved else "")
+            + f"; {reset} looked like counter-resets, {never_paused} never paused"),
+    }
+
+
 def summary(limit: int = 200) -> dict:
     """Aggregate the recent window — the actual question is 'how often does it
     work', which is tedious to eyeball from raw rows.
@@ -177,6 +214,11 @@ def summary(limit: int = 200) -> dict:
         "endpoint_misses": misses,
         "endpoint_rate": (round(hits / eligible, 3) if eligible else None),
         "tap_ended": ends.get(END_TAP, 0),
+        # ── the shadow rule's report card ────────────────────────────────────
+        # Of the turns the live rule MISSED, how many would a windowed-majority
+        # rule have caught, and how much sooner? That is the whole question, and
+        # answering it from rows beats grepping a journal that rotates away.
+        **_shadow_report(rows),
         "rows_lost_reported": max(drops) if drops else 0,
         "fail_reasons": dict(sorted(whys.items(), key=lambda kv: -kv[1])),
         "heap_max_min": min(heaps) if heaps else None,
