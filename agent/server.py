@@ -1452,10 +1452,16 @@ def tools_for_turn() -> list:
         hidden |= ATALANTA_TOOL_NAMES
     if not camera_module.enabled():
         hidden |= CAMERA_TOOL_NAMES
+    if not VIDEO_LANE_ENABLED:
+        hidden |= VIDEO_TOOL_NAMES
     if not hidden:
         return TOOLS
     return [t for t in TOOLS if t["function"]["name"] not in hidden]
 
+
+# She must not offer a clip she cannot render — "I could make you a video but
+# it's switched off" is the answer the absence exists to prevent.
+VIDEO_TOOL_NAMES = frozenset({"generate_video"})
 
 ONE_SHOT_TOOLS = frozenset({"tell_joke", "roast", "web_search"})   # web_search: ONE search per turn (no autonomous loops)
 
@@ -5580,6 +5586,39 @@ _EDIT_ALLOWED_FMT = {"PNG", "JPEG", "WEBP"}
 # BOTH ends of the lane are gated, not just upload. Gating the entry alone would
 # leave any upload_id still sitting in EDIT_SCRATCH runnable until its TTL swept
 # it, which is a door that is closed but not locked.
+# ── Video lane switch ────────────────────────────────────────────────────────
+# DEFAULT ON, unlike the edit lane. The original ruling said default-off, but that
+# was written before the lane shipped and it is now in daily use: a flag that
+# turns a working feature off on next boot is a trap, not a safeguard. This is a
+# KILL-SWITCH — something to reach for when the card is wanted for something else
+# or the lane misbehaves — not a speed bump on the ordinary path.
+#
+# Set PH3B3_VIDEO_LANE to 0/false/no/off to disable. Anything else, including
+# unset, leaves it on.
+VIDEO_LANE_ENABLED = os.getenv("PH3B3_VIDEO_LANE", "on").strip().lower() \
+    not in ("0", "false", "no", "off")
+_VIDEO_DISABLED_REASON = (
+    "Video generation is switched off on this machine. The clip lane is disabled "
+    "in config (PH3B3_VIDEO_LANE), so nothing was queued and the GPU was not "
+    "touched. Stills still work.")
+
+
+# Let an in-flight render see a flip. morpheus cannot import server (server
+# imports morpheus), so the reader is injected rather than looked up.
+morpheus.video_lane_open = lambda: VIDEO_LANE_ENABLED
+
+
+def _video_lane_gate():
+    """Refuse with a stated reason when the lane is off — never a 404.
+
+    A 404 would say the capability does not exist, which is false and sends the
+    caller looking for a routing bug. It exists and is switched off, and those
+    are different sentences.
+    """
+    if not VIDEO_LANE_ENABLED:
+        raise HTTPException(status_code=403, detail=_VIDEO_DISABLED_REASON)
+
+
 EDIT_LANE_ENABLED = os.getenv("PH3B3_EDIT_LANE", "").strip().lower() in ("1", "true", "yes", "on")
 _EDIT_DISABLED_REASON = (
     "The image edit lane is disabled on this server. Editing a real face is the "
@@ -5596,6 +5635,9 @@ def _edit_lane_gate():
 
 # Stated at boot so the posture is readable from the journal without probing the
 # endpoint. An audit should never have to guess which way this is set.
+log.info("[video] clip lane %s%s",
+         "ENABLED" if VIDEO_LANE_ENABLED else "DISABLED (PH3B3_VIDEO_LANE)",
+         "" if VIDEO_LANE_ENABLED else " — /morpheus/video answers 403 with reason")
 log.info("[edit] img2img lane %s%s",
          "ENABLED (PH3B3_EDIT_LANE set)" if EDIT_LANE_ENABLED else "DISABLED",
          "" if EDIT_LANE_ENABLED else " — /image/edit/* answers 403 with reason")
@@ -6239,6 +6281,7 @@ _VIDEO_ACTIVE = {"queued", "evicting", "starting", "loading", "rendering", "savi
 @app.post("/morpheus/video")
 async def morpheus_video(request: Request, body: dict, background_tasks: BackgroundTasks):
     global _video_seq
+    _video_lane_gate()          # off → 403 with a reason, before anything is read
     positive = (body.get("positive") or body.get("prompt") or "").strip()
     if not positive:
         raise HTTPException(400, "positive prompt is required")

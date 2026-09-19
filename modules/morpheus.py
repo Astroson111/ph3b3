@@ -2873,6 +2873,13 @@ def maybe_stamp_clip(path: Path, job_id: str) -> Path:
     return path
 
 
+# Set by the server at import to VIDEO_LANE_ENABLED's reader. A callable rather
+# than a bool so flipping the flag at runtime is seen by a render already in
+# flight — a kill-switch that only takes effect on the NEXT render is not a
+# kill-switch. Defaults to "on" so morpheus standalone (and the tests) behave.
+video_lane_open = lambda: True
+
+
 async def run_video(job_id: str, params: dict) -> None:
     """Video GPU-swap lifecycle. Always call as a FastAPI BackgroundTask.
     Holds gpu_lock for the whole render (2–40 min) so Ollama stays evicted."""
@@ -2880,6 +2887,12 @@ async def run_video(job_id: str, params: dict) -> None:
         async with httpx.AsyncClient() as http:
             if jobs[job_id].get("state") == "cancelled":
                 return   # cancelled while queued on the lock — nothing allocated yet
+            if not video_lane_open():
+                # The lane was switched off while this job waited on the lock.
+                jobs[job_id].update(state="cancelled",
+                                    error="video lane switched off before this render started")
+                log.warning("[video] job %s dropped — lane switched off while queued", job_id)
+                return   # the finally below still frees VRAM
             try:
                 jobs[job_id]["state"] = "evicting"
                 await evict_hermes(http)
@@ -2897,6 +2910,11 @@ async def run_video(job_id: str, params: dict) -> None:
                 outputs = await comfy_wait(http, prompt_id, timeout_s=max(2700, eta * 3))
                 if jobs[job_id].get("state") == "cancelled":
                     return   # cancelled during render — finally still frees VRAM
+                if not video_lane_open():
+                    jobs[job_id].update(state="cancelled",
+                                        error="video lane switched off mid-render")
+                    log.warning("[video] job %s dropped — lane switched off mid-render", job_id)
+                    return   # finally frees VRAM and evicts, same as a user cancel
 
                 jobs[job_id]["state"] = "saving"
                 path = await fetch_and_save_video(http, outputs, job_id)
