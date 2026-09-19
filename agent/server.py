@@ -172,6 +172,7 @@ from screenshot_module import ScreenshotModule
 from kadmos_module import KadmosModule, KadmosError  # Kadmos — PDF reader (untrusted-input firewall)
 from recipes import RecipeStore
 import morpheus
+import rhea_status               # backup facts — read-only, cannot restore
 import herakles                  # GPU eviction — explicit ask only, never automatic
 import pythagoras                # sacred geometry — CPU only, no lock, no ComfyUI
 import calliope                  # speech renders — Piper/CPU, lives in the Amphion pane
@@ -758,6 +759,7 @@ TOOLS = [
     {"type":"function","function":{"name":"analyze_screenshot","description":"Analyze a screenshot or image file from disk. Pass the path to a PNG or JPG and an optional question. Uses LLaVA to describe the image, then Hermes3 to reason over that description and answer the question.","parameters":{"type":"object","properties":{"image_path":{"type":"string","description":"Absolute or relative path to the image file (PNG, JPG, JPEG, WEBP, BMP)"},"question":{"type":"string","description":"What to ask or focus on (optional — defaults to a general description and analysis)"}},"required":["image_path"]}}},
     {"type":"function","function":{"name":"start_evening_capture","description":"Capture photos of the evening at a timed interval through Stack-Chan's (Dio's) own camera. Each frame is saved to Ph3b3's captures folder (~/ph3b3_data/captures) AND described aloud as it's taken. Say 'start capturing the evening' or 'start evening capture' to trigger this.","parameters":{"type":"object","properties":{"label":{"type":"string","default":"evening","description":"A short label for this capture session, for your own reference"},"interval":{"type":"number","default":120,"description":"Seconds between shots"}}}}},
     {"type":"function","function":{"name":"stop_evening_capture","description":"Stop the evening photo capture session and report how many photos were saved to Ph3b3's captures folder.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"backup_status","description":"Get READ-ONLY facts about the Rhea nightly backup: when it last ran and whether it succeeded, how long ago the drive checked in, free space, and whether a restore drill has ever been done. CALL THIS for 'did the backup run', 'when did Rhea last back up', 'how is Rhea', or anything about backups. You CANNOT restore from a backup — restoring is a human operation and is not available to you.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"fleet_status","description":"Get a READ-ONLY summary of the device fleet (Nyx, Iris, Dio/Stack-Chan, Argus): each device's health state — HEALTHY, SICK, or SILENT — plus last-seen, battery, and signal. CALL THIS when asked 'how's the fleet', 'are the devices online/breathing', 'is Iris/Dio awake', battery/device status, or anything about fleet health. Observability only — you cannot restart, reflash, or change any device.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"last_capture","description":"Get the most recent capture transcript from a device (read-only). CALL THIS when asked 'what did Iris last hear', 'what was the last thing recorded/captured', 'read me the last recording', or about a device's most recent recording.","parameters":{"type":"object","properties":{"device":{"type":"string","description":"Which device: 'iris', 'stackchan' (Dio) or 'pan' (optional — omit for the most recent across all devices)"}}}}},
     {"type":"function","function":{"name":"find_recipe","description":"Search 2+ million local recipes from the RecipeNLG corpus — fully offline, zero network, zero GPU. Three modes: 'text' for free-text search (e.g. 'carbonara', 'Thai noodles'), 'strict' to find recipes that use ALL listed ingredients, 'pantry' (default) to find the best matches from what you have on hand — results are ranked by fewest missing ingredients. You will receive structured recipe rows: narrate them to the user (title, key ingredients, directions summary, what they're missing in pantry mode). Do NOT fabricate or invent recipe details — report exactly what the tool returns.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Free-text search term — used in 'text' mode (e.g. 'carbonara', 'banana bread')"},"ingredients":{"type":"array","items":{"type":"string"},"description":"List of ingredient names — used in 'strict' and 'pantry' modes (e.g. ['chicken', 'rice', 'lime'])"},"mode":{"type":"string","enum":["text","strict","pantry"],"default":"pantry","description":"'text': free-text FTS search. 'strict': recipes using ALL listed ingredients. 'pantry': best matches from what you have, ranked by fewest missing."},"limit":{"type":"integer","default":5,"description":"Number of results to return (1–20)"}},"required":[]}}},
@@ -1145,6 +1147,8 @@ async def execute_tool(name, args, device="nyx", session_id=""):
             )
         elif name == "stop_evening_capture":
             result = _ec_mod.tool_stop_evening_capture()
+        elif name == "backup_status":
+            result = await asyncio.to_thread(rhea_status.spoken)
         elif name == "fleet_status":
             result = _fleet_status_summary()
         elif name == "last_capture":
@@ -4717,21 +4721,82 @@ def _fleet_status_summary() -> str:
 # call the fleet_status tool, so battery/fleet questions route here for a factual
 # answer with freshness ALWAYS attached; the tool stays as an LLM fallback. ───────
 _FLEET_LABEL = {"stackchan": "Dio", "iris": "Iris", "nyx": "Nyx", "rhea": "Rhea",
-                "argus": "Argus", "metis": "Metis", "comfyui": "ComfyUI"}
+                "argus": "Argus", "metis": "Metis", "comfyui": "ComfyUI",
+                "helios": "Helios", "pan": "Pan"}
 _FLEET_ALIASES = {
     "stackchan": ("dio", "stackchan", "stack-chan", "stack chan"), "iris": ("iris",),
     "nyx": ("nyx",), "rhea": ("rhea", "backup drive"), "argus": ("argus",),
     "metis": ("metis",), "comfyui": ("comfyui", "morpheus"),
+    # Named so a question about it gets "no reading" rather than a whole-fleet
+    # answer that quietly dodges what was asked. Helios has never enrolled in
+    # Argus — that is a FACT about the fleet and she should be able to say it.
+    "helios": ("helios",), "pan": ("pan",),
 }
-_FLEET_INTENT_RE = re.compile(
-    r"\bfleet\b|\bdevice(?:s)? (?:status|health|online|awake|breathing|up)\b|"
-    r"\b(?:battery|charge|charging|power) (?:level|status|percent|left|remaining)\b|"
-    r"\bhow much (?:battery|charge|power)\b|\bwhat'?s? [\w' ]*\bbattery\b|"
-    r"\b(?:iris|dio|stackchan|nyx|rhea)'?s?\s+battery\b|"
-    r"\bis (?:iris|dio|stackchan|nyx|rhea|argus|metis|comfyui) (?:online|awake|up|there|breathing|charging|alive|charged)\b|"
-    r"\bare the (?:devices|badges) (?:online|up|awake|breathing)\b",
-    re.I,
+# ── Phase 1: intent, not phrasing ────────────────────────────────────────────
+# The old pattern matched a hand-list of exact shapes — "is rhea online",
+# "what's Dio's battery" — and nothing else. Six of nine natural phrasings fell
+# straight through to the model, which has no fleet tool and therefore invented:
+# asked how Rhea was doing, Phoebe reported a PATIENT, with vitals, doctors and
+# an offer to photograph her.
+#
+# So the test is now compositional: a device ALIAS plus a STATUS-SHAPED word.
+# That is deliberately loose. A fleet answer to a borderline question ("how is
+# nyx") is a small cost; fiction about a real subsystem is not, and the whole
+# class of failure lives in the gap between the phrasings someone enumerated and
+# the ones a person actually uses. Err toward intercepting.
+_FLEET_DEVICE_WORDS = (
+    "rhea", "argus", "iris", "dio", "stackchan", "stack-chan", "stack chan",
+    "nyx", "metis", "comfyui", "morpheus", "helios", "pan",
+    "backup drive", "the fleet", "devices", "badges",
 )
+# Words that make a sentence a question ABOUT STATE rather than a mention.
+_FLEET_STATUS_WORDS = (
+    "how", "is", "are", "was", "did", "does", "when", "last", "still",
+    "online", "offline", "awake", "asleep", "up", "down", "alive", "dead",
+    "silent", "quiet", "breathing", "healthy", "ok", "okay", "fine",
+    "battery", "charge", "charging", "power", "status", "state", "health",
+    "backup", "back up", "backed up", "running", "ran", "doing", "report",
+    "seen", "check", "checked", "heartbeat", "responding",
+)
+_FLEET_DEV_RE = re.compile(
+    r"(?<![a-z])(?:" + "|".join(re.escape(w) for w in _FLEET_DEVICE_WORDS) + r")(?![a-z])",
+    re.I)
+_FLEET_STAT_RE = re.compile(
+    r"(?<![a-z])(?:" + "|".join(re.escape(w) for w in _FLEET_STATUS_WORDS) + r")(?![a-z])",
+    re.I)
+
+# Kept whole: these name no device but are unmistakably fleet questions.
+_FLEET_BARE_RE = re.compile(
+    r"\bfleet\b|\bare the (?:devices|badges)\b|"
+    r"\bdevice(?:s)? (?:status|health|online|awake|breathing|up)\b|"
+    # A backup question names no device and is still a fleet question: Rhea is
+    # the only backup on this machine, so "did the backup run" has an implicit
+    # subject. Guarded by requiring a status shape, so "back up the file" —
+    # an instruction, not a question — does not match.
+    r"\b(?:the )?back(?:ed)?[- ]?ups?\b(?=.*\b(?:run|ran|work|working|happen|"
+    r"happened|go|went|ok|okay|fine|fail|failed|last|when|did|is|was)\b)|"
+    r"\b(?:did|has|was|is) (?:the )?back(?:ed)?[- ]?up\b", re.I)
+
+# Guard against the obvious false friend: "morpheus" and "nyx" appear in ordinary
+# requests that are not status questions ("nyx, make me a picture"). Requiring a
+# status word already handles most of it; this catches the rest.
+_FLEET_NOT_RE = re.compile(
+    r"\b(?:make|draw|render|generate|create|write|play|sing|tell)\b", re.I)
+
+
+class _FleetIntent:
+    """Duck-types the Claim pattern: anything with .search() is accepted."""
+
+    def search(self, text):
+        t = text or ""
+        if _FLEET_BARE_RE.search(t):
+            return True
+        if _FLEET_NOT_RE.search(t):
+            return None
+        return True if (_FLEET_DEV_RE.search(t) and _FLEET_STAT_RE.search(t)) else None
+
+
+_FLEET_INTENT_RE = _FleetIntent()
 
 
 def _fleet_one(name: str, ev: dict) -> str:
@@ -4747,11 +4812,42 @@ def _fleet_one(name: str, ev: dict) -> str:
 
 
 def _answer_fleet(msg: str) -> str:
+    """Phase 2 — the weld: no claim of fleet state without a fleet datum.
+
+    Third time this rule has been needed, so it is doctrine now rather than a
+    fix: no claims of sight without a capture (camera, Aug 31), no claims of
+    scripture without a retrieved passage (Thoth's citation floor), no claims of
+    state without telemetry (here).
+
+    The failure this closes is not "wrong answer" — it is INVENTED answer. Asked
+    how Rhea was doing with nothing routed, Phoebe described a patient: vitals,
+    doctors, an offer to photograph her. Routing alone does not fix that; if the
+    intercept fires and then has nothing, it must SAY it has nothing, in her own
+    voice, and stop. An empty hand said plainly beats a full one made up.
+    """
     m = (msg or "").lower()
+    # A backup question wants the BACKUP's facts, not a heartbeat age. "When did
+    # Rhea last back up" answered with "Rhea is healthy as of 5 hours ago" is
+    # technically true and not the answer to the question.
+    if re.search(r"\bback(?:ed)?[- ]?ups?\b|\bsnapshot|\brestore|\bdrill\b", m):
+        return rhea_status.spoken()
     fleet = {ev["device_id"]: ev for ev in argus_store.fleet(load_contracts())}
     for dev, names in _FLEET_ALIASES.items():           # a specific device named?
-        if dev in fleet and any(n in m for n in names):
-            return _fleet_one(_FLEET_LABEL.get(dev, dev), fleet[dev])
+        if not any(n in m for n in names):
+            continue
+        ev = fleet.get(dev)
+        if ev is None:
+            # Named, recognised, and no telemetry. Say exactly that — do not
+            # substitute a whole-fleet summary, which answers a question nobody
+            # asked and reads as evasion.
+            label = _FLEET_LABEL.get(dev, dev)
+            return (f"I don't have a reading on {label}. It's a device I know the "
+                    f"name of, but Argus has never had a heartbeat from it, so I "
+                    f"can't tell you how it's doing — only that it isn't reporting.")
+        return _fleet_one(_FLEET_LABEL.get(dev, dev), ev)
+    if not fleet:
+        return ("I don't have a reading on the fleet right now — Argus isn't "
+                "returning any device state, so I'd only be guessing.")
     return _fleet_status_summary()                       # else the whole fleet
 
 
