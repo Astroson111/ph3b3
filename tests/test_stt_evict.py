@@ -157,3 +157,29 @@ def test_concurrent_release_and_use_do_not_race(stt):
         hit.append("refused")
     t.join()
     assert hit == ["refused"], "release slipped through while a transcription ran"
+
+
+# ---------- the weld: no HTTP surface ---------------------------------------
+def test_evict_api_has_no_http_surface():
+    """release()/ensure_loaded() are method-only and must stay that way.
+
+    Gate condition for merging this branch (ruling 2026-09-22): the evict API
+    must be unreachable from the portal or the Tailscale Funnel. Rung 2 gives
+    Herakles the authority to call it; until then nothing calls it at all, and
+    even after, it should be reached through Herakles rather than a route of
+    its own. This test is the weld, so the property cannot lapse silently.
+    """
+    import pathlib
+    server = pathlib.Path(__file__).resolve().parents[1] / "agent" / "server.py"
+    tree = ast.parse(server.read_text())
+
+    reached = [
+        (ast.unparse(n.func.value), n.func.attr, n.lineno)
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+        and n.func.attr in ("release", "ensure_loaded")
+        and ast.unparse(n.func.value) == "stt"
+    ]
+    assert not reached, (
+        f"the STT evict API is now reachable from server.py at {reached} — "
+        f"route it through Herakles, not an HTTP endpoint")
