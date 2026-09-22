@@ -127,6 +127,9 @@ class STTModule:
         self._available = False
         self._loading   = False
         self._released  = False          # released on purpose, not a failure
+        self._held      = False          # evicted UNDER A LEASE: do not reload
+        self._hold_why  = ""
+        self._hold_eta  = 0
         self._in_use    = 0              # transcriptions in flight
         self._cv        = threading.Condition(threading.RLock())
         if WHISPER_AVAILABLE:
@@ -167,6 +170,8 @@ class STTModule:
         if not WHISPER_AVAILABLE:
             return False
         with self._cv:
+            if self._held:
+                return False          # under lease — reloading would contend
             if self._model is not None:
                 return True
             if not self._loading:
@@ -209,6 +214,36 @@ class STTModule:
                  WHISPER_MODEL, freed, f" ({reason})" if reason else "")
         return {"released": True, "freed_mb": freed, "reason": reason}
 
+    def hold(self, reason: str = "a render", eta_s: int = 30) -> dict:
+        """Release AND refuse to reload until resume().
+
+        Plain release() lets the next listen quietly reload — which during a
+        render means competing for the card that was just handed over. Under a
+        lease she must stay out of the way AND say so, so listen() answers with
+        a spoken line instead of silence or a 15s stall.
+        """
+        out = self.release(reason)
+        with self._cv:
+            self._held     = True
+            self._hold_why = reason
+            self._hold_eta = int(eta_s)
+        return out
+
+    def resume(self, reload: bool = True) -> bool:
+        """Lease over. Reload eagerly so her ears are not on a lazy fuse."""
+        with self._cv:
+            self._held, self._hold_why, self._hold_eta = False, "", 0
+        return self.ensure_loaded() if reload else True
+
+    @property
+    def held(self) -> bool:
+        return self._held
+
+    def _hold_line(self) -> str:
+        eta = self._hold_eta
+        when = f"in about {eta} seconds" if eta else "shortly"
+        return f"I'm busy with {self._hold_why} — my ears are back {when}."
+
     def _using(self):
         """Context manager marking a transcription in flight, so release() refuses."""
         stt = self
@@ -228,6 +263,9 @@ class STTModule:
         return _Guard()
 
     def listen(self, duration_seconds=10, language=None):
+        if self._held:
+            return {"text": None, "error": None, "held": True,
+                    "say": self._hold_line()}
         # A RELEASED model is not an error — _listen_whisper records first and
         # reloads afterwards, so the reload never eats the words. Only a model
         # still doing its initial boot load is a "come back later".
@@ -274,6 +312,9 @@ class STTModule:
             return {"text": None, "error": str(e)}
 
     def transcribe_file(self, filepath, language=None):
+        if self._held:
+            return {"text": None, "error": None, "held": True,
+                    "say": self._hold_line()}
         if self._loading and not self._released:
             return {"text": None, "error": "Whisper still loading — try again in a moment."}
         if not self.ensure_loaded():
@@ -308,6 +349,9 @@ class STTModule:
                 "language": result.get("language", "")}
 
     def status(self):
+        if self._held:
+            return (f"Whisper {WHISPER_MODEL} on hold — {self._hold_why} has the "
+                    f"card, ears back in ~{self._hold_eta}s")
         if self._released and not self._loading:
             return (f"Whisper {WHISPER_MODEL} released — card handed over, "
                     f"reloads on the next listen")

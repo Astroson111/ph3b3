@@ -276,3 +276,66 @@ one is deserved.
 `measure_lora.log` ends with `4-step: letterform +0.0 pts, 8-step: +13.3 pts`.
 That is **tesseract output and is void** — the 8-step's apparent advantage is
 `'POE IB'` scoring 40% against `OPEN LATE` by coincidence.
+
+## 9. Rung 3 — Gate v2 (2026-09-22)
+
+Tool: `scripts/palamedes_gate.py`. Fully offline; no GPU window, no renders.
+
+### The degraded control — the worry did not materialise
+
+The stated risk was that a VLM, being generative, would autocorrect a mangled
+sign into the probable string: tesseract failed loudly, a VLM might fail
+agreeably. **It did not.** Six degraded controls, synthetic signs with exact
+ground truth, reader reported the mangling verbatim at **100% fidelity**:
+
+| plate actually reads | reader said | fidelity |
+|---|---|---|
+| `FSREH BARED DILAY` | `FSREH BARED DILAY` | 100% |
+| `OEPN LTAE` | `OEPN LTAE` | 100% |
+| `MIAN SERETT` | `MIAN SERETT` | 100% |
+
+Lenient and strict prompting gave **identical** results, so the anti-correction
+prompt is unnecessary.
+
+### The metric was the real defect
+
+The reader was honest; the *scoring* was not. Character similarity rates
+`OEPN LTAE` at **77.8%** against `OPEN LATE`, because a scrambled word keeps
+every character. An unreadable sign would have passed a naive threshold.
+
+Replaced with **word accuracy** — fraction of target words surviving, in order,
+exactly. Separation becomes total:
+
+| | char similarity | **word accuracy** |
+|---|---|---|
+| scrambled | 72.7-82.4% | **0.0%** |
+| correct | 100% | **100.0%** |
+
+### Hard cases — all read correctly
+
+lowercase (`closed sundays`), numerals (`OPEN 24 HOURS 7 DAYS`), an uncommon
+non-autocompletable word (`QUILLIVANT APOTHECARY`), mixed (`Unit 14b Rear
+Yard`) — 100% each, both prompt modes.
+
+### Delivery-scale re-score — the shipping verdict
+
+All nine existing renders placed in a 720x1280 vertical frame at the sign's real
+footprint, then re-read:
+
+| case | full-res | **delivery scale** |
+|---|---|---|
+| baseline 20-step | 100.0% | **100.0%** |
+| lightning 4-step | 100.0% | **100.0%** |
+| lightning 8-step | 100.0% | **100.0%** |
+
+**The 4-step LoRA holds at delivery scale.** That is the number that counts.
+
+### Two limits, stated
+
+**Case blindness.** `norm()` uppercases and the reader reports `closed sundays`
+as `CLOSED SUNDAYS`. If the model is asked for lowercase and renders caps, this
+gate scores it 100%. Anything depending on case needs a different check.
+
+**Reader, not model.** The hard cases are PIL-drawn, so they prove what the
+READER can read. They do **not** prove Qwen renders lowercase or an uncommon
+word correctly — that needs actual renders, i.e. a GPU window.
