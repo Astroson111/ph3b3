@@ -183,3 +183,53 @@ def test_evict_api_has_no_http_surface():
     assert not reached, (
         f"the STT evict API is now reachable from server.py at {reached} — "
         f"route it through Herakles, not an HTTP endpoint")
+
+
+# ---------- hold: evicted under a lease, and SAYING so ----------------------
+def test_hold_releases_and_blocks_reload(stt):
+    stt._model, stt._available = object(), True
+    stt.hold("a Qwen render", eta_s=30)
+    assert stt._model is None and stt.held is True
+    assert stt.ensure_loaded(timeout=1) is False, \
+        "reloaded under a lease — that contends for the card just handed over"
+
+
+def test_listen_while_held_speaks_rather_than_going_quiet(stt):
+    """Silence reads as a broken assistant. She must say why she cannot hear."""
+    stt.hold("a Qwen render", eta_s=30)
+    r = stt.listen(1)
+    assert r.get("held") is True
+    assert r.get("say"), "no spoken line — the user would just get silence"
+    assert "30 second" in r["say"] and "render" in r["say"]
+    assert r.get("error") is None, "a lease is not an error"
+
+
+def test_transcribe_file_while_held_also_speaks(stt):
+    stt.hold("a Qwen render", eta_s=15)
+    r = stt.transcribe_file("/nonexistent.wav")
+    assert r.get("held") is True and r.get("say")
+
+
+def test_status_names_the_hold(stt):
+    stt.hold("a Qwen render", eta_s=30)
+    s = stt.status().lower()
+    assert "hold" in s and "render" in s
+
+
+def test_resume_reloads_eagerly(stt, monkeypatch):
+    sentinel = object()
+    stt._model, stt._available = object(), True
+    stt.hold("a render", eta_s=30)
+    monkeypatch.setattr(stt_mod, "whisper",
+                        types.SimpleNamespace(load_model=lambda *a, **k: sentinel))
+    assert stt.resume(reload=True) is True
+    assert stt.held is False and stt._model is sentinel, \
+        "resume left her ears on a lazy fuse"
+
+
+def test_hold_refuses_while_transcribing(stt):
+    stt._model, stt._available = object(), True
+    with stt._using():
+        with pytest.raises(STTBusy):
+            stt.hold("a render")
+    assert stt._model is not None and stt.held is False

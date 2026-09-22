@@ -310,6 +310,143 @@ async def free_gpu(level: str = "cached", http=None) -> dict:
     }
 
 
+# ── The single eviction authority ────────────────────────────────────────────
+#
+# Cheapest to restore first. Ollama reloads on the next chat turn and nobody
+# notices; ComfyUI reloads on the next render; her hearing costs ~15s during
+# which she is deaf, so it goes last and only if the first two were not enough.
+_EVICT_ORDER = ("ollama", "comfyui", "stt")
+
+
+async def request_card(need_mb: int, requester: str, *, http=None, stt=None,
+                       eta_s: int = 60) -> dict:
+    """Make room for `need_mb`, evicting OUR tenants only, cheapest first.
+
+    Returns a LEASE describing what was given up, so release_card() can put it
+    back. Foreign memory is never touched at any level — if the shortfall is
+    somebody else's, this says so and leaves the decision to the caller.
+
+    Measured 2026-09-22: a Qwen render peaks at 14,467 MiB of a 16,380 MiB card.
+    Whisper medium holds ~4.5 GB from boot inside the ph3b3 process, so it is
+    not a tenant with a pid of its own — it can only be released in-process,
+    which is why `stt` is injected rather than discovered.
+    """
+    if need_mb <= 0:
+        raise HeraklesError(f"need_mb must be positive, got {need_mb}")
+
+    busy = busy_with()
+    if busy:
+        raise HeraklesError(
+            f"Not while {busy} is using the card — evicting under it would "
+            f"break it. Wait for it, or cancel it deliberately with "
+            f"free_gpu(level='running').")
+
+    import httpx
+    import morpheus
+
+    before = gpu_status()
+    evicted, failed = [], []
+
+    if before["free_mib"] >= need_mb:
+        return {"requester": requester, "need_mb": need_mb, "granted": True,
+                "evicted": [], "failed": [],
+                "free_mib": before["free_mib"],
+                "before": before["free_mib"], "after": before["free_mib"],
+                "foreign_mib": before["foreign_mib"],
+                "line": f"{before['free_mib']} MiB was already free — took nothing."}
+
+    own = httpx.AsyncClient() if http is None else None
+    client = http or own
+    try:
+        for who in _EVICT_ORDER:
+            if gpu_status()["free_mib"] >= need_mb:
+                break
+            try:
+                if who == "ollama":
+                    await morpheus.evict_hermes(client)
+                elif who == "comfyui":
+                    await morpheus.comfy_free(client)
+                elif who == "stt":
+                    if stt is None or getattr(stt, "held", False):
+                        continue   # no STT injected, or already on hold
+                    stt.hold(requester, eta_s=eta_s)
+                evicted.append(who)
+            except Exception as e:                     # noqa: BLE001
+                failed.append(f"{who}: {e}")
+            await asyncio.sleep(1.0)   # backends free asynchronously
+    finally:
+        if own is not None:
+            await own.aclose()
+
+    after = gpu_status()
+    granted = after["free_mib"] >= need_mb
+    short = max(0, need_mb - after["free_mib"])
+
+    if granted:
+        line = (f"{after['free_mib']} MiB free for {requester} "
+                f"(evicted {', '.join(evicted) or 'nothing'}).")
+    elif after["foreign_mib"]:
+        line = (f"Still {short} MiB short. {after['foreign_mib']} MiB belongs to "
+                f"something that is not mine and I will not touch it.")
+    else:
+        line = (f"Still {short} MiB short with everything of mine evicted "
+                f"({', '.join(evicted) or 'nothing'}).")
+
+    log.info("[herakles] request_card(%d, %s): granted=%s free %d -> %d, "
+             "evicted=%s failed=%s", need_mb, requester, granted,
+             before["free_mib"], after["free_mib"], evicted, failed)
+
+    return {"requester": requester, "need_mb": need_mb, "granted": granted,
+            "evicted": evicted, "failed": failed,
+            "free_mib": after["free_mib"], "short_mib": short,
+            "before": before["free_mib"], "after": after["free_mib"],
+            "foreign_mib": after["foreign_mib"], "line": line}
+
+
+async def release_card(lease: dict, *, http=None, stt=None) -> dict:
+    """Give back what the lease took, and clear the job's resident tail.
+
+    Both directions on purpose. Her ears are reloaded EAGERLY rather than left
+    on a lazy fuse — otherwise the first person to speak after a render pays a
+    15s stall and hears nothing meanwhile. And ComfyUI's ~11 GB resident tail is
+    dropped rather than left squatting on a card nobody is rendering on.
+    """
+    import httpx
+    import morpheus
+
+    before = gpu_status()
+    did, failed = [], []
+
+    own = httpx.AsyncClient() if http is None else None
+    client = http or own
+    try:
+        try:
+            await morpheus.comfy_free(client)
+            did.append("dropped the ComfyUI resident tail")
+        except Exception as e:                         # noqa: BLE001
+            failed.append(f"comfy free: {e}")
+
+        if stt is not None and "stt" in (lease or {}).get("evicted", []):
+            try:
+                ok = stt.resume(reload=True)
+                did.append("reloaded her hearing" if ok
+                           else "cleared the hold (Whisper did not reload)")
+            except Exception as e:                     # noqa: BLE001
+                failed.append(f"stt resume: {e}")
+        await asyncio.sleep(1.0)
+    finally:
+        if own is not None:
+            await own.aclose()
+
+    after = gpu_status()
+    log.info("[herakles] release_card(%s): free %d -> %d; did=%s failed=%s",
+             (lease or {}).get("requester", "?"), before["free_mib"],
+             after["free_mib"], did, failed)
+    return {"did": did, "failed": failed,
+            "before": before["free_mib"], "after": after["free_mib"],
+            "line": f"Card back: {after['free_mib']} MiB free."}
+
+
 # ── The OOM valve ────────────────────────────────────────────────────────────
 _OOM = re.compile(r"out of memory|cudaMalloc failed|CUDA error: out of memory|"
                   r"OutOfMemoryError|insufficient .{0,20}memory", re.I)
