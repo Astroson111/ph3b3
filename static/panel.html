@@ -1728,8 +1728,18 @@
       <div class="card-title" data-i18n="morpheus.generate">Generate</div>
       <div class="sr">
         <span class="sr-l" data-i18n="morpheus.modelbl">Mode</span>
+        <!-- Mode answers WHAT COMES OUT, Engine answers WHAT MAKES IT. They
+             used to both claim the model name ("Image — SDXL" beside
+             "SDXL — sd_xl_base_1.0"), which is how a dropdown ends up
+             decorative: two controls apparently setting the same thing, and
+             no obvious place for a second image engine to go.
+
+             The clip rows still name LTX and Wan because for clips the engine
+             row is HIDDEN (see setMode), so this is the only place their maker
+             appears. Giving clips a real engine selector is a video-lane
+             change, not a relabelling, and is deliberately not done here. -->
         <select id="morphModeSel" class="morph-eng-sel">
-          <option value="image">Image — SDXL</option>
+          <option value="image">Image</option>
           <option value="ltx-fast">Clip · Fast — LTX (~1.5 min)</option>
           <option value="wan-fast">Clip · Quality — Wan (~10 min)</option>
         </select>
@@ -1742,6 +1752,11 @@
       </div>
       <div class="sr" id="morphEngRow">
         <span class="sr-l" data-i18n="morpheus.engine">Engine</span>
+        <!-- Engine = the maker. Options are re-labelled at load from
+             /image/engines, which is the authority on what is installed and
+             enabled; the markup here is the pre-flight state. A disabled
+             option is a courtesy, NOT the guard — the endpoint refuses an
+             engine it will not run, by name and with a reason. -->
         <select id="morphEngSel" class="morph-eng-sel">
           <option value="sdxl">SDXL — sd_xl_base_1.0</option>
           <option value="flux" disabled>FLUX — not installed</option>
