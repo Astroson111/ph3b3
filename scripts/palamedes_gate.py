@@ -111,13 +111,36 @@ def delivery_frame(src, out, frame=(720, 1280)):
 
 
 # ---------- the reader ----------------------------------------------------
-def read(path, mode="lenient"):
+def read(path, mode="lenient", keep_alive=0):
+    """Read the sign. Releases the model afterwards by DEFAULT.
+
+    keep_alive=0 is not a tuning choice, it is a safety one. The reader is a 7B
+    VLM that takes ~10 GB, and ollama's default holds it for five minutes after
+    the call. Scoring a render and then asking for another render inside that
+    window means the gate is still holding the card the render needs — measured
+    2026-09-22, when a single 'before' read left 84 MiB free and OOM'd the edit
+    trial before it trained a single step.
+
+    Pass a positive keep_alive only when batch-scoring with no render in
+    between, and evict afterwards.
+    """
     b64 = base64.b64encode(open(path, "rb").read()).decode()
     req = urllib.request.Request(OLLAMA, data=json.dumps({
         "model": MODEL, "prompt": PROMPTS[mode], "images": [b64],
-        "stream": False, "options": {"temperature": 0}}).encode(),
+        "stream": False, "keep_alive": keep_alive,
+        "options": {"temperature": 0}}).encode(),
         headers={"Content-Type": "application/json"})
     return json.loads(urllib.request.urlopen(req, timeout=300).read()).get("response", "")
+
+
+def evict_reader():
+    """Make sure the reader is off the card, whatever keep_alive was used."""
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            OLLAMA, data=json.dumps({"model": MODEL, "keep_alive": 0}).encode(),
+            headers={"Content-Type": "application/json"}), timeout=60).read()
+    except Exception:
+        pass
 
 
 def word_accuracy(read_text, target):

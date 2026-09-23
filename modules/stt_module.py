@@ -271,9 +271,18 @@ class STTModule:
         # still doing its initial boot load is a "come back later".
         if self._loading and not self._released:
             return {"text": None, "error": "Whisper still loading — try again in a moment."}
-        if self._available or self._released:
-            return self._listen_whisper(duration_seconds, language)
-        elif SR_AVAILABLE:
+        if WHISPER_AVAILABLE:
+            # Not `if self._available`: a boot load that failed leaves
+            # _available False forever, and she would stay on the Google
+            # fallback until someone restarted her. Measured 2026-09-22 — a
+            # render still holding the card when she came back OOM'd the boot
+            # load, and nothing would have retried it. _listen_whisper records
+            # first and then calls ensure_loaded(), so the retry costs the user
+            # nothing they have not already said.
+            r = self._listen_whisper(duration_seconds, language)
+            if not r.get("_needs_fallback"):
+                return r
+        if SR_AVAILABLE:
             return self._listen_sr()
         return {"text": None, "error": "No speech recognition available."}
 
@@ -291,7 +300,13 @@ class STTModule:
             # Reload AFTER recording, never before: loading takes ~15s and the
             # microphone must not be closed while it happens.
             if not self.ensure_loaded():
-                return {"text": None, "error": "Whisper unavailable"}
+                # Signal listen() to try the fallback rather than returning a
+                # dead end — the audio is already captured either way.
+                # NOTE: the fallback re-records, so the speaker repeats
+                # themselves. Acceptable on a path that only fires when Whisper
+                # could not be loaded at all.
+                return {"text": None, "error": "Whisper unavailable",
+                        "_needs_fallback": True}
             with self._using():
                 result = self._model.transcribe(audio_flat, **_stt_options(language))
             text, _reason = _accept(result)
