@@ -93,6 +93,82 @@ for _n, _t in QUALITY_TIERS.items():
     assert _t["scheduler"] in QUALITY_SCHEDULERS, _n
 
 
+# ── Palamedes: the Qwen text-rendering engine ────────────────────────────────
+#
+# Every number here was measured on this card on 2026-09-22, not chosen:
+#   Edit-2509 Q4_K_M   136.3 s/1024^2 warm, 14,467 MiB peak, +3.4 s evict cycle
+#   + 4-step Lightning  24.7 s/1024^2, 100% letterform accuracy at delivery scale
+#   Q5_K_S             15-17% slower for nothing; 2512 has NO matched Lightning
+#
+# The step count is NOT a knob. A quality tier that let a caller ask for 20
+# steps here would un-decide the measurement that picked this lane, and a
+# 4-step LoRA driven at 20 steps is simply the wrong model.
+QWEN_GGUF    = "Qwen-Image-Edit-2509-Q4_K_M.gguf"
+QWEN_ENCODER = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+QWEN_VAE     = "qwen_image_vae.safetensors"
+QWEN_LORA    = "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors"
+QWEN_STEPS   = 4
+QWEN_CFG     = 1.0          # Lightning is distilled for this; it is not tunable
+QWEN_SECONDS = 25           # measured 24.7 s, for the honest caption
+# Measured peak 14,467 MiB over an 873 MiB floor. Herakles is asked for this
+# much BEFORE the render, so a job that cannot fit is refused rather than OOM'd.
+QWEN_NEED_MB = 13600
+
+ENGINE_DEFAULT = "sdxl"
+
+# Injected by the server at import, same shape as video_lane_open: a CALLABLE
+# so flipping the switch is seen by a job already in flight, not frozen at
+# import. Defaults closed — the brief's default is OFF.
+qwen_open = lambda: False
+
+# Injected by the server at import. Whisper lives INSIDE the server process and
+# has no pid of its own, so Herakles cannot discover it by walking nvidia-smi —
+# it has to be handed the object. Returns None when the server has not wired it,
+# in which case Herakles simply never reaches the hearing tier.
+stt_provider = lambda: None
+
+ENGINES = {
+    "sdxl": {"label": "SDXL", "model": "sd_xl_base_1.0",
+             "hint": "General image generation",
+             "gate": None},
+    "qwen": {"label": "Qwen", "model": "Edit-2509 + Lightning",
+             "hint": f"Text rendering \u00b7 ~{QWEN_SECONDS}s",
+             "gate": "qwen"},
+}
+
+
+def engine_enabled(name: str) -> bool:
+    """Is this engine available to run right now?"""
+    spec = ENGINES.get(name)
+    if spec is None:
+        return False
+    if spec["gate"] == "qwen":
+        return bool(qwen_open())
+    return True
+
+
+def resolve_engine(name: str | None) -> str:
+    """Engine name -> validated engine id. Raises ValueError with a REASON.
+
+    Called BEFORE the GPU lock, exactly like resolve_quality, so an off-spec or
+    switched-off engine costs a rejection and nothing else: no lock held, no
+    Ollama evicted, no card claimed for a request that was never going to run.
+
+    A disabled engine is refused BY NAME with a stated reason — never a 404 and
+    never a silent fallback to SDXL. The greyed-out dropdown option is a
+    courtesy to the UI; this is the guard.
+    """
+    eng = (name or ENGINE_DEFAULT).strip().lower()
+    if eng not in ENGINES:
+        raise ValueError(
+            f"unknown engine {eng!r}; choose one of: " + ", ".join(sorted(ENGINES)))
+    if not engine_enabled(eng):
+        raise ValueError(
+            f"the {ENGINES[eng]['label']} engine is installed but switched off "
+            f"(PH3B3_QWEN). Nothing was rendered and nothing was evicted.")
+    return eng
+
+
 def resolve_quality(tier: str | None) -> dict:
     """Tier name -> sampling parameters. Raises ValueError on anything unknown.
 
@@ -1922,9 +1998,93 @@ async def evict_hermes(http: httpx.AsyncClient) -> None:
 
 
 # ── ComfyUI helpers ───────────────────────────────────────────────────
+# The Qwen txt2img graph. Node ids are deliberately NOT shared with
+# _SDXL_TEMPLATE: nothing downstream indexes them by number except
+# fetch_and_save, which scans outputs for "images" and does not care.
+#
+# TextEncodeQwenImageEdit with no image input is plain text conditioning — the
+# edit node is what ComfyUI ships for this family, and the reference-latent
+# path only engages when an image is supplied.
+_QWEN_TEMPLATE: dict = {
+    "1":  {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": None}},
+    "2":  {"class_type": "CLIPLoader",
+           "inputs": {"clip_name": None, "type": "qwen_image"}},
+    "3":  {"class_type": "VAELoader", "inputs": {"vae_name": None}},
+    "4":  {"class_type": "TextEncodeQwenImageEdit",
+           "inputs": {"clip": ["2", 0], "prompt": None}},
+    "5":  {"class_type": "TextEncodeQwenImageEdit",
+           "inputs": {"clip": ["2", 0], "prompt": None}},
+    "6":  {"class_type": "EmptySD3LatentImage",
+           "inputs": {"width": None, "height": None, "batch_size": 1}},
+    "10": {"class_type": "LoraLoaderModelOnly",
+           "inputs": {"model": ["1", 0], "lora_name": None,
+                      "strength_model": 1.0}},
+    "7":  {"class_type": "KSampler",
+           "inputs": {"model": ["10", 0], "positive": ["4", 0],
+                      "negative": ["5", 0], "latent_image": ["6", 0],
+                      "seed": None, "steps": None, "cfg": None,
+                      "sampler_name": "euler", "scheduler": "simple",
+                      "denoise": 1.0}},
+    "8":  {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+    # SaveImage, same as SDXL, so fetch_and_save -> output check -> watermark
+    # is the identical path with no new branch. The 2026-09-15 stamping ruling
+    # applies to this lane for free, which is the point of not forking here.
+    "9":  {"class_type": "SaveImage",
+           "inputs": {"filename_prefix": "ph3b3", "images": ["8", 0]}},
+}
+
+
+def build_qwen_workflow(params: dict) -> dict:
+    """Fill the Qwen template. Steps and cfg come from the MEASURED constants,
+    never from params — see QWEN_STEPS.
+
+    Note on the negative prompt: it is wired, and at QWEN_CFG = 1.0 it has no
+    effect, because classifier-free guidance at 1.0 does not consult the
+    negative branch at all. That is a real difference from the SDXL lane, where
+    with_child_negative() contributes conditioning. It is wired anyway so the
+    graph is honest about what was asked and the DB records it, but it must not
+    be mistaken for a floor layer here: on this path the floor is the prompt
+    gate before the job and the output check after it, both unchanged.
+    """
+    wf = copy.deepcopy(_QWEN_TEMPLATE)
+    seed = params.get("seed", -1)
+    if seed < 0:
+        seed = random.randint(0, 2**32 - 1)
+        params["seed"] = seed
+    neg = with_child_negative(params.get("negative") or SDXL_NEG)
+    params["negative"] = neg
+    wf["1"]["inputs"]["unet_name"]  = QWEN_GGUF
+    wf["2"]["inputs"]["clip_name"]  = QWEN_ENCODER
+    wf["3"]["inputs"]["vae_name"]   = QWEN_VAE
+    wf["10"]["inputs"]["lora_name"] = QWEN_LORA
+    wf["4"]["inputs"]["prompt"]     = params.get("positive", "")
+    wf["5"]["inputs"]["prompt"]     = neg
+    wf["6"]["inputs"]["width"]      = params.get("width",  1024)
+    wf["6"]["inputs"]["height"]     = params.get("height", 1024)
+    wf["7"]["inputs"]["seed"]       = seed
+    wf["7"]["inputs"]["steps"]      = QWEN_STEPS
+    wf["7"]["inputs"]["cfg"]        = QWEN_CFG
+    # Recorded so the DB and the sidecar say what actually ran, not what a
+    # tier would have implied.
+    params["steps"] = QWEN_STEPS
+    params["cfg"]   = QWEN_CFG
+    return wf
+
+
 def build_workflow(params: dict) -> dict:
-    """Fill the SDXL template from params. Resolves seed=-1 to a random value
-    and writes it back into params so the caller can index it."""
+    """Fill the template for this job's ENGINE. Resolves seed=-1 to a random
+    value and writes it back into params so the caller can index it.
+
+    The engine was already validated by resolve_engine() before the job was
+    queued; this only dispatches. An unknown value here would be a programming
+    error, not a bad request, so it raises rather than silently using SDXL —
+    quietly rendering the wrong engine is worse than failing.
+    """
+    engine = (params.get("engine") or ENGINE_DEFAULT).strip().lower()
+    if engine == "qwen":
+        return build_qwen_workflow(params)
+    if engine != "sdxl":
+        raise ValueError(f"build_workflow: unroutable engine {engine!r}")
     wf = copy.deepcopy(_SDXL_TEMPLATE)
     seed = params.get("seed", -1)
     if seed < 0:
@@ -2550,11 +2710,37 @@ def create_job() -> str:
 # ── Main generation coroutine ─────────────────────────────────────────
 async def run_generation(job_id: str, params: dict) -> None:
     """Full GPU-swap lifecycle. Always call as a FastAPI BackgroundTask."""
+    engine = (params.get("engine") or ENGINE_DEFAULT).strip().lower()
+    lease = None
     async with gpu_lock:
         async with httpx.AsyncClient() as http:
             try:
                 jobs[job_id]["state"] = "evicting"
-                await evict_hermes(http)
+                if engine == "qwen":
+                    # Herakles' first production caller. `holder` is this job:
+                    # we already hold gpu_lock and our own row is non-terminal,
+                    # so without naming ourselves the authority would refuse us
+                    # for being busy — with us.
+                    #
+                    # Ollama goes first, ComfyUI's cache second, her hearing
+                    # only if those were not enough. If it comes to her ears,
+                    # listen() answers with a spoken line for the duration
+                    # rather than silence.
+                    import herakles
+                    lease = await herakles.request_card(
+                        QWEN_NEED_MB, "palamedes", http=http,
+                        stt=stt_provider(), holder=job_id,
+                        eta_s=QWEN_SECONDS + 15)
+                    if not lease.get("granted"):
+                        # Refused BEFORE anything was loaded. Say why.
+                        raise RuntimeError(lease.get("line") or "not enough VRAM")
+                    if "stt" in lease.get("evicted", []):
+                        jobs[job_id]["ears_held"] = True
+                        log.info("Morpheus: job %s took her hearing for the render",
+                                 job_id)
+                else:
+                    # SDXL: unchanged. Herakles is not in a loop it never needed.
+                    await evict_hermes(http)
 
                 jobs[job_id]["state"] = "starting"
                 await ensure_comfy_up(http)
@@ -2583,6 +2769,19 @@ async def run_generation(job_id: str, params: dict) -> None:
 
             finally:
                 await comfy_free(http)   # TRAP #2 — always, even on error
+                if lease is not None:
+                    # AFTER comfy_free, and the order is the point. release_card
+                    # reloads her hearing eagerly rather than leaving it on a
+                    # lazy fuse — and reloading 4.5 GB of Whisper while ComfyUI
+                    # still holds ~11 GB is precisely how she went deaf on
+                    # 2026-09-22: the load hit CUDA OOM and nothing retried it.
+                    # Drop the render's models first, then give her ears back.
+                    try:
+                        await herakles.release_card(lease, http=http,
+                                                    stt=stt_provider())
+                    except Exception as exc:        # noqa: BLE001
+                        log.error("Morpheus: job %s could not release the card: %s",
+                                  job_id, exc)
 
 
 # ── img2img (Edit Mode) — same checkpoint + sampler family as txt2img ─────────

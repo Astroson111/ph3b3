@@ -49,7 +49,7 @@ def card(monkeypatch):
                 "used_fraction": 1 - state["free"] / 16380, "gpu": "fake"}
 
     monkeypatch.setattr(hk, "gpu_status", fake_status)
-    monkeypatch.setattr(hk, "busy_with", lambda: None)
+    monkeypatch.setattr(hk, "busy_with", lambda **_kw: None)
 
     class FakeMorpheus:
         COMFY_HOST = "http://x"
@@ -91,7 +91,7 @@ def test_hearing_is_evicted_last():
 
 
 def test_refuses_under_a_live_render(monkeypatch, card):
-    monkeypatch.setattr(hk, "busy_with", lambda: "a Morpheus render")
+    monkeypatch.setattr(hk, "busy_with", lambda **_kw: "a Morpheus render")
     with pytest.raises(hk.HeraklesError, match="Not while"):
         asyncio.run(hk.request_card(12000, "palamedes", http=object()))
 
@@ -162,3 +162,56 @@ def test_pressure_warn_is_never_a_trigger():
         body = ast.unparse(_fn(fname))
         assert "PRESSURE_WARN" not in body, \
             f"{fname} acts on the 50% mark — it is a display value, not a trigger"
+
+
+# ---------- a job making room for ITSELF ----------------------------------
+def test_a_job_can_clear_room_for_its_own_render(monkeypatch, card):
+    """Herakles' first real caller is run_generation, which asks for the card
+    WHILE holding gpu_lock with its own row already non-terminal. Without
+    ignore_job the authority refused the only customer it was built for."""
+    seen = {}
+
+    def fake_busy(ignore_job=None):
+        seen["ignore_job"] = ignore_job
+        return None if ignore_job == "job-1" else "Morpheus render job-1 (loading)"
+
+    monkeypatch.setattr(hk, "busy_with", fake_busy)
+    r = asyncio.run(hk.request_card(6000, "palamedes", http=object(), holder="job-1"))
+    assert r["granted"] is True
+    assert seen["ignore_job"] == "job-1", "holder was not passed through to busy_with"
+
+
+def test_another_live_job_still_refuses(monkeypatch, card):
+    """Excluding yourself is the ONLY exception. Someone else's render still wins."""
+    monkeypatch.setattr(hk, "busy_with",
+                        lambda ignore_job=None: "Amphion song abc (sampling)")
+    with pytest.raises(hk.HeraklesError, match="Not while"):
+        asyncio.run(hk.request_card(6000, "palamedes", http=object(), holder="job-1"))
+
+
+def test_busy_with_ignores_only_the_named_job(monkeypatch):
+    """Exercise the real function, not a fake."""
+    import sys, types
+    fake = types.SimpleNamespace(
+        jobs={"mine": {"state": "loading"}, "theirs": {"state": "sampling"}},
+        gpu_lock=None)
+    monkeypatch.setitem(sys.modules, "morpheus", fake)
+    assert hk.busy_with(ignore_job="mine") is not None      # theirs still live
+    fake.jobs.pop("theirs")
+    assert hk.busy_with(ignore_job="mine") is None          # only mine left
+    assert hk.busy_with() is not None                       # unnamed: mine counts
+
+
+def test_a_held_lock_does_not_refuse_the_holder(monkeypatch):
+    """run_generation holds gpu_lock when it asks. The lock check must not fire
+    for a caller that named itself, or nothing could ever make room."""
+    import sys, types
+
+    class _Lock:
+        @staticmethod
+        def locked(): return True
+
+    monkeypatch.setitem(sys.modules, "morpheus",
+                        types.SimpleNamespace(jobs={}, gpu_lock=_Lock()))
+    assert hk.busy_with() == "a GPU job already running"
+    assert hk.busy_with(ignore_job="mine") is None

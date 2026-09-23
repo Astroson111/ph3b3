@@ -5656,6 +5656,24 @@ _VIDEO_DISABLED_REASON = (
 # imports morpheus), so the reader is injected rather than looked up.
 morpheus.video_lane_open = lambda: VIDEO_LANE_ENABLED
 
+# ── Palamedes switch — house pattern, but defaulting CLOSED ──────────────────
+# The video lane defaults ON because shipping reality won that argument. This
+# one defaults OFF: the Qwen lane is new, it takes the whole card, and it can
+# take her hearing to get it.
+#
+# OFF means BOTH halves, and the endpoint half is the one that matters:
+#   * the dropdown option reads "Qwen — not installed" and is disabled
+#   * /image/generate refuses an engine=qwen payload by name, with a reason
+# A UI that greys a control is a courtesy to the person using it, not a
+# security property — anything can POST. Never a 404 either: a 404 says the
+# feature does not exist, and this one does, switched off.
+QWEN_ENABLED = os.getenv("PH3B3_QWEN", "off").strip().lower() \
+    in ("1", "true", "yes", "on")
+morpheus.qwen_open = lambda: QWEN_ENABLED
+# Whisper has no pid of its own — it lives in THIS process — so Herakles has to
+# be handed the object rather than discovering it.
+morpheus.stt_provider = lambda: stt
+
 
 def _video_lane_gate():
     """Refuse with a stated reason when the lane is off — never a 404.
@@ -6036,6 +6054,20 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
     # request, the chat socket, device heartbeats — for the judge's duration.
     await asyncio.to_thread(_morpheus_floor_gate, positive, negative, request)
 
+    # ── Engine (Palamedes) ────────────────────────────────────────────────────
+    # Same weld point and same ordering rule as the quality tier below: resolved
+    # BEFORE the job is queued and therefore before run_generation takes the GPU
+    # lock or claims the card. An off-spec or switched-off engine costs a 400 and
+    # nothing else — nothing evicted, no lease taken, her hearing untouched.
+    #
+    # A disabled engine is refused BY NAME with a reason, never a 404 and never
+    # a silent fall back to SDXL. The greyed-out dropdown option is a courtesy;
+    # this is the guard.
+    try:
+        engine = morpheus.resolve_engine(body.get("engine"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
     # ── Quality tier (Aelion) ─────────────────────────────────────────────────
     # Resolved HERE, before the job is queued and therefore before run_generation
     # takes the GPU lock. A bad tier costs a 400 and nothing else: no lock held,
@@ -6052,6 +6084,7 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
         _quality_session[_qkey] = quality["quality"]   # sticky for this session
 
     params = {
+        "engine":    engine,
         "positive":  positive,
         "negative":  negative,
         "width":     int(body.get("width",  1024)),
@@ -6062,11 +6095,46 @@ async def image_generate(request: Request, body: dict, background_tasks: Backgro
         # `steps` used to be caller-supplied and UNBOUNDED — int(body.get("steps"))
         # accepted 1 or 10000. Naming a tier is now the only way to influence
         # sampling, which is the point of an allowlist.
+        #
+        # On the Qwen lane these are overwritten by build_qwen_workflow with the
+        # measured constants. The 4-step Lightning LoRA was chosen BY
+        # measurement (24.7 s, 100% letterform); a tier that could drive it at
+        # 30 steps would un-decide that, and a 4-step LoRA at 30 steps is just
+        # the wrong model. The tier still resolves so the request shape stays
+        # uniform and the DB records what was asked.
         **quality,
     }
     job_id = morpheus.create_job()
     background_tasks.add_task(morpheus.run_generation, job_id, params)
-    return {"job_id": job_id, "quality": quality["quality"], "emotion": emotion_id}
+    return {"job_id": job_id, "quality": quality["quality"],
+            "engine": engine, "emotion": emotion_id}
+
+
+@app.get("/image/engines")
+async def image_engines():
+    """Which makers exist, and which will actually run right now.
+
+    The ONE authority on the enabled set. The panel re-labels its dropdown from
+    this rather than carrying a second list, so "installed" and "switched on"
+    cannot drift between the markup and the endpoint — and so a disabled option
+    in the UI is a view of the guard, not the guard itself.
+    """
+    out = []
+    for eid, spec in morpheus.ENGINES.items():
+        on = morpheus.engine_enabled(eid)
+        out.append({
+            "id": eid,
+            "label": spec["label"],
+            "model": spec["model"] if on else "not installed",
+            "hint": spec["hint"],
+            "enabled": on,
+            # Qwen has exactly one speed. Offering Draft/Standard/Premium for a
+            # lane with a single measured setting would be fiction.
+            "fixed_quality": ({"label": "Lightning",
+                               "hint": f"~{morpheus.QWEN_SECONDS}s"}
+                              if eid == "qwen" else None),
+        })
+    return {"default": morpheus.ENGINE_DEFAULT, "engines": out}
 
 
 @app.get("/image/quality")
