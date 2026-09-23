@@ -156,19 +156,20 @@ def test_a_genuinely_absent_artifact_is_never_fabricated(question, sid):
 @needs_service
 @needs_judge
 def test_she_does_not_claim_a_story_she_does_not_have():
-    """MEASURED GAP, recorded rather than hidden.
+    """This went RED on the first live verify and that is why the story clause
+    is gone.
 
-    With the manifest in place, "Tell me <unfiled title> again" passes triage
-    6/6 where it used to be held 0/10. No clause wording fixed it — a sharper
-    story list ("and NO others", "exactly these three") left it credulous 6/6,
-    and a stricter rule only moved the credulity onto a different phrasing. It
-    is the request SHAPE the model is matching, not the list.
+    With stories named in the manifest, the gate passed "Tell me <unfiled
+    title> again" (held 0/10 -> passed 6/6) and she answered with a COMPLETE
+    INVENTED STORY under that title, characters borrowed from Moby-Dick. The
+    argument that canon/shelf's "never claim to have any other work" would
+    catch it was falsified in one turn — the same lesson already written above
+    the shelf injection: an instruction the model can decline to follow is not
+    a control.
 
-    That is acceptable only if the layer that genuinely owns story existence
-    holds, and that layer is not triage: canon and shelf inject the complete
-    authoritative inventory with "never claim to have any other work". This
-    test is that assertion. If it ever goes red, the manifest's story clause is
-    no longer safe and the hold has to come back.
+    The clause is withdrawn and the deterministic resolve() bypass carries
+    named stories instead. This test stays as the lock on that decision: if it
+    goes red again, something has put story titles back in front of the gate.
     """
     a = _ask("Tell me The Lighthouse at Dunwich again", "mf-unfiled")
     assert a, "empty response"

@@ -154,16 +154,42 @@ def test_the_edit_heading_is_present_in_both_trial_states(at_flags):
 
 
 # ── authors 2 and 3: stories, documents ──────────────────────────────────────
-def test_story_titles_come_through_by_name():
-    m = cm.build(story_titles=["Arthur and Eliza", "Esmeralda's Garden"])
-    assert "Arthur and Eliza" in m and "Esmeralda's Garden" in m
+def test_stories_are_never_named_in_the_manifest():
+    """A LOCK, not an omission.
+
+    The story clause was built to retire the named-story bypass, and it made the
+    gate credulous about story-shaped turns instead of about those titles:
+    "tell me <unfiled title> again" went from held 0/10 to passed 6/6, and on
+    the live verify she answered one with a complete invented story. Stories
+    have a deterministic resolver (shelf/canon resolve() above the gate) which
+    cannot pass a title that does not exist; the manifest covers only what has
+    no such resolver. Putting titles back re-opens a fabrication route.
+    """
+    m = cm.build(capability_topics=["making images"],
+                 story_titles=["Arthur and Eliza", "Esmeralda's Garden"])
+    assert "Arthur and Eliza" not in m
+    assert "Esmeralda" not in m
+    assert "stories" not in m.lower()
+    assert "stories" not in cm.CONTRIBUTORS
 
 
-def test_an_empty_store_contributes_no_clause():
-    """No stories filed → the guard is told nothing about stories, and a story
-    question holds honestly. The negative case falls out of the mechanism."""
-    m = cm.build(capability_topics=["making images"], story_titles=[])
-    assert "stories" not in m
+def test_the_server_does_not_pass_story_titles_to_the_manifest():
+    """The lock above only holds if the call site agrees with it."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    i = src.index("_manifest = context_manifest.build(")
+    call = src[i:src.index(")", src.index("document_loaded", i))]
+    assert "story_titles" not in call, \
+        "the server is naming stories in the manifest again — see _clause_stories"
+
+
+def test_the_story_bypass_is_still_what_carries_a_named_story():
+    """Retiring it was the brief's goal and the measurement refused it: the
+    bypass is a directory lookup that cannot flap, and at baseline the gate's
+    verdict on "What is Arthur and Eliza about?" was answerable 4/5 where all
+    four were TIMEOUTS — the one run that completed held it."""
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    assert "_early_claim or _story_claim" in src
+    assert src.index("_story_claim = False") < src.index("_triage = (_TriagePass()")
 
 
 def test_no_document_loaded_means_no_document_clause():

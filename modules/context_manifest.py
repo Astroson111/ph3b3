@@ -44,7 +44,8 @@ _RULE = (" A request whose subject is in that list IS answerable — do not hold
          "it. Anything not in that list is still absent, and still holds.")
 
 # Ordered, so the manifest reads the same way twice and a diff is meaningful.
-CONTRIBUTORS = ("capabilities", "stories", "document")
+# "stories" is deliberately absent — see _clause_stories.
+CONTRIBUTORS = ("capabilities", "document")
 
 
 def _clause_capabilities(topics):
@@ -55,11 +56,43 @@ def _clause_capabilities(topics):
 
 
 def _clause_stories(titles):
-    """From canon.list_all() / shelf.list_books() — the same stores the
-    injections read. Titles, not summaries: triage has to match a NAME."""
-    if not titles:
-        return None
-    return "these stories, by name — " + "; ".join(f"“{t}”" for t in titles)
+    """WITHDRAWN. Stories are not in the manifest, and must not be put back.
+
+    This clause was meant to retire the named-story bypass. It was built,
+    measured, and removed the same evening, because naming the stories made the
+    gate credulous about story-SHAPED turns rather than about those titles:
+
+        "Tell me <UNFILED title> again"    held 0/10  ->  passed 6/6
+
+    No WORDING of the clause fixed it — a sharper list ("and NO others",
+    "exactly these three") left it credulous 6/6. Naming any stories teaches the
+    gate to pass story-SHAPED turns; only removing the clause restores the hold,
+    which it does completely (held 0/8 with the clause gone).
+
+    It was allowed to stand for one live verify, on the argument that triage is
+    not the layer that owns story existence — canon and shelf inject the
+    authoritative inventory with "never claim to have any other work on the
+    shelf". That verify falsified it in a single turn: she returned a complete
+    invented story under the unfiled title, with characters borrowed from
+    Moby-Dick. Which is the lesson already written above the shelf injection in
+    server.py — *an instruction the model can decline to follow is not a
+    control* — learned twice.
+
+    So stories keep the mechanism that never flapped: the deterministic resolve()
+    bypass above the gate, a directory lookup and a string match. It cannot pass
+    a title that does not exist, which is the one property this clause could not
+    buy. The manifest covers what has NO deterministic resolver.
+
+    `titles` is still accepted so the signature is stable, and ignored.
+
+    NOT to be confused with a separate, PRE-EXISTING credulity that was found
+    while measuring this one: "What is <unfiled title> about?" comes back
+    answerable 8/8 with no manifest at all, and every one of those eight is a
+    TRIAGE_FAILOPEN_TIMEOUT rather than a verdict. That is the 2.0 s cap in
+    triage.py, not this clause — at a 6 s cap the same turn holds 0/8. It
+    predates the manifest and is recorded in the commit for a separate ruling.
+    """
+    return None
 
 
 def _clause_document(loaded):

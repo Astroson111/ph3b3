@@ -2764,15 +2764,15 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # Faster despite ~121 more prompt tokens: a confident pass emits a few JSON
     # tokens where a hold generates a whole clarifying question, and the 2 s
     # timeouts that were silently failing open stopped happening.
+    # Stories are NOT in the manifest — the deterministic bypass above carries
+    # them. Naming them here made the gate credulous about story-shaped turns
+    # rather than about those titles ("tell me <unfiled title> again" went from
+    # held 0/10 to passed 6/6), and on the live verify she answered one with a
+    # whole invented story. _story_claim is a directory lookup: it cannot pass a
+    # title that does not exist. See context_manifest._clause_stories.
     try:
-        _story_titles = []
-        for _t in ([m.get("title") for m in canon.list_all()]
-                   + [b.get("title") for b in shelf.list_books()]):
-            if _t and _t not in _story_titles:
-                _story_titles.append(_t)
         _manifest = context_manifest.build(
             capability_topics=_manifest_capability_topics(),
-            story_titles=_story_titles,
             document_loaded=bool(kadmos.get_pending(body.get("session_id", "default"))))
     except Exception:                      # noqa: BLE001
         _manifest = ""                     # a manifest fault must never gate a turn
