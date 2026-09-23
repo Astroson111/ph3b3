@@ -672,6 +672,16 @@ _CAPTURE_NUDGE = (
 # "I can't hear while a render is running". And every token here rides every
 # turn of every conversation she has, so it stays a few hundred, not an
 # encyclopedia.
+#
+# The opening line LICENSES the inventory act. Describing a capability is not
+# the same as permitting her to enumerate it, and the first live verify proved
+# the gap: asked "what image engines do you have?" she asked a clarifying
+# question instead, while the block sat 86% through her prompt saying exactly
+# what she had. It also names "engines" explicitly, because that is house
+# jargon rather than natural phrasing, and closes with "not from anywhere else"
+# — which doubles as a belt against a competing self-description, since
+# `photo_capabilities` answers "what can you do with images" from Apelles'
+# editing map and never mentions generation at all.
 def _self_knowledge() -> str:
     import morpheus as _m
     try:
@@ -680,8 +690,14 @@ def _self_knowledge() -> str:
         _wm = None
 
     qwen = _m.engine_enabled("qwen")
-    lines = ["\n\nWHAT YOU CAN DO TODAY (read from your own config just now — "
-             "if something is not listed here, you do not have it):"]
+    lines = [
+        "\n\nWHAT YOU CAN DO TODAY (read from your own config just now — "
+        "if something is not listed here, you do not have it)."
+        "\n\nIf someone asks what you can do, what engines, tools, models, or "
+        "capabilities you have, what's new, or what changed — answer by listing "
+        "plainly from this section. You already know this; don't ask for "
+        "clarification, don't deflect, don't answer from anywhere else in your "
+        "context or from general knowledge about AI systems."]
 
     img = ["You generate images locally."]
     if qwen:
