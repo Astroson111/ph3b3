@@ -11,7 +11,11 @@ import asyncio
 
 import pytest
 
-import modules.herakles as hk
+# `import herakles`, NOT `modules.herakles`: sys.path carries both the repo root
+# and modules/, so those are two distinct module objects for the same file.
+# Production (morpheus, server) imports the bare name; patching the other one
+# means patching something the code under test never reaches.
+import herakles as hk
 
 SRC = ast.parse(open(hk.__file__).read())
 

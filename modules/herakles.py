@@ -112,6 +112,18 @@ def tenants() -> list[dict]:
     return sorted(out, key=lambda t: -t["used_mib"])
 
 
+def free_mib() -> int:
+    """Free VRAM, and nothing else. Cheap enough to poll in a loop.
+
+    gpu_status() walks /proc for every tenant, which is the right shape for a
+    report and the wrong shape for a settle-wait that runs every 250 ms.
+    """
+    rows = _smi("--query-gpu=memory.free")
+    if not rows or not rows[0]:
+        raise HeraklesError("nvidia-smi returned no GPU row")
+    return int(rows[0][0])
+
+
 def gpu_status() -> dict:
     """Read-only. Never frees anything, never signals anything.
 

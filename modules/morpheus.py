@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import random
+import time
 import re
 from functools import lru_cache
 import shutil
@@ -2184,6 +2185,50 @@ def maybe_stamp(raw: bytes, job_id: str, prompt: str) -> bytes:
     return marked
 
 
+# The output check needs room for llava (~4.7 GB) and then the text judge.
+# Asking for a little more than one model keeps the second call from starving
+# the first's reload.
+JUDGE_NEED_MB = 5200
+
+
+async def wait_for_card(need_mb: int = JUDGE_NEED_MB, timeout: float = 15.0) -> int:
+    """Block until the driver has actually reclaimed, or the timeout expires.
+
+    comfy_free() POSTs to ComfyUI and returns as soon as ComfyUI accepts it —
+    the reclaim is ASYNCHRONOUS. free_gpu() already knew this and sleeps 1.5s
+    with the note that "both backends free asynchronously"; the call in front of
+    the output check did not, and SDXL at 6.9 GB left enough slack to hide it.
+
+    Qwen at 13.6 GB does not. Measured 2026-09-23: the judge got
+    "cudaMalloc failed: out of memory", _minor_check failed closed as designed,
+    that triggered the corroboration step, and the second opinion false-positived
+    on a sign reading FRESH BREAD DAILY — a child-safety breach recorded against
+    a bakery sign.
+
+    Returns the free figure it settled on. Never raises: a timeout here must not
+    cost the render, and the check downstream is still fail-closed either way.
+    """
+    try:
+        import herakles
+    except Exception:                               # noqa: BLE001
+        await asyncio.sleep(1.5)                    # the old behaviour, at least
+        return -1
+    deadline = time.monotonic() + timeout
+    free = -1
+    while time.monotonic() < deadline:
+        try:
+            free = herakles.free_mib()
+        except Exception as exc:                    # noqa: BLE001
+            log.warning("[safety] could not read free VRAM (%s) — not blocking", exc)
+            return -1
+        if free >= need_mb:
+            return free
+        await asyncio.sleep(0.25)
+    log.warning("[safety] card did not settle above %d MiB within %.0fs "
+                "(%d MiB free) — the judge may be starved", need_mb, timeout, free)
+    return free
+
+
 async def fetch_and_save(http: httpx.AsyncClient, outputs: dict,
                          job_id: str, prompt: str = "") -> Path:
     img = next(
@@ -2222,6 +2267,8 @@ async def fetch_and_save(http: httpx.AsyncClient, outputs: dict,
     # room to run is still a refusal; what this removes is the refusal that only
     # ever meant "the GPU was full".
     await comfy_free(http)
+    # ...and WAIT for it. The POST above returns before the driver reclaims.
+    await wait_for_card()
 
     # Last gate. The bytes are judged before they become a file, so a flagged
     # render never exists in IMAGE_DIR at all.
@@ -2233,7 +2280,25 @@ async def fetch_and_save(http: httpx.AsyncClient, outputs: dict,
     # (59/59 multilingual, 15/15 bypass attempts). This is defence in depth
     # against the model drifting young from a clean prompt, and a render that
     # genuinely did drift still corroborates.
-    if await asyncio.to_thread(output_minor_check, raw):
+    blocked, unavailable = await asyncio.to_thread(_minor_check, raw)
+    if blocked and unavailable:
+        # The judge could not RUN. Still a refusal — these bytes already
+        # rendered and there is no "try again" to offer, so fail-closed is
+        # untouched — but it is not a safety finding and must not be written
+        # down as one. source_minor_check has always made this distinction;
+        # output_minor_check discarded the reason, so an OOM and a child
+        # verdict became the same bit, and BREACH_LOG.txt recorded a
+        # corroborated hit against a bakery sign on 2026-09-23.
+        #
+        # Deliberately NOT corroborated either: running the second opinion on a
+        # flag that only ever meant "the GPU was full" is what produced that
+        # entry, via a model whose own false-positive rate this file documents
+        # at roughly one in four.
+        log.error("[safety] output check UNAVAILABLE on job %s (%s) — "
+                  "refusing the render, NOT recording a breach",
+                  job_id[:8], unavailable)
+        raise RuntimeError(_OUTPUT_UNAVAILABLE)
+    if blocked:
         corroborated = await asyncio.to_thread(output_corroborates, raw)
         if corroborated:
             log.critical("[safety] output check CORROBORATED on job %s — not persisting", job_id[:8])
@@ -2287,6 +2352,10 @@ async def fetch_and_save(http: httpx.AsyncClient, outputs: dict,
 # the generator, but a library purge requires a second, independently-framed
 # check to agree. One model's bad call cannot take the gallery with it.
 _OUTPUT_REFUSAL = "Refused by the child-safety floor."
+# Distinct text, because the two states are distinct facts. One says a judge
+# looked and objected; this one says no judge could look. Both refuse.
+_OUTPUT_UNAVAILABLE = ("The safety check could not run — the render was "
+                       "refused unchecked. Nothing was flagged.")
 OUTPUT_VISION_MODEL = os.getenv("PH3B3_OUTPUT_VISION_MODEL", "llava")
 OUTPUT_VISION_TIMEOUT = float(os.getenv("PH3B3_OUTPUT_VISION_TIMEOUT", "60"))
 

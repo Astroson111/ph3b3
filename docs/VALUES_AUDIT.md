@@ -68,6 +68,31 @@ known soft spot is a different claim from one without.
   deliberately if it ever becomes worth it — but it is a child-safety floor, and
   that is a ruling, not a tidy-up.
 
+- **Palamedes — the output check was starved by the render it guards.**
+  *(found and fixed on hardware, 2026-09-23)* The first Qwen render on real
+  hardware passed every claim. The SECOND recorded a **corroborated child-safety
+  breach against a sign reading FRESH BREAD DAILY**. Two faults compounded:
+  `comfy_free()` returns before the driver has reclaimed — the free is
+  asynchronous, which `free_gpu()` already knew and slept 1.5s for, while the
+  call in front of the output check did not — and SDXL at 6.9 GB left enough
+  slack to hide it where Qwen at 13.6 GB does not. llava then got
+  `cudaMalloc failed: out of memory`, `_minor_check` failed closed exactly as
+  designed, and that triggered the corroboration step, whose second opinion this
+  file already documents at roughly one-in-four false positives. Fixed:
+  `wait_for_card()` blocks until the driver has actually returned the judge's
+  room (bounded, never raises, a timeout costs nothing because the check is
+  fail-closed either way), and an **unavailable judge is now a refusal but not a
+  breach** — the distinction `source_minor_check` has always made and
+  `output_minor_check` discarded, so an OOM and a child verdict were the same
+  bit. Fail-closed is untouched; what changed is that a GPU that was full no
+  longer gets written into `BREACH_LOG.txt` as a safety finding. Enforced in
+  `tests/test_judge_starvation.py` (9), structurally rather than textually —
+  the first draft compared string positions and `if False:` sailed through it.
+  **The 2026-09-23 entry in BREACH_LOG.txt is a false positive of this kind**
+  and is left in place: the file is append-only because one hit is noise and six
+  is a pattern, and editing it to look better is exactly how it stops being
+  evidence.
+
 - **Palamedes — the negative prompt is inert on the Qwen lane.** *(open, by
   design)* Lightning is distilled for cfg 1.0, and classifier-free guidance at 1.0
   does not consult the negative branch at all. `with_child_negative()` is still wired
