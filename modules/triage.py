@@ -36,13 +36,15 @@ _TRIAGE_TIMEOUT = 2.0    # hard bound on the triage inference call
 _PS_TIMEOUT     = 1.0    # residency pre-check
 _MAX_TOKENS     = 120
 
-_SYSTEM = (
+_SYSTEM_HEAD = (
     "You are a triage gate for an assistant that has general knowledge and live "
     "tools (web search, weather, music, recipes, screenshots, vision). Decide "
     "whether the user's request can be answered responsibly from the provided "
     "context, from general knowledge, or via those tools. It is NOT answerable "
     "only when it refers to a specific file, artifact, or prior detail that is "
-    "absent from the context and cannot be fetched. "
+    "absent from the context and cannot be fetched. ")
+
+_SYSTEM_TAIL = (
     'Return strict JSON: {"answerable": bool, "missing": [strings], '
     '"question": string or null}. When answerable is false, "question" MUST be a '
     "short, natural question asking the user for the missing information, and it "
@@ -56,6 +58,23 @@ _SYSTEM = (
     "Suggesting an artist pushes the user toward a request that will be refused. "
     "Nothing else."
 )
+
+# The unqualified prompt, unchanged — this is what a caller with no manifest
+# gets, and what the clarifier tests assert against.
+_SYSTEM = _SYSTEM_HEAD + _SYSTEM_TAIL
+
+
+def _system_for(manifest: str | None) -> str:
+    """The triage prompt, with the context manifest in the one place it makes
+    sense: after the rule about absent artifacts, before the output format.
+
+    Appending it at the END instead puts it after "Nothing else.", where it
+    reads as an afterthought to the JSON contract rather than an exception to
+    the answerability rule.
+    """
+    if not manifest or not manifest.strip():
+        return _SYSTEM
+    return _SYSTEM_HEAD + manifest.strip() + " " + _SYSTEM_TAIL
 
 # A prompt is guidance; this is the guard. The clarifier runs on a local model
 # that can ignore an instruction, and a question naming a real performer is
@@ -174,8 +193,14 @@ def _parse(text: str) -> TriageResult | None:
     return None
 
 
-async def triage_gate(user_text: str, context: str) -> TriageResult:
+async def triage_gate(user_text: str, context: str,
+                      manifest: str | None = None) -> TriageResult:
     """Decide whether `user_text` is answerable given `context`.
+
+    `manifest` names what prompt-assembly will add to the context AFTER this
+    gate runs (see modules/context_manifest.py). It teaches the gate what will
+    exist; it never tells it what to permit. Default None keeps every existing
+    caller and test on the exact prompt they had.
 
     NEVER raises. Returns answerable=True (fail open) on timeout, parse failure,
     connection error, or an evicted model. Only a confident model verdict of
@@ -189,7 +214,7 @@ async def triage_gate(user_text: str, context: str) -> TriageResult:
             payload = {
                 "model": HERMES_MODEL,
                 "messages": [
-                    {"role": "system", "content": _SYSTEM},
+                    {"role": "system", "content": _system_for(manifest)},
                     {"role": "user",
                      "content": f"CONTEXT:\n{context or '(none)'}\n\nREQUEST:\n{user_text}"},
                 ],
