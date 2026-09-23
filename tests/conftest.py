@@ -25,6 +25,42 @@ os.environ.setdefault("PH3B3_THOTH_DATA",
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "agent"))
 
+# ── One module object per file ───────────────────────────────────────────────
+# sys.path carries BOTH the repo root and modules/, so `import morpheus` and
+# `import modules.morpheus` load the same file twice under two names, with
+# separate state. Production imports the bare name; a test that patches the
+# dotted one patches something the code under test never reaches — and the test
+# then passes while asserting nothing.
+#
+# That cost four separate debugging rounds on 2026-09-23 before it was named.
+# Aliasing makes the two spellings the SAME object, so either import works and
+# the trap cannot be stepped in again.
+# Called AFTER the environment is settled, never at definition time. Importing
+# every module early froze morpheus._LAYER_B_MODEL to the default before the
+# .env judge override below could apply, and the suite would have judged every
+# Layer B case with the wrong model while staying green —
+# test_the_suite_judges_with_the_model_the_service_uses caught it, which is
+# exactly what that test is for.
+def _alias_module_namespace():
+    import importlib
+    mods = REPO / "modules"
+    if not mods.is_dir():
+        return
+    sys.path.insert(0, str(mods))
+    import modules as _pkg  # noqa: F401  — the package must exist to alias into
+    for f in sorted(mods.glob("*.py")):
+        name = f.stem
+        if name.startswith("_"):
+            continue
+        dotted = f"modules.{name}"
+        try:
+            bare = importlib.import_module(name)
+        except Exception:          # a module that cannot import on its own is
+            continue               # not one tests patch by two names
+        sys.modules[dotted] = bare
+        setattr(_pkg, name, bare)
+
+
 import memory_spine  # noqa: E402
 from sentence_transformers import SentenceTransformer  # noqa: E402
 
@@ -50,6 +86,13 @@ if _ENV_FILE.exists():
         if _k in ("PH3B3_FLOOR_MODEL", "PH3B3_LIGHT_MODEL", "PH3B3_HEAVY_MODEL") \
                 and _k not in os.environ:
             os.environ[_k] = _v
+
+# Now that the environment matches the service, it is safe to import the module
+# namespace and alias the two spellings together.
+try:
+    _alias_module_namespace()
+except Exception as _exc:          # never let this break collection
+    print(f"conftest: module aliasing skipped ({_exc})")
 
 # ── Silence the machine ──────────────────────────────────────────────────────
 # Several test files drive real FastAPI routes through TestClient, and some of

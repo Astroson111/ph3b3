@@ -13,7 +13,10 @@ import re
 
 import pytest
 
-import modules.morpheus as morpheus
+# `import morpheus`, NOT `modules.morpheus`. sys.path carries the repo root AND
+# modules/, so those are two module objects for one file. server.py imports the
+# bare name, so patching the other leaves the endpoint untouched.
+import morpheus
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 HTML = (REPO / "static" / "panel.html").read_text(encoding="utf-8")
@@ -29,6 +32,13 @@ FIXED = {"positive": "a red barn at dusk", "negative": "", "width": 1024,
 @pytest.fixture
 def qwen_on(monkeypatch):
     monkeypatch.setattr(morpheus, "qwen_open", lambda: True)
+
+
+@pytest.fixture
+def qwen_off(monkeypatch):
+    """Force the switch CLOSED. conftest loads .env, so on a machine where the
+    lane is currently enabled these tests would otherwise assert nothing."""
+    monkeypatch.setattr(morpheus, "qwen_open", lambda: False)
 
 
 # ---------- the default did not move --------------------------------------
@@ -55,13 +65,25 @@ def test_sdxl_graph_carries_nothing_qwen():
 
 
 # ---------- the switch, both halves ---------------------------------------
-def test_qwen_is_off_by_default():
-    assert morpheus.engine_enabled("qwen") is False, \
-        "the Qwen lane is enabled without PH3B3_QWEN being set"
+def test_the_shipped_default_is_off():
+    """The CODE's default, not the ambient one. conftest loads .env, so the
+    machine's current switch position must not decide what this asserts."""
+    src = (REPO / "agent" / "server.py").read_text()
+    assert 'os.getenv("PH3B3_QWEN", "off")' in src, \
+        "the Qwen switch no longer ships closed"
+    assert 'os.getenv("PH3B3_QWEN_EDIT", "off")' in src, \
+        "the Qwen EDIT switch no longer ships closed"
+
+
+def test_engine_enabled_follows_the_switch(monkeypatch):
+    monkeypatch.setattr(morpheus, "qwen_open", lambda: False)
+    assert morpheus.engine_enabled("qwen") is False
+    monkeypatch.setattr(morpheus, "qwen_open", lambda: True)
+    assert morpheus.engine_enabled("qwen") is True
     assert morpheus.engine_enabled("sdxl") is True
 
 
-def test_disabled_engine_is_refused_by_name_with_a_reason():
+def test_disabled_engine_is_refused_by_name_with_a_reason(qwen_off):
     """Never a 404 — the feature exists, it is switched off — and never a
     silent fall back to SDXL, which would render the wrong thing quietly."""
     with pytest.raises(ValueError) as e:
@@ -193,7 +215,7 @@ def no_side_effects(monkeypatch):
     return spent
 
 
-def test_switched_off_engine_is_refused_at_the_endpoint(no_side_effects):
+def test_switched_off_engine_is_refused_at_the_endpoint(qwen_off, no_side_effects):
     r = _client.post("/image/generate", headers=_AUTH,
                      json={"positive": "a shop sign", "engine": "qwen"})
     assert r.status_code == 400, f"expected a stated refusal, got {r.status_code}"
@@ -202,14 +224,14 @@ def test_switched_off_engine_is_refused_at_the_endpoint(no_side_effects):
     assert "switched off" in detail or "off" in detail
 
 
-def test_the_refusal_is_never_a_404(no_side_effects):
+def test_the_refusal_is_never_a_404(qwen_off, no_side_effects):
     """404 says the feature does not exist. It does — it is switched off."""
     r = _client.post("/image/generate", headers=_AUTH,
                      json={"positive": "a shop sign", "engine": "qwen"})
     assert r.status_code != 404
 
 
-def test_a_refused_request_acquires_nothing_and_evicts_nothing(no_side_effects):
+def test_a_refused_request_acquires_nothing_and_evicts_nothing(qwen_off, no_side_effects):
     _client.post("/image/generate", headers=_AUTH,
                  json={"positive": "a shop sign", "engine": "qwen"})
     assert no_side_effects == {"jobs": 0, "evicted": 0, "queued": 0, "cards": 0}, \
@@ -232,7 +254,7 @@ def test_sdxl_still_queues_normally(no_side_effects):
     assert no_side_effects["jobs"] == 1
 
 
-def test_engines_endpoint_reports_the_switch(no_side_effects):
+def test_engines_endpoint_reports_the_switch(qwen_off, no_side_effects):
     d = _client.get("/image/engines", headers=_AUTH).json()
     by = {e["id"]: e for e in d["engines"]}
     assert by["qwen"]["enabled"] is False
