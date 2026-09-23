@@ -233,3 +233,64 @@ def test_hold_refuses_while_transcribing(stt):
         with pytest.raises(STTBusy):
             stt.hold("a render")
     assert stt._model is not None and stt.held is False
+
+
+# ---------- recovery from a failed boot load --------------------------------
+def test_listen_retries_a_failed_boot_load(stt, monkeypatch):
+    """A boot load that OOM'd leaves _available False forever. Before this she
+    would sit on the Google fallback until someone restarted her.
+
+    Measured 2026-09-22: a render still holding the card when she came back
+    OOM'd her Whisper load, and nothing retried it.
+    """
+    import numpy as _np
+
+    stt._model, stt._available, stt._loading, stt._released = None, False, False, False
+    loaded = []
+
+    class _Model:
+        @staticmethod
+        def transcribe(_audio, **_kw):
+            return {"text": "recovered", "segments": [], "language": "en"}
+
+    def _load(*_a, **_k):
+        loaded.append(1)
+        return _Model()
+
+    monkeypatch.setattr(stt_mod, "WHISPER_AVAILABLE", True)
+    monkeypatch.setattr(stt_mod, "AUDIO_AVAILABLE", True)
+    monkeypatch.setattr(stt_mod, "whisper", types.SimpleNamespace(load_model=_load))
+    monkeypatch.setattr(stt_mod, "np", _np)
+    monkeypatch.setattr(stt_mod, "sd", types.SimpleNamespace(
+        rec=lambda n, **k: _np.full((n, 1), 0.2, dtype="float32"),
+        wait=lambda: None))
+
+    r = stt.listen(1)
+    assert loaded, "listen() did not retry the failed boot load — she stays deaf"
+    assert r.get("text") == "recovered", f"retry did not produce a transcript: {r}"
+
+
+def test_failed_load_falls_back_rather_than_dead_ending(stt, monkeypatch):
+    """If Whisper genuinely cannot load, she must still try the other ear."""
+    used = []
+    monkeypatch.setattr(stt_mod, "WHISPER_AVAILABLE", True)
+    monkeypatch.setattr(stt_mod, "AUDIO_AVAILABLE", True)
+    monkeypatch.setattr(stt_mod, "SR_AVAILABLE", True)
+    monkeypatch.setattr(stt, "_listen_whisper",
+                        lambda *a, **k: {"text": None, "_needs_fallback": True})
+    monkeypatch.setattr(stt, "_listen_sr",
+                        lambda: used.append("sr") or {"text": "heard", "fallback": True})
+    r = stt.listen(1)
+    assert used == ["sr"] and r["text"] == "heard", \
+        "a dead Whisper dead-ended instead of falling back"
+
+
+def test_fallback_marker_does_not_leak_to_a_caller(stt, monkeypatch):
+    """_needs_fallback is internal plumbing, not part of the response."""
+    monkeypatch.setattr(stt_mod, "WHISPER_AVAILABLE", True)
+    monkeypatch.setattr(stt_mod, "AUDIO_AVAILABLE", True)
+    monkeypatch.setattr(stt_mod, "SR_AVAILABLE", True)
+    monkeypatch.setattr(stt, "_listen_whisper",
+                        lambda *a, **k: {"text": None, "_needs_fallback": True})
+    monkeypatch.setattr(stt, "_listen_sr", lambda: {"text": "heard"})
+    assert "_needs_fallback" not in stt.listen(1)
