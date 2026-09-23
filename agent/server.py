@@ -658,6 +658,90 @@ _CAPTURE_NUDGE = (
     "stills on request, you do not have continuous view. When a description hedges "
     "(\"looks like\", \"possibly\"), keep the hedge — do not upgrade it to certainty."
 )
+# ── Self-knowledge — derived, never pasted ───────────────────────────────────
+# What she is THIS morning, assembled from live config when a conversation
+# starts. Not a document.
+#
+# A pasted capability list is wrong the first time a switch flips, and it fails
+# in the worst direction: she confidently offers a lane that is off, or denies
+# one that is on. Deriving it means the qwen switch alone decides whether she
+# has ever heard of the Qwen engine — off, she does not know it exists, which
+# keeps her honest for free rather than by instruction.
+#
+# BEHAVIOUR, not implementation. She does not need the word "Herakles" to say
+# "I can't hear while a render is running". And every token here rides every
+# turn of every conversation she has, so it stays a few hundred, not an
+# encyclopedia.
+def _self_knowledge() -> str:
+    import morpheus as _m
+    try:
+        import watermark as _wm
+    except Exception:                                   # noqa: BLE001
+        _wm = None
+
+    qwen = _m.engine_enabled("qwen")
+    lines = ["\n\nWHAT YOU CAN DO TODAY (read from your own config just now — "
+             "if something is not listed here, you do not have it):"]
+
+    img = ["You generate images locally."]
+    if qwen:
+        img.append("You have a second image engine for pictures where the WORDS "
+                   "matter — shop signs, posters, labels, packaging. It takes "
+                   "about 25 seconds and gets lettering right, where the ordinary "
+                   "engine tends to produce gibberish text. Reach for it when the "
+                   "request is about text inside the picture.")
+    lines.append(" ".join(img))
+
+    if EDIT_LANE_ENABLED:
+        edit = ["You can edit an image you have been given, rather than only "
+                "making new ones."]
+        if qwen and QWEN_EDIT_ENABLED:
+            edit.append("That includes correcting text that came out wrong in an "
+                        "existing picture.")
+        elif qwen:
+            # The generate lane is proven; the EDIT lane is not. Silence here
+            # would read as "no" and the truth is "not yet" — and she is the one
+            # people will ask, so she says which.
+            edit.append("Correcting text inside an existing picture is still "
+                        "being trialled and is NOT something you can do yet — "
+                        "say so plainly if asked, rather than guessing.")
+        lines.append(" ".join(edit))
+
+    if VIDEO_LANE_ENABLED:
+        lines.append("You can make short video clips.")
+
+    if _wm is not None and _wm.enabled():
+        lines.append(f"Every still you make is signed \"{_wm.mark_text()}\" in the "
+                     "corner and carries a hidden timestamp. You never remove a "
+                     "mark and never add one to an old image.")
+
+    if qwen:
+        # Only true when a lane exists that takes the whole card.
+        lines.append("A big render needs the whole graphics card, and while one "
+                     "runs you cannot hear. If someone speaks to you then, say so "
+                     "plainly and give a rough time — never pretend to be "
+                     "listening, and never go silent.")
+
+    lines.append("If a render cannot start because the card is full, say what you "
+                 "managed to free and what is still holding it, by name. You do "
+                 "not touch anything that is not yours.")
+    lines.append("Everything runs on this machine. Nothing you make leaves it "
+                 "unless the user sends it somewhere themselves.")
+    return "\n- ".join(lines)
+
+
+def system_prompt() -> str:
+    """The prompt a new conversation starts from.
+
+    Built per conversation rather than once at import, so a capability she
+    gained or lost since boot is reflected the next time someone starts talking
+    to her — and so the memory context is current rather than frozen.
+    """
+    return (load_soul() + _SEARCH_NUDGE + _CAPTURE_NUDGE
+            + _self_knowledge() + memory.as_context())
+
+
+# Kept for anything that wants the boot-time value.
 SYSTEM_PROMPT = load_soul() + _SEARCH_NUDGE + _CAPTURE_NUDGE + memory.as_context()
 
 TOOLS = [
@@ -2062,7 +2146,7 @@ CONV_WINDOW = 8  # conversation turns (user+assistant pairs) kept per session
 
 class Session:
     def __init__(self):
-        self.history = [{"role":"system","content":SYSTEM_PROMPT}]
+        self.history = [{"role":"system","content":system_prompt()}]
     def add(self, role, content):
         self.history.append({"role":role,"content":content})
         # Rolling window: always keep system prompt + last CONV_WINDOW turns
@@ -2072,7 +2156,7 @@ class Session:
     def messages(self):
         return self.history.copy()
     def reset(self):
-        self.history = [{"role":"system","content":SYSTEM_PROMPT}]
+        self.history = [{"role":"system","content":system_prompt()}]
 
 sessions = {}
 def get_session(sid="default"):
@@ -5670,6 +5754,13 @@ morpheus.video_lane_open = lambda: VIDEO_LANE_ENABLED
 QWEN_ENABLED = os.getenv("PH3B3_QWEN", "off").strip().lower() \
     in ("1", "true", "yes", "on")
 morpheus.qwen_open = lambda: QWEN_ENABLED
+
+# Qwen in the EDIT tab, gated separately from Qwen in Generate. The generate
+# lane is measured and shipped; the edit lane is a trial that has not run, so
+# she must not offer it. When the trial passes this flips and she starts
+# mentioning it — nobody edits a document.
+QWEN_EDIT_ENABLED = os.getenv("PH3B3_QWEN_EDIT", "off").strip().lower() \
+    in ("1", "true", "yes", "on")
 # Whisper has no pid of its own — it lives in THIS process — so Herakles has to
 # be handed the object rather than discovering it.
 morpheus.stt_provider = lambda: stt
