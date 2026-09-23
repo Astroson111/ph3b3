@@ -190,12 +190,19 @@ def status_line(st: dict | None = None) -> str:
 _TERMINAL_STATES = {"done", "error", "cancelled", "failed", "complete", "completed"}
 
 
-def busy_with() -> str | None:
+def busy_with(ignore_job: str | None = None) -> str | None:
     """The render currently promised the GPU, named — or None if the card is ours.
 
     A busy GPU is not the question; nvidia-smi answers that. The question is
     whether this machine has PROMISED the card to something, and that promise
     lives in the job tables and the shared lock, not in the memory figures.
+
+    `ignore_job` is for the job that IS the promise. A render holding gpu_lock
+    and clearing room for its own work is not contending with anything — it is
+    the thing everyone else is being kept away from. Without this the guard
+    refused Herakles' first real caller, because run_generation asks for the
+    card while holding the lock with its own row already non-terminal.
+    Excluding itself is the only exception; any OTHER live job still refuses.
     """
     try:
         import morpheus
@@ -209,11 +216,15 @@ def busy_with() -> str | None:
         pass
     for label, table in tables:
         for jid, j in list((table or {}).items()):
+            if ignore_job is not None and str(jid) == str(ignore_job):
+                continue
             st = (j or {}).get("state")
             if st and st not in _TERMINAL_STATES:
                 return f"{label} {jid} ({st})"
     lock = getattr(morpheus, "gpu_lock", None)
-    if lock is not None and lock.locked():
+    # A caller that named itself is the lock holder, so the lock says nothing
+    # new. Checking it anyway would refuse every in-job request.
+    if ignore_job is None and lock is not None and lock.locked():
         # Held by something that registered no job row. "Something has the GPU"
         # is still the honest answer, and still a reason not to touch it.
         return "a GPU job already running"
@@ -319,7 +330,7 @@ _EVICT_ORDER = ("ollama", "comfyui", "stt")
 
 
 async def request_card(need_mb: int, requester: str, *, http=None, stt=None,
-                       eta_s: int = 60) -> dict:
+                       eta_s: int = 60, holder: str | None = None) -> dict:
     """Make room for `need_mb`, evicting OUR tenants only, cheapest first.
 
     Returns a LEASE describing what was given up, so release_card() can put it
@@ -334,7 +345,8 @@ async def request_card(need_mb: int, requester: str, *, http=None, stt=None,
     if need_mb <= 0:
         raise HeraklesError(f"need_mb must be positive, got {need_mb}")
 
-    busy = busy_with()
+    # `holder` is the job id making room for ITSELF — it already holds the lock.
+    busy = busy_with(ignore_job=holder)
     if busy:
         raise HeraklesError(
             f"Not while {busy} is using the card — evicting under it would "

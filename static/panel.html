@@ -4068,7 +4068,7 @@ async function refreshStatus() {
   }
 }
 refreshStatus();
-wgRefresh(); egressRefresh(); cameraRefresh(); acctInit(); dgInit(); qualInit(); emotionInit(); shelfInit();  // WireGuard + Account + Paired-devices + Emotion + Shelf cards live in Status (default pane)
+wgRefresh(); egressRefresh(); cameraRefresh(); acctInit(); dgInit(); qualInit(); engInit(); emotionInit(); shelfInit();  // WireGuard + Account + Paired-devices + Emotion + Shelf cards live in Status (default pane)
 setInterval(refreshStatus, 10_000);
 
 // ── chat + audio ──────────────────────────────────────────────────────────────
@@ -4583,6 +4583,60 @@ async function qualInit() {
     show();
     sel.addEventListener('change', show);
   } catch (e) { /* selector simply stays empty if the server is unreachable */ }
+}
+
+// ── Morpheus engine (Palamedes) ───────────────────────────────────────────────
+// Labels and the enabled set come from /image/engines, never hardcoded here —
+// same reason as the quality tiers. The markup ships a pre-flight state; this
+// replaces it with what the server will actually run.
+//
+// Disabling an option is a COURTESY so the control tells the truth. It is not
+// the guard: /image/generate refuses an engine it will not run, by name and
+// with a reason, because anything can POST.
+let _engFixedQuality = null;
+async function engInit() {
+  const sel     = document.getElementById('morphEngSel');
+  const qualRow = document.getElementById('morphQualRow');
+  const qualSel = document.getElementById('morphQualSel');
+  const qualHint= document.getElementById('morphQualHint');
+  if (!sel) return;
+  try {
+    const d = await fetch('/image/engines').then(r => r.json());
+    const fixed = {};
+    sel.innerHTML = '';
+    d.engines.forEach(e => {
+      const o = document.createElement('option');
+      o.value = e.id;
+      o.textContent = e.label + ' — ' + e.model;
+      o.disabled = !e.enabled;
+      o.dataset.hint = e.hint || '';
+      sel.appendChild(o);
+      fixed[e.id] = e.fixed_quality || null;
+    });
+    const want = d.default || 'sdxl';
+    sel.value = [...sel.options].some(o => o.value === want && !o.disabled)
+      ? want
+      : ([...sel.options].find(o => !o.disabled) || {}).value || want;
+
+    // Quality is engine-aware. Under an engine with ONE measured speed there
+    // are no tiers to choose between, and showing Draft/Standard/Premium for
+    // it would be fiction — so the control collapses to the honest caption.
+    const applyQuality = () => {
+      const f = fixed[sel.value] || null;
+      _engFixedQuality = f;
+      if (!qualRow) return;
+      if (f) {
+        qualSel.style.display = 'none';
+        qualHint.textContent  = f.label + ' · ' + f.hint;
+      } else {
+        qualSel.style.display = '';
+        const o = qualSel.selectedOptions[0];
+        qualHint.textContent = o ? (o.dataset.hint || '') : '';
+      }
+    };
+    applyQuality();
+    sel.addEventListener('change', applyQuality);
+  } catch (e) { /* the markup's pre-flight state stands if the server is unreachable */ }
 }
 
 // ── Emotion ───────────────────────────────────────────────────────────────────
@@ -5662,6 +5716,7 @@ document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({positive, negative_prompt, width, height, seed,
+                              engine: (document.getElementById('morphEngSel') || {}).value,
                               quality: (document.getElementById('morphQualSel') || {}).value}),
       });
       if (!res.ok) {
