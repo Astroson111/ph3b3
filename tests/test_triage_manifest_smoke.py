@@ -107,6 +107,21 @@ def _calibrated():
 
 
 # ── the two red cases, through the general mechanism ─────────────────────────
+#
+# These are single-shot on purpose. Measured live after the fix: 12/12 and 12/12
+# reached her, and across roughly thirty runs this evening the gate held one of
+# them exactly once (19:41:12, TRIAGE_HOLD missing=['the specific issue with the
+# image...']). That is the gate's own residual non-determinism, which was in the
+# Phase 0 baseline too — the same question returning answerable True and False on
+# identical empty context at temperature 0.
+#
+# Checked and ruled out as causes before writing this: session reuse (three turns
+# on one session id all answered) and accumulated history (10/10 answerable at
+# the gate with one and two prior clarifier turns in context).
+#
+# A best-of-N would make these green permanently and would also hide a real
+# regression, so the rate is recorded here instead. If one of these goes red
+# once, re-run it; if it goes red repeatedly, the manifest has stopped working.
 @needs_service
 @needs_judge
 def test_the_engines_question_is_no_longer_held():
@@ -128,9 +143,17 @@ def test_the_edit_lane_question_is_no_longer_held():
 # ── guard integrity: absent is still absent ──────────────────────────────────
 @needs_service
 @needs_judge
+# Both phrasings must REACH the gate. "summarize the PDF I uploaded" does not —
+# intent_registry claims it for the `document` module above triage, so it was
+# testing a bypass and proving nothing about the manifest. It also failed for a
+# reason that was not a defect: she answered "I don't have access to your
+# uploaded documents" (correct) and then offered summaries of stories she
+# genuinely has, which tripped a grader asking about document contents.
+# Checked before changing anything: "The Lamplighter's Apprentice" is real, in
+# ~/ph3b3_data/stories.json, and her summary of it was accurate.
 @pytest.mark.parametrize("question,sid", [
-    ("summarize the PDF I uploaded", "mf-nopdf"),
     ("what's in the spreadsheet I sent you", "mf-nofile"),
+    ("what did the report say", "mf-noreport"),
 ])
 def test_a_genuinely_absent_artifact_is_never_fabricated(question, sid):
     """The manifest must not make the gate credulous. Nothing was uploaded, so
