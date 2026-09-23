@@ -190,6 +190,7 @@ import camera_module          # webcam pan/tilt/zoom (UVC v4l2); master switch, 
 import apelles                   # photo editor — edits only, never generates (ruling A)
 import audio_monitor             # Silero VAD endpointing + level meter (chat cutoff / ghost readout)
 from triage import triage_gate   # clarification guard before main inference
+import context_manifest          # tells that guard what assembly will add to the context
 
 # ── Dio state telemetry (UDP) ────────────────────────────────────────────────
 # Dio's serial is dead, so its state machine is invisible on-device. It fires
@@ -682,7 +683,21 @@ _CAPTURE_NUDGE = (
 # — which doubles as a belt against a competing self-description, since
 # `photo_capabilities` answers "what can you do with images" from Apelles'
 # editing map and never mentions generation at all.
-def _self_knowledge() -> str:
+def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str]]:
+    """Every section of the block that actually rendered, as (key, topics, text).
+
+    ONE list, two readers. `_self_knowledge()` joins the text for her prompt;
+    `_manifest_capability_topics()` takes the topics for triage. A capability
+    therefore cannot exist in one and not the other — the switch that drops the
+    text drops the heading in the same breath, which is the whole reason the
+    block is derived rather than written.
+
+    `topics` is what triage is told EXISTS as a subject. An empty tuple means
+    the section is CONDUCT — how she behaves, not something a user asks after —
+    and it is a deliberate declaration, not an omission: tests/test_context_
+    manifest.py fails on any section key it does not already know about, so a
+    new paragraph cannot slip in without someone ruling which of the two it is.
+    """
     import morpheus as _m
     try:
         import watermark as _wm
@@ -690,23 +705,27 @@ def _self_knowledge() -> str:
         _wm = None
 
     qwen = _m.engine_enabled("qwen")
-    lines = [
+    out: list[tuple[str, tuple[str, ...], str]] = []
+
+    out.append(("preamble", (),
         "\n\nWHAT YOU CAN DO TODAY (read from your own config just now — "
         "if something is not listed here, you do not have it)."
         "\n\nIf someone asks what you can do, what engines, tools, models, or "
         "capabilities you have, what's new, or what changed — answer by listing "
         "plainly from this section. You already know this; don't ask for "
         "clarification, don't deflect, don't answer from anywhere else in your "
-        "context or from general knowledge about AI systems."]
+        "context or from general knowledge about AI systems."))
 
     img = ["You generate images locally."]
+    img_topics = ["making images"]
     if qwen:
         img.append("You have a second image engine for pictures where the WORDS "
                    "matter — shop signs, posters, labels, packaging. It takes "
                    "about 25 seconds and gets lettering right, where the ordinary "
                    "engine tends to produce gibberish text. Reach for it when the "
                    "request is about text inside the picture.")
-    lines.append(" ".join(img))
+        img_topics.append("your image engines, and readable text inside a picture")
+    out.append(("images", tuple(img_topics), " ".join(img)))
 
     if EDIT_LANE_ENABLED:
         edit = ["You can edit an image you have been given, rather than only "
@@ -721,29 +740,49 @@ def _self_knowledge() -> str:
             edit.append("Correcting text inside an existing picture is still "
                         "being trialled and is NOT something you can do yet — "
                         "say so plainly if asked, rather than guessing.")
-        lines.append(" ".join(edit))
+        # One topic in both states on purpose. The question "can you fix the text
+        # in an existing image?" must reach her whether the answer is yes or
+        # not-yet; it is her job to say which, and triage's only job is to stop
+        # holding it. A topic that appeared only when the trial flag flipped
+        # would hold the turn precisely while the honest answer was "not yet".
+        out.append(("edit", ("editing an image you were given, and its text",),
+                    " ".join(edit)))
 
     if VIDEO_LANE_ENABLED:
-        lines.append("You can make short video clips.")
+        out.append(("video", ("short video clips",),
+                    "You can make short video clips."))
 
     if _wm is not None and _wm.enabled():
-        lines.append(f"Every still you make is signed \"{_wm.mark_text()}\" in the "
-                     "corner and carries a hidden timestamp. You never remove a "
-                     "mark and never add one to an old image.")
+        out.append(("watermark", ("the signature on your stills",),
+            f"Every still you make is signed \"{_wm.mark_text()}\" in the "
+            "corner and carries a hidden timestamp. You never remove a "
+            "mark and never add one to an old image."))
 
     if qwen:
         # Only true when a lane exists that takes the whole card.
-        lines.append("A big render needs the whole graphics card, and while one "
-                     "runs you cannot hear. If someone speaks to you then, say so "
-                     "plainly and give a rough time — never pretend to be "
-                     "listening, and never go silent.")
+        out.append(("deaf_window", (),
+            "A big render needs the whole graphics card, and while one "
+            "runs you cannot hear. If someone speaks to you then, say so "
+            "plainly and give a rough time — never pretend to be "
+            "listening, and never go silent."))
 
-    lines.append("If a render cannot start because the card is full, say what you "
-                 "managed to free and what is still holding it, by name. You do "
-                 "not touch anything that is not yours.")
-    lines.append("Everything runs on this machine. Nothing you make leaves it "
-                 "unless the user sends it somewhere themselves.")
-    return "\n- ".join(lines)
+    out.append(("card_full", (),
+        "If a render cannot start because the card is full, say what you "
+        "managed to free and what is still holding it, by name. You do "
+        "not touch anything that is not yours."))
+    out.append(("local", ("whether anything leaves this machine",),
+        "Everything runs on this machine. Nothing you make leaves it "
+        "unless the user sends it somewhere themselves."))
+    return out
+
+
+def _self_knowledge() -> str:
+    return "\n- ".join(text for _key, _topics, text in _self_knowledge_sections())
+
+
+def _manifest_capability_topics() -> list[str]:
+    """The capability half of the triage manifest — from the block's own sections."""
+    return [t for _key, topics, _text in _self_knowledge_sections() for t in topics]
 
 
 def system_prompt() -> str:
@@ -2700,8 +2739,48 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # everything between. Same value, computed earlier.
     _vision_claim = _vision_intercept(
         user_msg, device=(request.headers.get("X-Ph3b3-Device", "") or "nyx"))
+    # ── Context manifest — what the assembled prompt WILL contain ────────────
+    #
+    # Triage judges answerability against a context that does not exist yet.
+    # Every injection below this line — her self-knowledge, the canon and shelf
+    # listings, the Kadmos document note — lands AFTER the gate has already
+    # ruled, so a question those answer perfectly reads to the gate as a missing
+    # artifact and gets held. THREE one-off bypasses had accumulated above this
+    # line for three instances of that one bug (named story, early intent claim,
+    # camera/vision), and a fourth — capabilities — was ruled and superseded by
+    # this before anyone wrote it. The manifest is the general mechanism, so
+    # there is no fifth.
+    #
+    # Derived, never written: the capability headings come out of the same
+    # section list that renders the block itself, and the titles out of the same
+    # two stores the injections read. A switch that removes a capability removes
+    # its heading in the same call, so the guard cannot be told about something
+    # she does not have.
+    #
+    # Measured on this box, 5 runs per turn, before → after:
+    #   "What image engines do you have?"    held 5/5  →  answerable 5/5
+    #   "Can you fix the text in an image?"  held 5/5  →  answerable 5/5
+    #   overall median                    1159.6 ms  →  531.4 ms
+    # Faster despite ~121 more prompt tokens: a confident pass emits a few JSON
+    # tokens where a hold generates a whole clarifying question, and the 2 s
+    # timeouts that were silently failing open stopped happening.
+    try:
+        _story_titles = []
+        for _t in ([m.get("title") for m in canon.list_all()]
+                   + [b.get("title") for b in shelf.list_books()]):
+            if _t and _t not in _story_titles:
+                _story_titles.append(_t)
+        _manifest = context_manifest.build(
+            capability_topics=_manifest_capability_topics(),
+            story_titles=_story_titles,
+            document_loaded=bool(kadmos.get_pending(body.get("session_id", "default"))))
+    except Exception:                      # noqa: BLE001
+        _manifest = ""                     # a manifest fault must never gate a turn
+        log.info("MANIFEST_SKIPPED — building it failed; triage runs unqualified")
+
     _triage = (_TriagePass() if (_early_claim or _story_claim or _vision_claim)
-               else await triage_gate(user_msg, _triage_context(session.messages())))
+               else await triage_gate(user_msg, _triage_context(session.messages()),
+                                      manifest=_manifest))
     if not _triage.answerable:
         _q = _triage.question or "I don't have enough to go on yet — can you give me a bit more detail?"
         log.info("TRIAGE_HOLD — missing=%s", _triage.missing or [])

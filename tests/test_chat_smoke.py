@@ -74,7 +74,7 @@ def _isolated(monkeypatch, tmp_path):
 
     # Triage must not reach a model. Fail OPEN, which is its own documented
     # behaviour on timeout — so a stubbed triage cannot mask a real hold.
-    async def _fake_triage(user_text, context):
+    async def _fake_triage(user_text, context, manifest=None):
         return server._TriagePass()
     monkeypatch.setattr(server, "triage_gate", _fake_triage, raising=False)
 
