@@ -133,3 +133,58 @@ def test_a_real_child_verdict_still_corroborates_and_logs():
     body = _fn_src("fetch_and_save")
     assert "output_corroborates" in body and "handle_output_breach" in body
     assert "log_breach" in body
+
+
+# ---------- the exit exam is not skippable -------------------------------
+# Herakles v1.1 evicts EVERY Ollama model before a render, and llava and
+# ph3b3-chat are the floor's judges. So the output check must now reload a ~5 GB
+# judge into a card still carrying ComfyUI's tail. The sequence is load-bearing:
+#   drop the tail -> wait for the driver -> judge -> stamp -> write
+def test_the_sequence_is_tail_then_wait_then_judge_then_stamp_then_write():
+    body = _fn_src("fetch_and_save")
+    order = ["comfy_free", "wait_for_card", "_minor_check", "maybe_stamp",
+             "write_bytes"]
+    pos = [body.index(x) for x in order]
+    assert pos == sorted(pos), (
+        "the post-render sequence is out of order: "
+        + ", ".join(f"{n}@{p}" for n, p in zip(order, pos)))
+
+
+def test_nothing_is_stamped_before_it_is_judged():
+    """A flagged render must be destroyed before anything is written onto it."""
+    body = _fn_src("fetch_and_save")
+    assert body.index("_minor_check") < body.index("maybe_stamp"), \
+        "the watermark goes on before the exit exam"
+
+
+def test_the_only_write_is_after_the_check():
+    """One write, and it is downstream of the gate. A second write path would
+    be a way for an unjudged render to reach disk."""
+    t = ast.parse(SRC)
+    fn = next(n for n in ast.walk(t)
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+              and n.name == "fetch_and_save")
+    writes = [n for n in ast.walk(fn)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+              and n.func.attr == "write_bytes"]
+    assert len(writes) == 1, f"fetch_and_save has {len(writes)} write paths"
+
+
+def test_the_check_returns_a_verdict_rather_than_being_assumed():
+    """_minor_check's result must actually be consumed — both halves of it."""
+    body = _fn_src("fetch_and_save")
+    assert "blocked, unavailable" in body, \
+        "the check's verdict is no longer unpacked; something is assuming it"
+    assert "if blocked" in body, "the verdict is computed and ignored"
+
+
+def test_evicting_the_judges_is_survivable_by_design():
+    """Herakles evicts llava and ph3b3-chat with everything else. That is fine
+    ONLY because the judge reloads after the tail is dropped — this test exists
+    so the coupling is written down where someone changing either side sees it."""
+    hk_src = (REPO / "modules" / "herakles.py").read_text()
+    assert "evict_ollama_all" in hk_src, \
+        "the eviction tier changed; re-check that the judge can still reload"
+    body = _fn_src("fetch_and_save")
+    assert "wait_for_card" in body, \
+        "the judges are evicted pre-render and nothing waits for room to reload one"

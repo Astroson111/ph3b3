@@ -32,6 +32,7 @@ import logging
 import os
 import re
 import shutil
+import time
 import subprocess
 
 log = logging.getLogger("ph3b3")
@@ -155,7 +156,16 @@ def gpu_status() -> dict:
                      else "warn" if frac >= PRESSURE_WARN else "ok"),
         # What Herakles could actually reclaim if asked. Foreign memory is
         # excluded because it is not ours to reclaim, at any level.
-        "reclaimable_mib": sum(t["used_mib"] for t in ours if not t["is_self"]),
+        #
+        # The host process IS included. Whisper lives inside it and stt.release()
+        # is the handle on that memory, so dropping is_self into a void reported
+        # her hearing as neither reclaimable nor foreign — a field that is a lie
+        # waiting for its first believer. request_card never consulted it, which
+        # is the only reason this was cosmetic rather than the cause of a bad
+        # refusal.
+        "reclaimable_mib": sum(t["used_mib"] for t in ours),
+        "reclaimable_excluding_self_mib": sum(
+            t["used_mib"] for t in ours if not t["is_self"]),
         "tenants": ours + foreign,
         "foreign_mib": sum(t["used_mib"] for t in foreign),
     }
@@ -333,6 +343,60 @@ async def free_gpu(level: str = "cached", http=None) -> dict:
     }
 
 
+# How long to wait for the DRIVER to reflect a release before calling it
+# unconfirmed. Named rather than inline so it is tunable and so tests can make
+# the unhappy path fast instead of burning the real deadline.
+CONFIRM_TIMEOUT_S = 8.0
+
+
+async def _confirmed_free(baseline: int,
+                          timeout: float | None = None) -> tuple[int, bool]:
+    """Wait until the driver reflects a release. Returns (free_mib, confirmed).
+
+    A tier that POSTs an unload has not freed anything yet — Ollama and ComfyUI
+    both reclaim asynchronously, and a pid can vanish from /proc while nvidia-smi
+    still reports its memory. Counting that window either way is wrong: as still
+    held it produces a false refusal, as available it produces the OOM this guard
+    exists to prevent.
+
+    Measured 2026-09-23: the same race one level up restarted Ph3b3 into a card
+    that had not been reclaimed, and her Whisper load died with CUDA OOM.
+    """
+    deadline = time.monotonic() + (CONFIRM_TIMEOUT_S if timeout is None else timeout)
+    free = baseline
+    while time.monotonic() < deadline:
+        free = free_mib()
+        if free > baseline:
+            return free, True
+        await asyncio.sleep(0.25)
+    return free, False
+
+
+def _foreign_breakdown(st: dict) -> str:
+    """Name what is holding the remainder, with sizes. Reporting only."""
+    rows = []
+    for t in st["tenants"]:
+        if t["mine"]:
+            continue
+        who = t.get("proc") or _proc_name(t["pid"]) or "unattributable"
+        rows.append(f"{who} {t['used_mib']} MiB")
+    return ", ".join(rows)
+
+
+def _proc_name(pid) -> str:
+    """Short name for a pid, or "" once it is gone.
+
+    A pid whose /proc entry has already vanished is not an alien — it is almost
+    always something of ours that was just told to release and has not been
+    reaped. It gets named as such rather than counted as a stranger.
+    """
+    try:
+        with open(f"/proc/{pid}/comm", "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return "a process that has already exited (releasing)"
+
+
 # ── The single eviction authority ────────────────────────────────────────────
 #
 # Cheapest to restore first. Ollama reloads on the next chat turn and nobody
@@ -381,23 +445,47 @@ async def request_card(need_mb: int, requester: str, *, http=None, stt=None,
 
     own = httpx.AsyncClient() if http is None else None
     client = http or own
+    # Per-tier record. "asked" is not "evicted": a tier that POSTs an unload and
+    # frees nothing must not be reported as having worked. Saying so falsely is
+    # how "everything of mine evicted" appeared beside two live Ollama runners.
+    detail: dict[str, str] = {}
+    unconfirmed: list[str] = []
     try:
         for who in _EVICT_ORDER:
-            if gpu_status()["free_mib"] >= need_mb:
+            before_tier = free_mib()
+            if before_tier >= need_mb:
                 break
             try:
                 if who == "ollama":
-                    await morpheus.evict_hermes(client)
+                    # EVERY loaded model, not hermes3 by name. llava and
+                    # ph3b3-chat are Ollama models too, and they are the
+                    # floor's judges — leaving them resident is what made
+                    # "everything of mine evicted" a false claim.
+                    names = await morpheus.evict_ollama_all(client)
+                    detail[who] = ", ".join(names) if names else "nothing loaded"
+                    if not names:
+                        continue          # nothing to evict is not an eviction
                 elif who == "comfyui":
                     await morpheus.comfy_free(client)
+                    detail[who] = "model cache"
                 elif who == "stt":
                     if stt is None or getattr(stt, "held", False):
                         continue   # no STT injected, or already on hold
-                    stt.hold(requester, eta_s=eta_s)
-                evicted.append(who)
+                    r = stt.hold(requester, eta_s=eta_s)
+                    detail[who] = f"her hearing ({r.get('freed_mb', 0)} MiB)"
             except Exception as e:                     # noqa: BLE001
                 failed.append(f"{who}: {e}")
-            await asyncio.sleep(1.0)   # backends free asynchronously
+                continue
+            # Confirm with the DRIVER before counting it.
+            after_tier, confirmed = await _confirmed_free(before_tier)
+            if confirmed:
+                evicted.append(who)
+                detail[who] = f"{detail.get(who, who)} — {after_tier - before_tier} MiB back"
+            else:
+                unconfirmed.append(who)
+                detail[who] = f"{detail.get(who, who)} — asked, nothing came back"
+                log.warning("[herakles] %s was asked to release and the driver "
+                            "reflected nothing within the wait", who)
     finally:
         if own is not None:
             await own.aclose()
@@ -406,22 +494,38 @@ async def request_card(need_mb: int, requester: str, *, http=None, stt=None,
     granted = after["free_mib"] >= need_mb
     short = max(0, need_mb - after["free_mib"])
 
+    # Accounting, not arithmetic. What was actually released, what merely got
+    # asked, and who holds the rest — by name and size.
+    did = "; ".join(f"{k}: {v}" for k, v in detail.items() if k in evicted)
     if granted:
-        line = (f"{after['free_mib']} MiB free for {requester} "
-                f"(evicted {', '.join(evicted) or 'nothing'}).")
-    elif after["foreign_mib"]:
-        line = (f"Still {short} MiB short. {after['foreign_mib']} MiB belongs to "
-                f"something that is not mine and I will not touch it.")
+        line = f"{after['free_mib']} MiB free for {requester}." + (f" Freed {did}." if did else "")
     else:
-        line = (f"Still {short} MiB short with everything of mine evicted "
-                f"({', '.join(evicted) or 'nothing'}).")
+        parts = [f"Still {short} MiB short."]
+        if did:
+            parts.append(f"Freed {did}.")
+        if unconfirmed:
+            # Named separately on purpose. "I asked and nothing came back" is a
+            # different fact from "I freed it", and reporting the second when
+            # the first is true is the failure this patch exists to end.
+            parts.append("Asked but saw nothing back from: "
+                         + ", ".join(unconfirmed) + ".")
+        if failed:
+            parts.append("Failed: " + "; ".join(failed) + ".")
+        rest = _foreign_breakdown(after)
+        if rest:
+            parts.append(f"Holding the remainder: {rest}.")
+            parts.append("Not mine, and I will not touch it.")
+        elif not unconfirmed and not failed:
+            parts.append("Everything of mine is already released.")
+        line = " ".join(parts)
 
     log.info("[herakles] request_card(%d, %s): granted=%s free %d -> %d, "
              "evicted=%s failed=%s", need_mb, requester, granted,
              before["free_mib"], after["free_mib"], evicted, failed)
 
     return {"requester": requester, "need_mb": need_mb, "granted": granted,
-            "evicted": evicted, "failed": failed,
+            "evicted": evicted, "unconfirmed": unconfirmed, "detail": detail,
+            "failed": failed,
             "free_mib": after["free_mib"], "short_mib": short,
             "before": before["free_mib"], "after": after["free_mib"],
             "foreign_mib": after["foreign_mib"], "line": line}

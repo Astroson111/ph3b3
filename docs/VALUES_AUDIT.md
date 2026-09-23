@@ -68,6 +68,44 @@ known soft spot is a different claim from one without.
   deliberately if it ever becomes worth it — but it is a child-safety floor, and
   that is a ruling, not a tidy-up.
 
+- **Herakles — the eviction authority reported an eviction that did not happen.**
+  *(found and fixed 2026-09-23)* On a refused Qwen render Herakles logged
+  `evicted=['ollama','comfyui','stt']` and said *"Still 8416 MiB short with
+  everything of mine evicted"* while two Ollama runners held **5.16 GiB and
+  4.98 GiB**. Cause: the "ollama" tier called `evict_hermes()`, which unloads
+  **one model by name** and confirms only that species has gone. llava (the
+  vision judge) and ph3b3-chat (the Layer B text judge) are Ollama models, are
+  not hermes3, and survived — and because `_OWN` matches any ollama command
+  line they were not even counted as foreign, so the refusal was not merely
+  unhelpful, it was **false**. A false success claim is the same failure as a
+  reader that returns confident garbage, in prose.
+
+  Four changes. The tier now unloads **every** loaded model and will not return
+  until `/api/ps` says the runner list is empty, raising rather than reporting
+  an eviction that did not occur. A tier is counted as evicted only once the
+  **driver** reflects it (`CONFIRM_TIMEOUT_S`), because a pid can vanish from
+  `/proc` while nvidia-smi still reports its memory — counting that window as
+  held gives a false refusal, counting it as free gives the OOM the guard
+  exists to prevent; a tier that frees nothing is reported as *"asked, nothing
+  came back"*, never as evicted. Refusals now **name names and sizes** — what
+  was freed, what merely got asked, and which processes hold the remainder.
+  And `reclaimable_mib` counts the host process, because Whisper lives inside
+  it and `stt.release()` is the handle on that memory; reporting it as neither
+  reclaimable nor foreign was a field lying to its first believer.
+
+  **The weld did not move.** Naming a foreign process is reporting, never a
+  licence. A test walks the AST and fails if Herakles can kill, signal or
+  Popen anything, and asserts it imports neither `signal` nor `psutil`; the
+  only shell-out remains `nvidia-smi` to READ.
+
+  Coupled hazard, written down where both sides can see it: evicting every
+  Ollama model evicts the floor's own judges, so the output check must reload
+  a ~5 GB judge into a card still carrying ComfyUI's tail. The sequence is
+  therefore explicit and tested — drop the tail, wait for the driver, judge,
+  stamp, write — with a test asserting exactly one write path and that nothing
+  is stamped before it is judged. Enforced in `tests/test_herakles_v11.py` (12)
+  and `tests/test_judge_starvation.py` (14), all mutation-checked.
+
 - **Palamedes — the output check was starved by the render it guards.**
   *(found and fixed on hardware, 2026-09-23)* The first Qwen render on real
   hardware passed every claim. The SECOND recorded a **corroborated child-safety
