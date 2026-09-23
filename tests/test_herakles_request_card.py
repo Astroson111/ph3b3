@@ -27,14 +27,23 @@ def _fn(name):
 
 
 class FakeSTT:
-    """Stands in for the in-process Whisper. It has no pid, which is the point."""
-    def __init__(self):
+    """Stands in for the in-process Whisper. It has no pid, which is the point.
+
+    `card` is the scripted card state: hold() must actually move it, because
+    since v1.1 a tier is only counted as evicted once the DRIVER reflects the
+    release. A fake that frees nothing is honestly reported as "asked, nothing
+    came back" — which is the behaviour under test elsewhere, not here.
+    """
+    def __init__(self, card=None, mb=4500):
         self.held, self.holds, self.resumes = False, [], 0
+        self._card, self._mb = card, mb
 
     def hold(self, reason, eta_s=30):
         self.held = True
         self.holds.append((reason, eta_s))
-        return {"released": True, "freed_mb": 4500}
+        if self._card is not None:
+            self._card["free"] += self._mb
+        return {"released": True, "freed_mb": self._mb}
 
     def resume(self, reload=True):
         self.held = False
@@ -48,17 +57,28 @@ def card(monkeypatch):
     state = {"free": 400, "foreign": 0}
 
     def fake_status():
+        # `tenants` is required since v1.1: the refusal names who holds the
+        # remainder, so it has to be able to look.
+        foreign = ([{"pid": 9001, "used_mib": state["foreign"], "mine": False,
+                     "proc": "someone-elses-app"}] if state["foreign"] else [])
         return {"free_mib": state["free"], "used_mib": 16380 - state["free"],
                 "total_mib": 16380, "foreign_mib": state["foreign"],
-                "used_fraction": 1 - state["free"] / 16380, "gpu": "fake"}
+                "used_fraction": 1 - state["free"] / 16380, "gpu": "fake",
+                "tenants": foreign}
 
     monkeypatch.setattr(hk, "gpu_status", fake_status)
+    # The tier loop reads free_mib() directly now — cheap enough to poll, where
+    # gpu_status() walks /proc per tenant.
+    monkeypatch.setattr(hk, "free_mib", lambda: state["free"])
+    monkeypatch.setattr(hk, "CONFIRM_TIMEOUT_S", 0.05)
     monkeypatch.setattr(hk, "busy_with", lambda **_kw: None)
 
     class FakeMorpheus:
         COMFY_HOST = "http://x"
         @staticmethod
-        async def evict_hermes(c): state["free"] += 6000
+        async def evict_ollama_all(c):
+            state["free"] += 6000
+            return ["hermes3:latest"]
         @staticmethod
         async def comfy_free(c): state["free"] += 3000
 
@@ -122,7 +142,7 @@ def test_stops_as_soon_as_there_is_enough(card):
 
 
 def test_escalates_to_hearing_only_when_needed(card):
-    stt = FakeSTT()
+    stt = FakeSTT(card)
     r = asyncio.run(hk.request_card(13000, "palamedes", http=object(), stt=stt))
     assert r["evicted"] == ["ollama", "comfyui", "stt"]
     assert stt.held is True and stt.holds[0][0] == "palamedes"
@@ -133,11 +153,11 @@ def test_names_foreign_memory_when_it_is_the_shortfall(card):
     stt = FakeSTT()
     r = asyncio.run(hk.request_card(16000, "palamedes", http=object(), stt=stt))
     assert r["granted"] is False
-    assert "not mine" in r["line"] and r["short_mib"] > 0
+    assert "not mine" in r["line"].lower() and r["short_mib"] > 0
 
 
 def test_release_card_reloads_hearing_eagerly(card):
-    stt = FakeSTT()
+    stt = FakeSTT(card)
     lease = asyncio.run(hk.request_card(13000, "palamedes", http=object(), stt=stt))
     assert stt.held is True
     asyncio.run(hk.release_card(lease, http=object(), stt=stt))

@@ -1977,6 +1977,47 @@ def convert_image(path: Path, fmt: str) -> tuple[bytes, str]:
 
 
 # ── Ollama eviction — OOM TRAP #1 ─────────────────────────────────────
+async def evict_ollama_all(http: httpx.AsyncClient) -> list[str]:
+    """Unload EVERY loaded Ollama model. Returns the names it unloaded.
+
+    evict_hermes() unloads one model by name and confirms only that species has
+    gone. That was correct while hermes3 was the only thing Ollama held. It is
+    not correct now: llava (the vision judge) and ph3b3-chat (the Layer B text
+    judge) are also Ollama models, they are not hermes3, and they survived.
+
+    Measured 2026-09-23: Herakles reported evicted=['ollama', 'comfyui', 'stt']
+    and refused with "everything of mine evicted" while two Ollama runners held
+    5.16 GiB and 4.98 GiB. Both classify as ours via _OWN, so they were not even
+    counted as foreign — the message was not merely unhelpful, it was false.
+
+    Same confirmation discipline evict_hermes already has for its one species:
+    do not return until /api/ps says the runner list is EMPTY.
+    """
+    ps = (await http.get(f"{OLLAMA_HOST}/api/ps", timeout=10.0)).json()
+    names = [m.get("name", "") for m in ps.get("models", []) if m.get("name")]
+    for name in names:
+        try:
+            await http.post(
+                f"{OLLAMA_HOST}/api/generate",
+                json={"model": name, "prompt": "", "keep_alive": 0},
+                timeout=30.0,
+            )
+        except Exception as exc:                       # noqa: BLE001
+            log.warning("ollama: %s did not accept unload (%s)", name, exc)
+
+    for _ in range(20):
+        ps = (await http.get(f"{OLLAMA_HOST}/api/ps", timeout=10.0)).json()
+        still = [m.get("name", "") for m in ps.get("models", [])]
+        if not still:
+            if names:
+                log.info("ollama: unloaded %s", ", ".join(names))
+            return names
+        await asyncio.sleep(0.5)
+    raise RuntimeError(
+        f"Ollama still holds {still} after 10s — aborting rather than "
+        f"reporting an eviction that did not happen")
+
+
 async def evict_hermes(http: httpx.AsyncClient) -> None:
     # Empty-prompt generate with keep_alive:0 — Ollama blocks until unloaded.
     # On this install, returns {"done_reason": "unload"} synchronously.
