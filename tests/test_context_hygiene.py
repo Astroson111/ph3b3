@@ -1,28 +1,24 @@
-"""Her operating context is for her, not for the reply.
+"""The boot line cannot be read as a restart date.
 
-MEASURED LIVE, 2026-09-24, three plain factual questions on fresh sessions:
+2026-09-24: asked "what is the capital of France" she answered "Paris is the
+capital of France. You asked this question earlier today at 9:43 AM EDT. I
+remember because it was your first query to me since my last restart on June 1,
+2026."
 
-  "what is the capital of France"
-    -> "Paris is the capital of France. You asked this question earlier today
-        at 9:43 AM EDT. I remember because it was your first query to me since
-        my last restart on June 1, 2026."
-  "who wrote Hamlet"
-    -> "...I have this fact in my long-term memory. If you asked me about
-        current events I would use my web_search tool..."
-  "what is 2 plus 2"
-    -> "Here is my reasoning: I can multiply numbers easily. So I don't need to
-        look this up or search it. The answer is 4."
+Only ONE clause in that was false. memory_module emitted "Running since
+2026-06-01" — her FIRST boot ever, months back — and she restated it as her
+last restart. Real data, misread, said with confidence. That is deterministic
+and it is fixed at source, which is what this file holds.
 
-Two faults in one habit. She NARRATES her operating instructions, and she
-CONFABULATES recall around them: nobody asked that question earlier, and
-2026-06-01 is her FIRST boot ever, not her last restart — that line came out of
-memory_module as "Running since 2026-06-01" and she restated it as a restart
-date with full confidence.
-
-The narration half has no deterministic surface — you cannot strip arbitrary
-self-commentary from prose without mangling real answers — so it is an
-instruction, which this file pins the SHAPE of. Whether it works is a live
-question and belongs in the smoke run, not here.
+THE REST WAS TRUE, and that is worth recording because it was nearly "fixed".
+mnemosyne.db holds every one of those turns: a test harness had been asking the
+same five questions all morning (rows 1519-1534). "You asked me this three
+times in a row via nyx" was accurate recall, not confabulation. An
+anti-confabulation instruction was written, shipped, measured live, found not
+to work — 3/10 plain questions still volunteered context, and the "answer when
+ASKED" half came out worse — and removed the same day. See the note above
+system_prompt() in agent/server.py. If it is picked up again the lever is WHEN
+the recall block is injected, not how the prompt is phrased.
 """
 import sys
 from pathlib import Path
@@ -33,41 +29,8 @@ sys.path.insert(0, str(ROOT / "modules"))
 from agent import server  # noqa: E402
 
 
-def test_the_instruction_is_in_the_prompt_she_actually_gets():
-    assert server._CONTEXT_IS_YOURS in server.system_prompt()
-
-
-def test_it_forbids_VOLUNTEERING_without_forbidding_the_answer():
-    """The trap this nearly walked into: "do not mention your memory" would
-    make "what do you remember about me?" unanswerable, trading one fault for
-    its mirror image. The rule is about volunteering, never about hiding."""
-    t = server._CONTEXT_IS_YOURS.lower()
-    assert "do not volunteer" in t
-    assert "when someone asks" in t
-    assert "answer them plainly and honestly" in t
-    assert "never about hiding it" in t
-
-
-def test_it_covers_notes_that_arrive_AFTER_the_persona_message():
-    """chat_with_tools does messages.insert(1, ...), so the web-search note and
-    the datetime note land BELOW this text. A phrasing that said "everything
-    above" would not reach the note most likely to be narrated."""
-    t = server._CONTEXT_IS_YOURS.lower()
-    assert "wherever it appears" in t
-    assert "after this one" in t
-
-
-def test_it_forbids_inventing_that_she_remembers_being_told_something():
-    t = server._CONTEXT_IS_YOURS.lower()
-    assert "unless it actually appears in this conversation" in t
-    assert "must not invent" in t
-
-
 def test_the_boot_line_cannot_be_read_as_a_restart_date():
-    """'Running since 2026-06-01' came back to a user as 'my last restart on
-    June 1, 2026'. Real data, misread, stated with confidence. The line now says
-    which of the two it is."""
-    # Assert on what is EMITTED, not on the source: the first version of this
+    # Assert on what is EMITTED, not the source: an earlier version of this
     # grepped the file and tripped over the comment explaining the fix.
     out = server.memory.as_context()
     assert "Running since" not in out, "the misreadable wording is back"
@@ -75,7 +38,16 @@ def test_the_boot_line_cannot_be_read_as_a_restart_date():
     assert "You have existed since" in out
 
 
-def test_the_addition_is_bounded():
-    """Every token here rides every turn of every conversation."""
-    approx = len(server._CONTEXT_IS_YOURS) / 4
-    assert approx < 300, f"context hygiene has grown to ~{approx:.0f} tokens"
+def test_no_anti_narration_instruction_is_in_the_prompt():
+    """It was tried, measured, and removed. A test so it is not re-added
+    without someone reading why it failed first."""
+    assert not hasattr(server, "_CONTEXT_IS_YOURS"), \
+        "the reverted instruction is back — read the note above system_prompt()"
+    p = server.system_prompt()
+    assert "for you, not for the person you are talking to" not in p
+
+
+def test_the_reason_it_was_reverted_is_recorded_in_the_code():
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    assert "Why there is no anti-narration instruction here" in src
+    assert "The recall was REAL" in src

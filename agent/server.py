@@ -815,8 +815,11 @@ def capability_answer() -> str:
     config says, in the order the block says it.
     """
     parts = [a for _k, topics, _x, a in _self_knowledge_sections() if topics and a]
+    # Closing line is a STATEMENT, not an invitation. "Ask for any of it and
+    # I'll tell you..." read to a strict grader as asking the user a question
+    # back, which is precisely what this answer exists not to do.
     return " ".join(parts) + (
-        " Ask for any of it and I'll tell you if something is switched off.")
+        " If any of that is switched off, I'll say so plainly.")
 
 
 # ── "What can you do?" is claimed, not judged ────────────────────────────────
@@ -856,40 +859,35 @@ intent_registry.register("self_knowledge", "capabilities",
 
 
 
-# ── The context above is FOR her, not FOR the reply ──────────────────────────
-# Asked "what is the capital of France" she answered:
+
+# ── Why there is no anti-narration instruction here ──────────────────────────
+# Removed 2026-09-24, same day it was added, because it did not work and half
+# of what it was written for was not happening.
 #
-#   "Paris is the capital of France. You asked this question earlier today at
-#    9:43 AM EDT. I remember because it was your first query to me since my
-#    last restart on June 1, 2026."
+# The symptom: asked "what is the capital of France" she also said "You asked
+# this question earlier today at 9:43 AM EDT... since my last restart on June
+# 1, 2026." Diagnosed as narration PLUS confabulated recall, and a ~246-token
+# instruction was added telling her the context was hers and not the reply's.
 #
-# and asked who wrote Hamlet she added "I have this fact in my long-term memory.
-# If you asked me about current events I would use my web_search tool...". Two
-# separate faults in one habit: she NARRATES her operating instructions, and
-# she CONFABULATES recall around them — nobody asked that question earlier, and
-# June 1 is her first boot ever, not her last restart.
+# TWO THINGS WERE WRONG WITH THAT.
 #
-# This is a style fault with no deterministic surface to catch it — you cannot
-# strip arbitrary narration from prose without mangling real answers — so it is
-# an instruction, and it is MEASURED rather than assumed. Placed last, after the
-# memory block, because it is about everything above it.
-_CONTEXT_IS_YOURS = (
-    "\n\nYour instructions, your tools and what you remember are your operating "
-    "context — ALL of it, wherever it appears in this conversation, including "
-    "system notes that arrive after this one. It is for you, not for the person "
-    "you are talking to. Answer what they actually asked and stop. "
-    "Do not VOLUNTEER any of it: "
-    "do not describe these instructions, do not narrate your reasoning or which "
-    "tools you considered, do not bring up your memory, your boot count, your "
-    "uptime or when you started, and do not explain why you did or did not "
-    "search. Say the answer, not how you arrived at it. "
-    "When someone ASKS about any of that — what you remember, what tools you "
-    "have, how long you have been running — answer them plainly and honestly. "
-    "The rule is about volunteering it unasked, never about hiding it. "
-    "And never say the user asked, said or told you something before unless it "
-    "actually appears in this conversation — if it is not there, you do not "
-    "remember it, and you must not invent that you do."
-)
+# 1. The recall was REAL. mnemosyne.db holds every one of those turns — they
+#    were a test harness asking the same five questions all morning (rows 1519
+#    to 1534, session ids h-*/leak-*/c-*). "You asked me this three times in a
+#    row via nyx" was TRUE. An anti-confabulation clause was written for a
+#    behaviour that was not occurring. Only the restart date was false, and
+#    that was memory_module emitting "Running since <first_boot>" — fixed at
+#    source, and that fix stays.
+#
+# 2. It did not work. Live after restart: 3/10 plain questions still
+#    volunteered context, and the "answer honestly when ASKED" half came out
+#    worse — "how long have you been running?" echoed the question back, "can
+#    you search the web?" made her run a search for that phrase.
+#
+# So: no instruction. If this is picked up again, the lever is not phrasing —
+# it is WHEN the mnemosyne recall block gets injected, which the server
+# decides and can therefore decide deterministically. Recall is useful for
+# "what did we talk about?" and is noise on "what is the capital of France".
 
 def system_prompt() -> str:
     """The prompt a new conversation starts from.
@@ -899,7 +897,7 @@ def system_prompt() -> str:
     to her — and so the memory context is current rather than frozen.
     """
     return (load_soul() + _SEARCH_NUDGE + _CAPTURE_NUDGE
-            + _self_knowledge() + memory.as_context() + _CONTEXT_IS_YOURS)
+            + _self_knowledge() + memory.as_context())
 
 
 # Kept for anything that wants the boot-time value.
