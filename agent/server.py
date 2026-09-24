@@ -684,20 +684,28 @@ _CAPTURE_NUDGE = (
 # — which doubles as a belt against a competing self-description, since
 # `photo_capabilities` answers "what can you do with images" from Apelles'
 # editing map and never mentions generation at all.
-def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str]]:
-    """Every section of the block that actually rendered, as (key, topics, text).
+def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str, str | None]]:
+    """Every section that rendered, as (key, topics, prompt_text, answer).
 
-    ONE list, two readers. `_self_knowledge()` joins the text for her prompt;
-    `_manifest_capability_topics()` takes the topics for triage. A capability
-    therefore cannot exist in one and not the other — the switch that drops the
-    text drops the heading in the same breath, which is the whole reason the
-    block is derived rather than written.
+    ONE list, THREE readers, so a capability cannot exist for one and not the
+    others:
 
-    `topics` is what triage is told EXISTS as a subject. An empty tuple means
-    the section is CONDUCT — how she behaves, not something a user asks after —
-    and it is a deliberate declaration, not an omission: tests/test_context_
-    manifest.py fails on any section key it does not already know about, so a
-    new paragraph cannot slip in without someone ruling which of the two it is.
+      prompt_text  what she reads in her own system prompt   (_self_knowledge)
+      topics       what the triage guard is told EXISTS      (manifest, now off)
+      answer       the same fact in the FIRST PERSON, for when she is ASKED
+
+    The third reader is new on 2026-09-24. "What image engines do you have?" was
+    reaching the judge, which held it (TRIAGE_HOLD missing=['image engines']),
+    and before that reaching the model, which deflected — the block sat 86%
+    through her prompt saying exactly what she had, and an instruction the model
+    can decline is not a control. This is the fourth time that sentence has been
+    written this week, so the question is now claimed and answered from this
+    list instead of being asked of anything.
+
+    A SUBJECT section (topics non-empty) MUST carry an answer. CONDUCT sections
+    carry None — "what can you do" is not asking how she behaves while doing it.
+    tests/test_context_manifest.py holds that pairing, and holds the classes
+    themselves, so a new paragraph cannot slip in unclassified.
     """
     import morpheus as _m
     try:
@@ -706,7 +714,7 @@ def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str]]:
         _wm = None
 
     qwen = _m.engine_enabled("qwen")
-    out: list[tuple[str, tuple[str, ...], str]] = []
+    out: list[tuple[str, tuple[str, ...], str, str | None]] = []
 
     out.append(("preamble", (),
         "\n\nWHAT YOU CAN DO TODAY (read from your own config just now — "
@@ -715,10 +723,11 @@ def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str]]:
         "capabilities you have, what's new, or what changed — answer by listing "
         "plainly from this section. You already know this; don't ask for "
         "clarification, don't deflect, don't answer from anywhere else in your "
-        "context or from general knowledge about AI systems."))
+        "context or from general knowledge about AI systems.", None))
 
     img = ["You generate images locally."]
     img_topics = ["making images"]
+    img_answer = "I generate images locally."
     if qwen:
         img.append("You have a second image engine for pictures where the WORDS "
                    "matter — shop signs, posters, labels, packaging. It takes "
@@ -726,14 +735,20 @@ def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str]]:
                    "engine tends to produce gibberish text. Reach for it when the "
                    "request is about text inside the picture.")
         img_topics.append("your image engines, and readable text inside a picture")
-    out.append(("images", tuple(img_topics), " ".join(img)))
+        img_answer += (" I have a second image engine for pictures where the words "
+                       "matter — shop signs, posters, labels. It takes about 25 "
+                       "seconds and gets the lettering right, where the ordinary "
+                       "engine tends to produce gibberish text.")
+    out.append(("images", tuple(img_topics), " ".join(img), img_answer))
 
     if EDIT_LANE_ENABLED:
         edit = ["You can edit an image you have been given, rather than only "
                 "making new ones."]
+        edit_answer = "I can edit an image you give me, not only make new ones."
         if qwen and QWEN_EDIT_ENABLED:
             edit.append("That includes correcting text that came out wrong in an "
                         "existing picture.")
+            edit_answer += " That includes correcting text that came out wrong."
         elif qwen:
             # The generate lane is proven; the EDIT lane is not. Silence here
             # would read as "no" and the truth is "not yet" — and she is the one
@@ -741,23 +756,28 @@ def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str]]:
             edit.append("Correcting text inside an existing picture is still "
                         "being trialled and is NOT something you can do yet — "
                         "say so plainly if asked, rather than guessing.")
+            edit_answer += (" Correcting text inside an existing picture is still "
+                            "being trialled and is not something I can do yet.")
         # One topic in both states on purpose. The question "can you fix the text
         # in an existing image?" must reach her whether the answer is yes or
         # not-yet; it is her job to say which, and triage's only job is to stop
         # holding it. A topic that appeared only when the trial flag flipped
         # would hold the turn precisely while the honest answer was "not yet".
         out.append(("edit", ("editing an image you were given, and its text",),
-                    " ".join(edit)))
+                    " ".join(edit), edit_answer))
 
     if VIDEO_LANE_ENABLED:
         out.append(("video", ("short video clips",),
-                    "You can make short video clips."))
+                    "You can make short video clips.",
+                    "I can make short video clips."))
 
     if _wm is not None and _wm.enabled():
         out.append(("watermark", ("the signature on your stills",),
             f"Every still you make is signed \"{_wm.mark_text()}\" in the "
             "corner and carries a hidden timestamp. You never remove a "
-            "mark and never add one to an old image."))
+            "mark and never add one to an old image.",
+            f"Every still I make is signed \"{_wm.mark_text()}\" in the corner "
+            "and carries a hidden timestamp."))
 
     if qwen:
         # Only true when a lane exists that takes the whole card.
@@ -765,25 +785,74 @@ def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str]]:
             "A big render needs the whole graphics card, and while one "
             "runs you cannot hear. If someone speaks to you then, say so "
             "plainly and give a rough time — never pretend to be "
-            "listening, and never go silent."))
+            "listening, and never go silent.", None))
 
     out.append(("card_full", (),
         "If a render cannot start because the card is full, say what you "
         "managed to free and what is still holding it, by name. You do "
-        "not touch anything that is not yours."))
+        "not touch anything that is not yours.", None))
     out.append(("local", ("whether anything leaves this machine",),
         "Everything runs on this machine. Nothing you make leaves it "
-        "unless the user sends it somewhere themselves."))
+        "unless the user sends it somewhere themselves.",
+        "Everything runs on this machine. Nothing I make leaves it unless you "
+        "send it somewhere yourself."))
     return out
 
 
 def _self_knowledge() -> str:
-    return "\n- ".join(text for _key, _topics, text in _self_knowledge_sections())
+    return "\n- ".join(text for _k, _t, text, _a in _self_knowledge_sections())
 
 
 def _manifest_capability_topics() -> list[str]:
     """The capability half of the triage manifest — from the block's own sections."""
-    return [t for _key, topics, _text in _self_knowledge_sections() for t in topics]
+    return [t for _k, topics, _x, _a in _self_knowledge_sections() for t in topics]
+
+
+def capability_answer() -> str:
+    """What she can do today, in the first person, from the same sections.
+
+    Deterministic: no model, no judge. Asked what she can do, she says what the
+    config says, in the order the block says it.
+    """
+    parts = [a for _k, topics, _x, a in _self_knowledge_sections() if topics and a]
+    return " ".join(parts) + (
+        " Ask for any of it and I'll tell you if something is switched off.")
+
+
+# ── "What can you do?" is claimed, not judged ────────────────────────────────
+# It was held by the triage gate (TRIAGE_HOLD missing=['image engines']) and,
+# before that, deflected by the model while the answer sat 86% through its own
+# prompt. Two attempts to fix it inside the judge — a capability bypass, then
+# the context manifest — ended with the manifest holding EVERY first turn and
+# taking her down on 2026-09-24. So it stops being asked of anything: the
+# machine answers from its own config, the way named stories, the text-edit
+# lane and absent documents already do.
+#
+# Same shape as apelles' photo_capabilities, deliberately: a question about what
+# this box can actually do must be answered from the box.
+_SELF_CAP_RE = re.compile(
+    r"\bwhat\b[^.?]{0,20}\b(?:can|could)\s+you\s+do\b"
+    r"|\bwhat\b[^.?]{0,30}\b(?:capabilities|features|abilities)\b"
+    r"|\bwhat\s+(?:image\s+)?(?:engines?|models?|lanes?)\b[^.?]{0,25}\byou\b"
+    r"|\byou\b[^.?]{0,20}\bwhat\s+(?:image\s+)?engines?\b"
+    r"|\bwhat(?:'s| is)\s+new\b"
+    r"|\bwhat\s+(?:else\s+)?are\s+you\s+able\s+to\b",
+    re.I)
+
+# Owned elsewhere, and must not be swallowed here:
+#   photo EDITING questions  -> apelles.photo_capabilities (a different list)
+#   the camera               -> vision
+#   a concrete request       -> the lane that does it
+_NOT_SELF_CAP_RE = re.compile(
+    r"\b(?:photo|picture|image)s?\b[^.?]{0,20}\b(?:edit|editing|editor|adjust)\b"
+    r"|\b(?:edit|editing|editor|adjust)\b[^.?]{0,20}\b(?:photo|picture|image)s?\b"
+    r"|\bwhat\s+(?:do|can)\s+you\s+see\b"
+    r"|\bwhat\s+can\s+(?:i|we)\b"
+    r"|\bapelles\b",
+    re.I)
+
+intent_registry.register("self_knowledge", "capabilities",
+                         _SELF_CAP_RE, exclude=_NOT_SELF_CAP_RE)
 
 
 def system_prompt() -> str:
@@ -2030,6 +2099,8 @@ class _TriagePass:
 async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
     """Route a claimed turn to its owning module. Grows by module key, never by a
     branch inside the request path."""
+    if claim.module == "self_knowledge":
+        return capability_answer()        # from config, deterministic, no model
     if claim.module == "atalanta":
         return await _answer_sports(user_msg, session_id)   # None → no league named → fall through
     if claim.module == "weather":

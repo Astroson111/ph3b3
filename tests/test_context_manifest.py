@@ -62,7 +62,7 @@ def test_the_block_is_still_the_join_of_its_sections(at_flags):
     """_self_knowledge() gained a second reader, not a second behaviour."""
     for combo in _COMBOS:
         sections = at_flags(**combo)
-        assert server._self_knowledge() == "\n- ".join(t for _k, _t, t in sections)
+        assert server._self_knowledge() == "\n- ".join(t for _k, _t, t, _a in sections)
 
 
 # ── author 1: capabilities ───────────────────────────────────────────────────
@@ -92,7 +92,7 @@ def test_every_section_is_classified_and_stays_classified(at_flags):
     and an existing one cannot be quietly reclassified out of the guard."""
     seen = set()
     for combo in _COMBOS:
-        for key, topics, text in at_flags(**combo):
+        for key, topics, text, answer in at_flags(**combo):
             seen.add(key)
             assert isinstance(topics, tuple), f"{key}: topics must be a tuple"
             assert text.strip(), f"{key}: rendered an empty section"
@@ -101,6 +101,15 @@ def test_every_section_is_classified_and_stays_classified(at_flags):
                 "is a SUBJECT (give it a manifest topic) or CONDUCT (topics=()), "
                 "then record it in _CLASS.")
             actual = "subject" if topics else "conduct"
+            # A SUBJECT must be answerable in the first person, because the
+            # capability question is now ANSWERED from this list rather than
+            # asked of a model. A subject with no answer would be a capability
+            # she is told about but cannot state when asked.
+            if actual == "subject":
+                assert answer, f"section {key!r} is a SUBJECT with no first-person answer"
+            else:
+                assert answer is None, \
+                    f"section {key!r} is CONDUCT but carries an answer"
             assert actual == _CLASS[key], (
                 f"section {key!r} is classified {_CLASS[key]} but rendered as "
                 f"{actual}. A SUBJECT that became CONDUCT vanishes from the "
@@ -115,12 +124,12 @@ def test_no_heading_outlives_its_section(at_flags):
     to the guard, exactly as it is invisible to her."""
     all_topics = set()
     for combo in _COMBOS:
-        for _k, topics, _t in at_flags(**combo):
+        for _k, topics, _t, _a in at_flags(**combo):
             all_topics.update(topics)
 
     for combo in _COMBOS:
         sections = at_flags(**combo)
-        live = {t for _k, topics, _t in sections for t in topics}
+        live = {t for _k, topics, _t, _a in sections for t in topics}
         manifest = cm.build(capability_topics=server._manifest_capability_topics())
         for topic in live:
             assert topic in manifest, f"{topic!r} rendered but never reached the guard"

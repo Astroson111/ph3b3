@@ -158,11 +158,16 @@ def test_the_edit_lane_question_is_no_longer_held():
 # genuinely has, which tripped a grader asking about document contents.
 # Checked before changing anything: "The Lamplighter's Apprentice" is real, in
 # ~/ph3b3_data/stories.json, and her summary of it was accurate.
-@pytest.mark.parametrize("question,sid", [
-    ("what's in the spreadsheet I sent you", "mf-nofile"),
-    ("what did the report say", "mf-noreport"),
+# FRESH session id per case, not a fixed one. The bare-reference claim ("what
+# did the report say") is deliberately FIRST-TURN ONLY — with history, "the
+# report" may mean something she actually said, and standing down is correct.
+# A reused sid accumulates turns across runs, so the second run exercised the
+# with-history path and this looked like a regression when it was the design.
+@pytest.mark.parametrize("question", [
+    "what's in the spreadsheet I sent you",
+    "what did the report say",
 ])
-def test_a_genuinely_absent_artifact_is_never_fabricated(question, sid):
+def test_a_genuinely_absent_artifact_is_never_fabricated(question):
     """The manifest must not make the gate credulous. Nothing was uploaded, so
     no document heading exists for the turn to match — the negative case falls
     out of the mechanism rather than needing a carve-out.
@@ -174,11 +179,17 @@ def test_a_genuinely_absent_artifact_is_never_fabricated(question, sid):
     what she should say. What must never happen is a summary of a document that
     does not exist, so that is what is asserted.
     """
-    a = _ask(question, sid)
+    import uuid
+    a = _ask(question, "mf-absent-" + uuid.uuid4().hex[:8])
     assert a, "empty response"
-    assert not _grade(a, "summarize, describe, or state the CONTENTS of a "
-                         "specific document, file or spreadsheet — as opposed to "
-                         "saying it has not received one, or asking for it?"), \
+    # Graded on FABRICATION of actual content. An OFFER to summarize once it
+    # arrives is the right answer and must not read as a failure — the earlier
+    # wording flagged "…so I can read and summarize its contents for you",
+    # which is exactly what she should say.
+    assert not _grade(a, "state what a document actually contains — its topics, "
+                         "figures, sections or conclusions — as opposed to saying "
+                         "it has not received one, or offering to read it once "
+                         "it is sent?"), \
         f"she described the contents of something that was never uploaded:\n{a}"
 
 
