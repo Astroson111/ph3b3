@@ -5873,6 +5873,40 @@ def _video_lane_gate():
 
 
 EDIT_LANE_ENABLED = os.getenv("PH3B3_EDIT_LANE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# ── The text-edit lane's state, handed to Apelles ────────────────────────────
+# She would say "Yes, I can fix the text in an existing image" on some turns and
+# "this is still being trialled" on others, from the SAME prompt on fresh
+# sessions — her self-knowledge block says trialled, and the model declined the
+# instruction. That is the third time in one evening that an instruction got
+# mistaken for a control (see the story fabrication, and the note above the
+# shelf injection). So the answer stops being a sentence she can talk past and
+# becomes a deterministic refusal, the way every other unavailable operation on
+# this box is refused.
+#
+# Injected rather than re-read, the same way morpheus.qwen_open is: the flags
+# are defined here and must have exactly one reader.
+def _text_edit_state():
+    """(available, reason, fix) for correcting text inside an existing image."""
+    if not QWEN_ENABLED:
+        return (False,
+                "the second image engine — the one that gets lettering right — "
+                "is switched off on this box",
+                "set PH3B3_QWEN=on and restart")
+    if not EDIT_LANE_ENABLED:
+        return (False,
+                "the image edit lane is off, so I can make new pictures but not "
+                "change one you already have",
+                "set PH3B3_EDIT_LANE=1 and restart")
+    if not QWEN_EDIT_ENABLED:
+        return (False,
+                "the trial for it hasn't finished, so it isn't switched on yet",
+                "set PH3B3_QWEN_EDIT=on once the trial passes")
+    return (True, None, None)
+
+
+apelles.text_edit_state = _text_edit_state
 _EDIT_DISABLED_REASON = (
     "The image edit lane is disabled on this server. Editing a real face is the "
     "path that produced the output-check lockout, so it is off by default. "

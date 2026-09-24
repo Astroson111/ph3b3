@@ -868,6 +868,13 @@ def capabilities(refresh: bool = False) -> dict:
         cap("batch", "Batch a folder through a pipeline", 4, True),
     ]
 
+    # The text-edit lane, from the SAME hook blocked_request consults, so the
+    # map and the refusal cannot say different things about one switch.
+    _te_ok, _te_reason, _te_fix = text_edit_state()
+    items.append(cap("edit_text_in_image",
+                     "Correct text inside an existing image", 3,
+                     _te_ok, _te_reason, _te_fix))
+
     # Ruling B is stated in the capability map too, so the UI can show that face
     # replacement is REFUSED rather than merely missing. "Not installed" and
     # "we will not build this" are different claims and must read differently.
@@ -1068,6 +1075,24 @@ _OPS["composite"] = op_composite
 # before the model ever sees it. Unavailable → the honest reason, deterministically.
 # Available → return None and let normal tool routing do its job; this gate exists
 # to prevent invention, not to intercept work that can actually be done.
+# ── The text-edit lane's state, injected by the server ───────────────────────
+# Correcting text INSIDE an existing picture is a Morpheus/Qwen lane, not an
+# Apelles one, but it is asked for in Apelles' language ("fix the text in this
+# image") and it must be refused the same deterministic way everything else here
+# is refused. The flags live in server.py; this module must not parse them a
+# second time, because two readers of one switch is how a capability map starts
+# disagreeing with the thing it describes.
+#
+# So the server injects the state, exactly as it injects morpheus.qwen_open.
+# The default is the honest one for a module nobody has told anything: the lane
+# is not configured, so it is not offered.
+def _text_edit_unconfigured():
+    return (False, "the lane is not configured on this box", None)
+
+
+text_edit_state = _text_edit_unconfigured
+
+
 _OP_PHRASES: tuple = (
     # FACE-specific generative restoration only. General scan restoration is now
     # available (non-generative), so "restore this old photo" must NOT be refused
@@ -1089,6 +1114,18 @@ _OP_PHRASES: tuple = (
         r"\b(?:remove|cut\s+out|knock\s+out|delete)\b[^.?]{0,20}\bbackgrounds?\b"
         r"|\bbackgrounds?\b[^.?]{0,20}\b(?:removed?|cut\s+out)\b"
         r"|\bwhite\s+background\b", re.I)),
+    # Correcting text inside an EXISTING picture. Deliberately requires both a
+    # text word and a picture word, so "make me a poster with readable text" —
+    # which is GENERATION and works today — does not get caught by a refusal
+    # meant for editing.
+    ("edit_text_in_image", re.compile(
+        r"\b(?:fix|correct|change|replace|edit|redo|repair|rewrite)\b[^.?]{0,40}"
+        r"\b(?:text|lettering|letters|wording|words|writing|spelling|caption|sign)\b"
+        r"[^.?]{0,40}\b(?:image|picture|photo|poster|render|artwork|jpe?g|png)\b"
+        r"|\b(?:text|lettering|wording|words|writing|spelling|caption)\b[^.?]{0,30}"
+        r"\b(?:in|on|inside)\b[^.?]{0,25}\b(?:image|picture|photo|poster|render|artwork)\b"
+        r"[^.?]{0,40}\b(?:fix|correct|change|replace|wrong|garbled|gibberish|misspel\w*)\b",
+        re.I)),
 )
 
 
@@ -1101,6 +1138,27 @@ def blocked_request(text: str) -> str | None:
     for cid, rx in _OP_PHRASES:
         if not rx.search(t):
             continue
+
+        # The text-edit lane is a SWITCH, and capabilities() is cached, so this
+        # one is read live rather than from the map. A refusal that is one
+        # restart stale is worse than no refusal: it denies a lane that is now
+        # on, which is the same dishonesty pointing the other way.
+        if cid == "edit_text_in_image":
+            ok, reason, fix = text_edit_state()
+            if ok:
+                return None
+            msg = ("I can't do that one yet. Correcting text inside a picture "
+                   f"that already exists is not available: {reason}.")
+            if fix:
+                msg += f" To enable it: {fix}."
+            # Never leave them with only a no when a real route exists. Making a
+            # NEW picture with the words right is a different lane and it works.
+            msg += (" What I CAN do is make a NEW image with the lettering right "
+                    "— that's what the second engine is for. Editing the text in "
+                    "a picture you already have is the part that isn't ready.")
+            return msg + (" I'd rather tell you that than describe a result I "
+                          "didn't produce.")
+
         c = capability(cid)
         if c is None or c.get("available"):
             return None                     # we can do it — don't intercept
