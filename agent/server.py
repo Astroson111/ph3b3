@@ -189,7 +189,7 @@ from vad_turns import END_CAP, END_VADEND                 # per-turn VAD diagnos
 import camera_module          # webcam pan/tilt/zoom (UVC v4l2); master switch, default OFF
 import apelles                   # photo editor — edits only, never generates (ruling A)
 import audio_monitor             # Silero VAD endpointing + level meter (chat cutoff / ghost readout)
-from triage import triage_gate   # clarification guard before main inference
+from triage import triage_gate, gate_enabled, manifest_enabled   # clarification guard before main inference
 import context_manifest          # tells that guard what assembly will add to the context
 
 # ── Dio state telemetry (UDP) ────────────────────────────────────────────────
@@ -2771,16 +2771,27 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # whole invented story. _story_claim is a directory lookup: it cannot pass a
     # title that does not exist. See context_manifest._clause_stories.
     try:
-        _manifest = context_manifest.build(
+        _manifest = (context_manifest.build(
             capability_topics=_manifest_capability_topics(),
             document_loaded=bool(kadmos.get_pending(body.get("session_id", "default"))))
+            if manifest_enabled() else "")
     except Exception:                      # noqa: BLE001
         _manifest = ""                     # a manifest fault must never gate a turn
         log.info("MANIFEST_SKIPPED — building it failed; triage runs unqualified")
 
-    _triage = (_TriagePass() if (_early_claim or _story_claim or _vision_claim)
-               else await triage_gate(user_msg, _triage_context(session.messages()),
-                                      manifest=_manifest))
+    # The gate can be switched off per-turn from config/triage.json (or
+    # PH3B3_TRIAGE=off). Checked BEFORE the claims so that "off" means exactly
+    # what it says: no judge call, no manifest, no clarifier — the turn goes
+    # straight through. It sits in front of all of chat, so when it misbehaves
+    # she is unusable, and the operator needs a lever that does not require an
+    # edit and a restart in the middle of an incident.
+    if not gate_enabled():
+        log.warning("TRIAGE_OFF — gate bypassed by config; turns pass unguarded")
+        _triage = _TriagePass()
+    else:
+        _triage = (_TriagePass() if (_early_claim or _story_claim or _vision_claim)
+                   else await triage_gate(user_msg, _triage_context(session.messages()),
+                                          manifest=_manifest))
     if not _triage.answerable:
         _q = _triage.question or "I don't have enough to go on yet — can you give me a bit more detail?"
         log.info("TRIAGE_HOLD — missing=%s", _triage.missing or [])

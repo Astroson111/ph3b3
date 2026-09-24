@@ -1,0 +1,6 @@
+{
+  "_comment": "Phoebe's clarification gate. Read fresh on EVERY chat turn \u2014 a change takes effect on the next message, no restart. enabled:false bypasses the gate entirely (incident lever). A missing or malformed file means enabled, because the normal state is guarded. PH3B3_TRIAGE=off forces it off from boot and wins over this file.",
+  "_manifest": "OFF by measurement, not preference. The capability manifest stopped capability questions being held, and also held EVERY other turn whenever the context was empty \u2014 the first message of any fresh conversation. Four wordings tested including one with no instruction at all; all failed identically. See manifest_enabled() in modules/triage.py for the numbers. Do not switch this on again without re-running that measurement on whatever judge is current.",
+  "enabled": true,
+  "manifest": false
+}

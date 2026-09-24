@@ -176,7 +176,7 @@ def test_stories_are_never_named_in_the_manifest():
 def test_the_server_does_not_pass_story_titles_to_the_manifest():
     """The lock above only holds if the call site agrees with it."""
     src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
-    i = src.index("_manifest = context_manifest.build(")
+    i = src.index("context_manifest.build(")
     call = src[i:src.index(")", src.index("document_loaded", i))]
     assert "story_titles" not in call, \
         "the server is naming stories in the manifest again — see _clause_stories"
@@ -247,7 +247,7 @@ def test_a_manifest_fault_cannot_gate_a_turn():
     """Building it reads three stores. If any of them throws, the turn proceeds
     with an unqualified gate rather than dying."""
     src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
-    i = src.index("_manifest = context_manifest.build(")
+    i = src.index("context_manifest.build(")
     window = src[i - 400:i + 700]
     assert "except Exception" in window and '_manifest = ""' in window, \
         "the manifest build is not wrapped — a store fault would break /chat"
@@ -255,6 +255,6 @@ def test_a_manifest_fault_cannot_gate_a_turn():
 
 def test_the_manifest_is_built_before_the_gate_runs():
     src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
-    assert src.index("_manifest = context_manifest.build(") < \
+    assert src.index("context_manifest.build(") < \
            src.index("_triage = (_TriagePass()"), \
         "the manifest is built after triage has already ruled"

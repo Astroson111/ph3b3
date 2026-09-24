@@ -55,6 +55,77 @@ _TRIAGE_TIMEOUT = 6.0
 _PS_TIMEOUT     = 1.0    # residency pre-check
 _MAX_TOKENS     = 120
 
+# ── Operator kill switch ─────────────────────────────────────────────────────
+# A control you cannot operate during an incident is not a control.
+#
+# 2026-09-24: the context manifest made the gate hold EVERY turn on an empty
+# context — the first turn of any fresh conversation — and there was no way to
+# switch the guard off without editing code and restarting her mid-incident.
+# The gate sits in front of all of chat, so when it misbehaves she is simply
+# unusable.
+#
+# Read PER REQUEST from config/triage.json so flipping it takes effect on the
+# next turn with no restart, the same shape as config/vad_tuning.json:
+#
+#     {"enabled": false}        <- the gate is bypassed entirely
+#
+# A missing, empty or malformed file means ENABLED, because the normal state is
+# guarded and a typo here must never silently disable a guard. The env var
+# PH3B3_TRIAGE=off forces it off from boot and wins over the file, for the case
+# where she will not start well enough to serve a request at all.
+_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "triage.json")
+
+
+def _config() -> dict:
+    try:
+        with open(_CONFIG_PATH, encoding="utf-8") as fh:
+            d = json.load(fh)
+            return d if isinstance(d, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception:                                   # noqa: BLE001
+        log.warning("TRIAGE_CONFIG_UNREADABLE — defaults apply, gate stays ENABLED")
+        return {}
+
+
+def gate_enabled() -> bool:
+    """False → skip the gate entirely for this turn. Never raises."""
+    if os.getenv("PH3B3_TRIAGE", "").strip().lower() in ("off", "0", "false", "no"):
+        return False
+    return bool(_config().get("enabled", True))
+
+
+def manifest_enabled() -> bool:
+    """Whether to attach the context manifest to the judge's prompt.
+
+    DEFAULT OFF, and that default is a measurement, not a preference.
+
+    The manifest was built 2026-09-23 to stop capability questions being held.
+    It did that. It also holds EVERYTHING ELSE whenever the context is empty —
+    which is the first turn of every fresh conversation. Measured on
+    ph3b3-chat:latest at temperature 0, empty context, 4 runs each:
+
+        variant                     "capital of France"   "image engines"
+        two-sided rule (shipped)           0/4                  4/4
+        permissive half only               0/4                  4/4
+        bare statement, no instruction     1/4                  4/4
+        permissive + explicitly scoped     0/4                  4/4
+        NO MANIFEST AT ALL                 5/5                  held
+
+    Every wording fails the same way, including one that gives the judge no
+    instruction at all — so this is not a sentence that can be fixed. The block's
+    mere presence shifts an 8B judge toward "absent" when there is nothing in
+    CONTEXT to contradict it. Rewording it again is not the fix; the capability
+    turns need a deterministic claim ABOVE the gate, the way named stories,
+    camera turns and the text-edit lane already work.
+
+    Kept switchable rather than deleted so the measurement can be re-run against
+    a larger judge without reviving the code.
+    """
+    return bool(_config().get("manifest", False))
+
+
 _SYSTEM_HEAD = (
     "You are a triage gate for an assistant that has general knowledge and live "
     "tools (web search, weather, music, recipes, screenshots, vision). Decide "
@@ -169,9 +240,27 @@ class TriageResult:
     question: str | None = None
 
 
+# Every fail-open that has ever happened, by cause. Read by /argus so "the guard
+# is not guarding" is a number on a dashboard instead of a line in a log nobody
+# greps. Process-lifetime counts; Argus reads deltas.
+FAILOPEN_COUNTS: dict = {}
+
+
 def _fail_open(cause: str) -> TriageResult:
-    # Cause-differentiated, never cause-agnostic. cause ∈ {TIMEOUT, PARSE, CONN, EVICTED}
-    log.info("TRIAGE_FAILOPEN_%s", cause)
+    """Fail OPEN on every error path, and say so at WARNING.
+
+    Fail-open was never the sin — fail-open SILENT was. The 2 s cap was
+    disabling the guard on slow turns and nothing said so, because the one line
+    that knew sat at INFO among thousands. The posture does not change: a guard
+    must never be the thing that breaks her. What changes is that it is audible.
+
+    Do NOT be tempted to make this fail closed. A dead judge plus fail-closed
+    holds every turn forever, which is the same outage from the other side.
+    """
+    # cause ∈ {TIMEOUT, PARSE, CONN, EVICTED}
+    FAILOPEN_COUNTS[cause] = FAILOPEN_COUNTS.get(cause, 0) + 1
+    log.warning("TRIAGE_FAILOPEN_%s — the gate did not run this turn (total %d)",
+                cause, FAILOPEN_COUNTS[cause])
     return TriageResult(answerable=True, missing=[], question=None)
 
 
