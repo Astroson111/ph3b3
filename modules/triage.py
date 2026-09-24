@@ -32,7 +32,26 @@ OLLAMA_HOST  = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 HERMES_MODEL = os.getenv("PH3B3_HEAVY_MODEL", os.getenv("PH3B3_MODEL", "hermes3"))
 _HERMES_STEM = HERMES_MODEL.split(":")[0]
 
-_TRIAGE_TIMEOUT = 2.0    # hard bound on the triage inference call
+# Hard bound on the triage inference call. Raised 2.0 -> 6.0 on 2026-09-23 by
+# ruling, after the cap was found to be silently disabling the guard rather than
+# bounding it.
+#
+# What 2.0 s was doing: a turn that took longer than the cap did not get a
+# cautious verdict, it got NO verdict — _fail_open("TIMEOUT") returns
+# answerable=True, so the slowest turns were exactly the ones that sailed
+# through unguarded. Measured with no manifest at all:
+#
+#   "What is <unfiled title> about?"   2.0 s cap  answerable 8/8, all 8 TIMEOUT
+#                                      6.0 s cap  held       0/8, 0 timeouts
+#
+# It was in the Phase 0 baseline too and got read as verdict instability:
+# "What is Arthur and Eliza about?" came back answerable 4/5 there, and four of
+# those five were timeouts.
+#
+# The cost is real and lands on the slow turns only: they used to give up at
+# 2.0 s and proceed, and now they wait for an answer. Fail-open on a genuine
+# timeout is unchanged — this moves where the line is, not what happens at it.
+_TRIAGE_TIMEOUT = 6.0
 _PS_TIMEOUT     = 1.0    # residency pre-check
 _MAX_TOKENS     = 120
 
