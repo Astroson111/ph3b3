@@ -191,6 +191,7 @@ import apelles                   # photo editor — edits only, never generates 
 import audio_monitor             # Silero VAD endpointing + level meter (chat cutoff / ghost readout)
 from triage import triage_gate, gate_enabled, manifest_enabled   # clarification guard before main inference
 import context_manifest          # tells that guard what assembly will add to the context
+import absent_artifact           # "the file I sent you" when no file was ever sent
 
 # ── Dio state telemetry (UDP) ────────────────────────────────────────────────
 # Dio's serial is dead, so its state machine is invisible on-device. It fires
@@ -2703,6 +2704,34 @@ async def _run_chat_pipeline(body: dict, request: Request):
         session.add("user", user_msg)
         session.add("assistant", _blocked)
         return _blocked
+
+    # ── A file she was never sent ────────────────────────────────────────────
+    # "What's in the spreadsheet I sent you", with no spreadsheet anywhere,
+    # invented one 3 times out of 6 (measured 2026-09-24, fresh sessions):
+    # "In the spreadsheet you sent me, there are various columns...". The triage
+    # gate was the only thing in front of it and passes that turn about half the
+    # time. A probabilistic gate is not a control — the same finding that put
+    # named stories on a resolver and the text-edit lane on a refusal.
+    #
+    # Whether a document exists in this conversation is not a judgement: kadmos
+    # either has one staged or it does not. So it is answered from that fact,
+    # above the gate, and the model never gets the chance to fill the gap.
+    # Sits beside blocked_request because it is the same kind of sentence: a
+    # thing this box cannot do, said honestly instead of improvised.
+    # history_empty: on the FIRST turn of a conversation, "the report" cannot
+    # refer to anything, because there is no anything yet. The user's message for
+    # THIS turn is not in the session until further down, so this is genuinely
+    # prior history.
+    _prior = [m for m in session.messages() if m.get("role") in ("user", "assistant")]
+    _absent = absent_artifact.claim(
+        user_msg,
+        document_loaded=bool(kadmos.get_pending(body.get("session_id", "default"))),
+        history_empty=not _prior)
+    if _absent:
+        log.info("[absent_artifact] asked about a document that was never uploaded")
+        session.add("user", user_msg)
+        session.add("assistant", _absent)
+        return _absent
 
     # A named story is answerable BY CONSTRUCTION — do not let triage hold it.
     #
