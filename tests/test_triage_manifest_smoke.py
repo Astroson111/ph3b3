@@ -109,11 +109,18 @@ def _calibrated():
 # ── the two red cases, through the general mechanism ─────────────────────────
 #
 # These are single-shot on purpose. Measured live after the fix: 12/12 and 12/12
-# reached her, and across roughly thirty runs this evening the gate held one of
-# them exactly once (19:41:12, TRIAGE_HOLD missing=['the specific issue with the
-# image...']). That is the gate's own residual non-determinism, which was in the
-# Phase 0 baseline too — the same question returning answerable True and False on
-# identical empty context at temperature 0.
+# reached her when run on their own. The edit-lane one has since held twice, and
+# BOTH times it was inside a larger pytest run with the card loaded (19:41:12,
+# TRIAGE_HOLD missing=['the specific issue with the image...'], and again in a
+# full-suite run at 11.7 GB used). Hammered standalone it does not reproduce.
+#
+# That correlation is NOT established as the cause — it is recorded because this
+# repo has been here before: a suite on a busy card fails from contention rather
+# than code (see the Herakles notes). If you are chasing this, check nvidia-smi
+# before you change anything. The gate also has genuine residual
+# non-determinism, which was in the Phase 0 baseline — the same question
+# returning answerable True and False on identical empty context at temperature
+# 0 — so both explanations are live and neither is proven.
 #
 # Checked and ruled out as causes before writing this: session reuse (three turns
 # on one session id all answered) and accumulated history (10/10 answerable at
