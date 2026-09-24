@@ -192,6 +192,7 @@ import audio_monitor             # Silero VAD endpointing + level meter (chat cu
 from triage import triage_gate, gate_enabled, manifest_enabled   # clarification guard before main inference
 import context_manifest          # tells that guard what assembly will add to the context
 import absent_artifact           # "the file I sent you" when no file was ever sent
+import dio_head                  # "look down" reaches her neck, deterministically
 
 # ── Dio state telemetry (UDP) ────────────────────────────────────────────────
 # Dio's serial is dead, so its state machine is invisible on-device. It fires
@@ -2809,6 +2810,21 @@ async def _run_chat_pipeline(body: dict, request: Request):
         session.add("user", user_msg)
         session.add("assistant", _blocked)
         return _blocked
+
+    # ── Head commands ────────────────────────────────────────────────────────
+    # "Look down" is a command to a motor, not a question for a judge. It is
+    # claimed here, above the gate, for the reason everything else this week
+    # ended up here: the model deflects and the gate holds, and neither of them
+    # can move a servo. dio_head.parse() is the single authority on whether a
+    # message IS the command — anchored to the whole message, so "look up the
+    # weather" stays a search.
+    _head_cmd = dio_head.parse(user_msg)
+    if _head_cmd:
+        _head_reply = dio_head.send(_head_cmd, getattr(vision, "dio_host", None))
+        log.info("[head] %s -> %s", _head_cmd, _head_reply[:60])
+        session.add("user", user_msg)
+        session.add("assistant", _head_reply)
+        return _head_reply
 
     # ── A file she was never sent ────────────────────────────────────────────
     # "What's in the spreadsheet I sent you", with no spreadsheet anywhere,
