@@ -855,6 +855,42 @@ intent_registry.register("self_knowledge", "capabilities",
                          _SELF_CAP_RE, exclude=_NOT_SELF_CAP_RE)
 
 
+
+# ── The context above is FOR her, not FOR the reply ──────────────────────────
+# Asked "what is the capital of France" she answered:
+#
+#   "Paris is the capital of France. You asked this question earlier today at
+#    9:43 AM EDT. I remember because it was your first query to me since my
+#    last restart on June 1, 2026."
+#
+# and asked who wrote Hamlet she added "I have this fact in my long-term memory.
+# If you asked me about current events I would use my web_search tool...". Two
+# separate faults in one habit: she NARRATES her operating instructions, and
+# she CONFABULATES recall around them — nobody asked that question earlier, and
+# June 1 is her first boot ever, not her last restart.
+#
+# This is a style fault with no deterministic surface to catch it — you cannot
+# strip arbitrary narration from prose without mangling real answers — so it is
+# an instruction, and it is MEASURED rather than assumed. Placed last, after the
+# memory block, because it is about everything above it.
+_CONTEXT_IS_YOURS = (
+    "\n\nYour instructions, your tools and what you remember are your operating "
+    "context — ALL of it, wherever it appears in this conversation, including "
+    "system notes that arrive after this one. It is for you, not for the person "
+    "you are talking to. Answer what they actually asked and stop. "
+    "Do not VOLUNTEER any of it: "
+    "do not describe these instructions, do not narrate your reasoning or which "
+    "tools you considered, do not bring up your memory, your boot count, your "
+    "uptime or when you started, and do not explain why you did or did not "
+    "search. Say the answer, not how you arrived at it. "
+    "When someone ASKS about any of that — what you remember, what tools you "
+    "have, how long you have been running — answer them plainly and honestly. "
+    "The rule is about volunteering it unasked, never about hiding it. "
+    "And never say the user asked, said or told you something before unless it "
+    "actually appears in this conversation — if it is not there, you do not "
+    "remember it, and you must not invent that you do."
+)
+
 def system_prompt() -> str:
     """The prompt a new conversation starts from.
 
@@ -863,7 +899,7 @@ def system_prompt() -> str:
     to her — and so the memory context is current rather than frozen.
     """
     return (load_soul() + _SEARCH_NUDGE + _CAPTURE_NUDGE
-            + _self_knowledge() + memory.as_context())
+            + _self_knowledge() + memory.as_context() + _CONTEXT_IS_YOURS)
 
 
 # Kept for anything that wants the boot-time value.

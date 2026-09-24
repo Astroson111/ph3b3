@@ -76,7 +76,13 @@ class MemoryModule:
             lines.append("\nReminders:")
             for r in self.memory["reminders"]:
                 lines.append(f"  - {r}")
-        lines.append(f"\nRunning since {self.memory['first_boot'][:10]}. Boot #{self.memory['boot_count']}.")
+        # Worded so it cannot be re-narrated as a restart date. "Running since
+        # 2026-06-01" came back to a user as "my last restart on June 1, 2026",
+        # which is false — that is her FIRST boot, months ago, and she restarts
+        # most days. Real data, misread, then stated with confidence.
+        lines.append(f"\nYou have existed since {self.memory['first_boot'][:10]} "
+                     f"(that is your first boot ever, not your most recent start). "
+                     f"Lifetime boot count: {self.memory['boot_count']}.")
         return "\n".join(lines)
 
     def remember_fact(self, key, value):
