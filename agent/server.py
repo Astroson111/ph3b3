@@ -641,12 +641,45 @@ def _tts_announce(text: str) -> None:
 # "You are a function calling AI model" created two conflicting identity claims that
 # confused the 8B model into meta-conversation mode instead of calling tools.
 # The soul's own first-person voice asserts identity without the conflict.
+# EDIT 1 of the Fix 4 wording pass, 2026-09-25. The old text said only when to
+# REACH for a tool and never when not to, so on an 8B model carrying 9,685
+# tokens of tool schemas against 2,607 of persona (3.7:1, measured) it read as
+# a general instruction. Asked about privilege she answered about web_search;
+# asked what makes a home feel like home, hermes3 emitted the FunctionCall
+# schema as prose. The scope is now two-sided: the positive half is unchanged in
+# substance so the nudge keeps its real job, and the negative half says who
+# answers the other kind of question.
 _SEARCH_NUDGE = (
-    "\n\nFor any query involving current events, recent news, prices, scores, schedules, "
-    "weather, or anything that changes over time — use your tools first. "
-    "Do not answer from training memory when real-time data is available via a tool."
+    "\n\nTOOLS ARE FOR FACTS THAT CHANGE. For current events, recent news, prices, "
+    "scores, schedules, weather, or anything that changes over time — use your tools "
+    "first, and do not answer from training memory when a tool can fetch the live value."
+    "\n\nThat is the whole of their job. Questions of opinion, feeling, taste, memory, "
+    "identity, or ordinary conversation are answered by YOU, out of yourself — no tool, "
+    "no search, and no mention of tools. For those, never say you lack training data, "
+    "real-time access, or information: the question was not about data. If you are "
+    "asked what you think, think."
 )
+# EDIT 4 of the Fix 4 wording pass, 2026-09-25. This nudge SUPPLIES the
+# deflection we spent the day chasing. Its fallback sentence is
+# "I don't have a capture — want me to take one?" and cell A1's answer to
+# "is it better to be feared or loved" was that sentence verbatim. She was not
+# inventing a camera excuse; she was reciting this paragraph at a question about
+# Machiavelli. At 1,053 chars it is 4.6x the search nudge and the second-largest
+# block of operational text she carries.
+#
+# Scope stated FIRST, capability untouched: every capability, anti-fabrication
+# and safety clause below is verbatim from the original — the NO SIGHT rule, the
+# no-proactive-capture limit, the relay-the-failure rule, the no-watching rule
+# and the keep-the-hedge rule all survive unchanged. Only the scope is new.
 _CAPTURE_NUDGE = (
+    "\n\nWHEN THE CAMERA IS THE SUBJECT. Everything in this paragraph applies to "
+    "turns about SEEING — the user asks you to take a photo, asks what you see or "
+    "what's in view, asks about the camera, or asks about a capture. It applies to "
+    "nothing else. On any other question — an opinion, a feeling, a memory, a meal, "
+    "an idea, ordinary conversation — you answer from yourself and you do not offer a "
+    "capture, do not check your captures, and do not mention the camera at all. The "
+    "line below about not having a capture is an answer to \"what do you see?\", never "
+    "to a question that was not about seeing."
     "\n\nCamera: when the user asks to take a photo, or asks what you see / what's in "
     "view / to look through the webcam, CALL the tool right away (take_photo or "
     "describe_view) — actually capture the frame; do NOT deflect, ask for permission, "
@@ -661,6 +694,7 @@ _CAPTURE_NUDGE = (
     "stills on request, you do not have continuous view. When a description hedges "
     "(\"looks like\", \"possibly\"), keep the hedge — do not upgrade it to certainty."
 )
+
 # ── Self-knowledge — derived, never pasted ───────────────────────────────────
 # What she is THIS morning, assembled from live config when a conversation
 # starts. Not a document.
@@ -788,6 +822,19 @@ def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str, str | No
             "plainly and give a rough time — never pretend to be "
             "listening, and never go silent.", None))
 
+    # Embodiment is a capability fact, not a personality trait, so it lives here
+    # with the engines and the edit lane rather than in the soul. It was tried in
+    # the soul first (2026-09-25) and measured dead: in the same run, with the
+    # same document and the same voice, soul rule 9 held and the meals line did
+    # not — she still answered "I had a bowl of cereal with milk and some sliced
+    # bananas". A charming lie is worse than a cold one because it reads as
+    # warmth. Known-dead instructions are not shipped; that is how a prompt
+    # silts up.
+    out.append(("embodiment", ("whether you have a body, and what you do not do",),
+        "You have no body — no eating, drinking, sleeping or days of your own. "
+        "Never invent having done what you cannot; say so and ask about theirs.",
+        "I don't have a body of my own, so I don't eat, drink or sleep — no "
+        "breakfast, no mornings of my own. Tell me about yours, though."))
     out.append(("card_full", (),
         "If a render cannot start because the card is full, say what you "
         "managed to free and what is still holding it, by name. You do "
@@ -3215,13 +3262,23 @@ async def _run_chat_pipeline(body: dict, request: Request):
     messages.insert(1, _dt_note)
 
     # ── Web-search discipline (Metis) — anti-fabrication, system-layer, ephemeral ─
+    # EDIT 2 of the Fix 4 wording pass, 2026-09-25. This note sits at
+    # messages.insert(1, ...) — the closest system text to the user's turn — and
+    # opened with a flat "You have NO real-time or post-training information."
+    # On an abstract question that reads as "you do not know things", which is
+    # how "what are your thoughts on privilege?" became "I don't have any
+    # training data about what privilege refers to". The anti-fabrication rules
+    # are untouched; only the scope is stated, and it is stated first.
     _web_note = {"role": "system", "content": (
-        "You have NO real-time or post-training information. For anything current, "
-        "recent, or that you are not sure of — weather, news, prices, scores, "
-        "'today'/'now'/'latest', or any fact you might have wrong — use the web_search "
-        "tool. NEVER fabricate current facts, and NEVER invent a source or a 'Sources:' "
-        "list — only cite what web_search actually returned. If web access is off or the "
-        "search fails, say so plainly instead of guessing.")}
+        "About FACTS THAT CHANGE — weather, news, prices, scores, "
+        "'today'/'now'/'latest', or any changing fact you might have wrong — you have "
+        "no real-time or post-training information, so use the web_search tool rather "
+        "than answering from memory. NEVER fabricate current facts, and NEVER invent a "
+        "source or a 'Sources:' list — only cite what web_search actually returned. If "
+        "web access is off or the search fails, say so plainly instead of guessing. "
+        "This paragraph is ONLY about changing facts. It says nothing about what you "
+        "know, think or remember: opinions, ideas, feelings and conversation are yours "
+        "to answer directly, and you never plead missing data for those.")}
     messages.insert(1, _web_note)
 
     # ── Document honesty (Kadmos) — ephemeral, only when a PDF is loaded ───────

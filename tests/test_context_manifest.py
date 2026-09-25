@@ -81,6 +81,7 @@ _CLASS = {
     "edit":        "subject",
     "video":       "subject",
     "watermark":   "subject",   # "did you sign that?" is a real question
+    "embodiment":  "subject",   # "what did you have for breakfast?" is a real question
     "deaf_window": "conduct",
     "card_full":   "conduct",
     "local":       "subject",   # "does any of this leave the machine?"
