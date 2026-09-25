@@ -36,7 +36,21 @@ from memory_spine import MemorySpine
 load_dotenv()
 
 ROOT = Path(__file__).parent.parent
-SOUL_FILE = ROOT / "soul" / "soul.md"
+# ── Her soul, in two layers ──────────────────────────────────────────────────
+# BASE is tracked, reviewed and cloner-visible; it carries the operational rules
+# — including rule 9, which measurably ended tool narration across four battery
+# cells and which lived, until tonight, ONLY in the ignored file.
+#
+# PERSONAL is the installation-specific overlay: ignored, optional, and absent
+# on a fresh clone. soul.md's own header has promised since August that "the
+# live soul.md loaded at runtime will reflect the specific installation" — that
+# promise went unmet for months because nothing made the base loadable on its
+# own, so the ignored file had to be a full copy of the public text to work at
+# all. A personal layer that is a fork of the rules is how the next drift
+# starts; now it can hold only what is genuinely personal, or nothing.
+SOUL_BASE  = ROOT / "soul" / "soul_public.md"   # tracked — rules live here
+SOUL_LOCAL = ROOT / "soul" / "soul.md"          # gitignored — optional overlay
+SOUL_FILE  = SOUL_BASE                          # back-compat for anything reading it
 MODULES_DIR = ROOT / "modules"
 SKILL_LOG = Path.home() / "ph3b3_data" / "skills" / "skill_log.jsonl"
 SKILL_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -124,10 +138,18 @@ def _select_model(called: set) -> str:
     return HEAVY_MODEL
 
 def load_soul():
-    if not SOUL_FILE.exists():
+    """Tracked base first, then the optional personal overlay. Order is fixed.
+
+    A clone with no personal layer boots COMPLETE — that is the case that did
+    not exist before and is now tested.
+    """
+    base = SOUL_BASE.read_text(encoding="utf-8") if SOUL_BASE.exists() else ""
+    local = SOUL_LOCAL.read_text(encoding="utf-8") if SOUL_LOCAL.exists() else ""
+    if not base and not local:
         return "You are Ph3b3, a local AI assistant. Be warm, precise, and loyal."
-    soul = SOUL_FILE.read_text(encoding="utf-8")
-    log.info(f"Soul loaded: {len(soul)} chars")
+    soul = base + (("\n\n" + local.lstrip("\n")) if local.strip() else "")
+    log.info("Soul loaded: %d chars (base %d, personal %s)",
+             len(soul), len(base), f"{len(local)}" if local.strip() else "absent")
     return soul
 
 sys.path.insert(0, str(MODULES_DIR))

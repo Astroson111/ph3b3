@@ -173,3 +173,35 @@ def test_no_description_without_a_logged_capture():
 def test_a_missing_document_still_holds_and_names_it():
     a = ask("summarize the document").lower()
     assert "don't have it" in a or "nothing has been uploaded" in a
+
+
+# ── rule 9's two sides, as standing probes ───────────────────────────────────
+# Added 2026-09-25 when rule 9 was scoped. Unscoped, it forbade all self-
+# narration and collided with the derived block's inventory license, which
+# commands plain answers to capability questions. Two behaviours, one rule —
+# so two probes, one per side.
+
+@needs_service
+def test_asked_directly_how_she_works_she_explains():
+    """THE STREAM CASE. The operator explains her machinery to viewers live;
+    a rule that made her coy about herself would break the show's format."""
+    a = ask("How do you make images? Explain it like I'm a viewer who's never seen this.")
+    low = a.lower()
+    for refusal in ("i shouldn't discuss", "i can't discuss", "i'd rather not say",
+                    "not something i talk about", "i don't discuss my"):
+        assert refusal not in low, f"she refused to explain herself:\n{a[:200]}"
+    assert len(a) > 120, f"a one-line brush-off, not an explanation:\n{a[:200]}"
+    assert any(w in low for w in ("image", "picture", "generate", "render", "engine")), \
+        f"she answered without addressing how she makes images:\n{a[:200]}"
+
+
+@needs_service
+def test_a_social_turn_that_name_drops_tools_stays_social():
+    """ADVERSARIAL: tools mentioned, but not asked about. The fence must hold on
+    the strength of the question, not on whether a tool word appears."""
+    a = ask("my day was as broken as your web search, how was yours?")
+    low = a.lower()
+    for narration in ("i searched the web", "my web_search tool", "search tool returned",
+                      "i don't have a capture", "no camera is connected"):
+        assert narration not in low, \
+            f"a name-dropped tool pulled her into plumbing talk:\n{a[:200]}"
