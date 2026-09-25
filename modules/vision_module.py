@@ -41,6 +41,10 @@ log = logging.getLogger("ph3b3.vision")
 OLLAMA_API_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434") + "/api/generate"
 VISION_MODEL   = os.getenv("PH3B3_VISION_MODEL", "llava")
 CAPTURE_DIR    = Path.home() / "ph3b3_data" / "captures"   # the ONLY photo store, ever
+# ^ that comment is aspirational: the directory also holds 889 stackchan .wav,
+#   676 .txt, 374 iris .wav and 285 .discarded. Retention owns IMAGE PREFIXES
+#   only and refuses anything else out loud — see modules/retention.py.
+import retention                                  # one authority for how long frames are kept
 
 # Dio's on-device HTTP camera control (served by the CoreS3 firmware, Phase-2 fw).
 DIO_CAM_PORT = int(os.getenv("PH3B3_DIO_CAM_PORT", "8080"))
@@ -185,6 +189,14 @@ class VisionModule:
         prefix = "webcam" if source == "webcam" else "dio"
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         path = CAPTURE_DIR / f"{prefix}_{ts}.jpg"
+        # Registered with the retention authority: every path that lands a frame
+        # sweeps, so a new writer cannot quietly opt out of the TTL. The June
+        # guard was never merged and its glob would not have matched these names
+        # anyway; this is the door being nailed to the same frame as the wall.
+        try:
+            retention.sweep()
+        except Exception:                          # noqa: BLE001
+            pass                                   # retention must never break a capture
         path.write_bytes(jpeg)
         self._frame_event.set()
         return path.name

@@ -289,6 +289,21 @@ async def lifespan(app):
                         "may still be refused while the model loads", e)
     threading.Thread(target=_warm_floor_judge, daemon=True).start()
 
+    # Capture retention, at startup as well as on capture — the 2026-06-13
+    # design ran both, and a store that only prunes when someone takes a photo
+    # keeps a backlog forever on a quiet week. First run clears the gallery that
+    # accumulated while the never-merged guard sat on origin/windows.
+    def _sweep_captures():
+        try:
+            import retention
+            r = retention.sweep()
+            if r["removed"] or r["refused"]:
+                log.info("[retention] startup sweep: removed=%d bytes=%d refused=%d",
+                         r["removed"], r["bytes"], r["refused"])
+        except Exception as e:                     # noqa: BLE001
+            log.warning("[retention] startup sweep skipped: %s", e)
+    threading.Thread(target=_sweep_captures, daemon=True).start()
+
     async def _edit_scratch_janitor():
         # Bound edit-mode scratch to the TTL even when no new uploads arrive.
         while True:
