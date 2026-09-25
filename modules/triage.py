@@ -220,17 +220,121 @@ def _scrub_bare_ask(q: str | None) -> str | None:
     return q
 
 
+# Article-insensitive: the missing item is "the document" and a good question
+# says "Which document did you mean?" — comparing whole phrases would reject it,
+# which is what the first version of this did.
+_STOP = {"the", "a", "an", "your", "my", "our", "this", "that", "of", "for",
+         "to", "about", "some", "any", "specific"}
+
+
+def _names_any(question: str, missing) -> bool:
+    """Does the question point at the fetchable thing?
+
+    Either by naming a content word from a missing item, or by naming any
+    fetchable kind of thing at all — a good clarifier is allowed its own words.
+    "Which of the two logs did you mean, argus or morpheus?" answers
+    missing=['file'] perfectly well, and an earlier version of this rejected it
+    for saying "logs" instead of "file".
+    """
+    q = (question or "").lower()
+    for item in missing:
+        for word in re.findall(r"[a-z0-9']+", str(item).lower()):
+            if word not in _STOP and len(word) > 2 and word in q:
+                return True
+    return bool(_FETCHABLE_RE.search(q))
+
+
 def _clarifying(missing: list, user_text: str, model_q: str | None) -> str:
     """Guarantee a sensible spoken question on a hold: prefer the model's, but
     reject an empty one or a verbatim echo of the request; fall back to the
     missing fields, then to a generic ask."""
     mq = _scrub_bare_ask(_scrub_artist_ask((model_q or "").strip()))
+    # A legitimate hold must ask about the FETCHABLE thing. "Could you tell me
+    # what you had for breakfast?" parrots the user's own noun back at them and
+    # is the anti-example this clause exists for; by the time we are here the
+    # missing items have survived enforce_fetchable, so naming one is always
+    # possible and always more useful than the model's phrasing when that
+    # phrasing mentions none of them.
+    if mq and missing and not _names_any(mq, missing):
+        mq = None
     if mq and len(mq) > 4 and mq.lower() != (user_text or "").strip().lower():
         return mq
     if missing:
         return ("I don't have enough to answer that yet — could you give me a bit "
                 "more about " + ", ".join(str(m) for m in missing) + "?")
     return "I don't have enough to go on yet — could you give me a bit more detail?"
+
+
+# ── A hold's only legitimate theory ─────────────────────────────────────────
+# A hold says "the user can supply or point to the missing thing". That is a
+# claim about FETCHABLE context. When the judge held "what did you have for
+# breakfast?" with missing=['your breakfast'], it was not making that claim —
+# it had mistaken a noun it did not know for a dependency it could be handed.
+#
+# Reproduced 2026-09-25 09:04 and again at 10:37: with the model seated, the
+# hold means the brain is never invoked and the verdict itself refreshes the
+# model's keep_alive lease, so the trap re-arms on every clarification the user
+# offers. The loop breaks here, not in the prompt: the judge keeps its vote and
+# loses its veto over anything a user could not hand it.
+#
+# DETERMINISTIC ON PURPOSE. A prompt is for character; it never guarantees. This
+# is the guarantee.
+_FETCHABLE_RE = re.compile(
+    r"\b(?:document|doc|file|pdf|spread\s?sheet|csv|excel|workbook|sheet|attachment"
+    r"|upload(?:ed)?|scan|report|invoice|contract|transcript|slide|deck|manuscript"
+    r"|image|photo|picture|screenshot|frame|capture|recording"
+    r"|render|generation|clip|video|song|track|mix|stem"
+    r"|job|task|run|batch|ticket|story|book|chapter|passage|log|url|link|path"
+    r"|filename|attachment)s?\b", re.I)
+
+
+def _fetchable(item: str, subjects=()) -> bool:
+    """Is this missing item something the user could actually supply or point at?
+
+    Two ways to qualify: it names a fetchable KIND of thing (a document, a job,
+    an upload), or it names a manifest SUBJECT — the capabilities and documents
+    the assembled prompt will carry, which the caller passes in rather than this
+    module guessing at.
+    """
+    text = (item or "").strip().lower()
+    if not text:
+        return False
+    if _FETCHABLE_RE.search(text):
+        return True
+    for subj in subjects or ():
+        sl = str(subj).strip().lower()
+        if sl and (sl in text or text in sl):
+            return True
+    return False
+
+
+def enforce_fetchable(result, subjects=()):
+    """Coerce a hold that cannot be fixed by the user into an answerable turn.
+
+    ANY missing item outside the fetchable categories overrules the whole hold:
+    a verdict reasoning from "breakfast" is not made sound by also mentioning a
+    document. Returns the result, mutated in place.
+    """
+    if result.answerable:
+        return result
+    missing = list(result.missing or [])
+    # No missing list at all is a PARSE degradation, not a garbage verdict — the
+    # prose fallback yields a confident hold it could not itemise. Overruling
+    # those was over-reach on my part and silently discarded real holds.
+    if not missing:
+        return result
+    unfetchable = [m for m in missing if not _fetchable(m, subjects)]
+    if not unfetchable:
+        return result
+    log.warning("TRIAGE_HOLD_OVERRULED — missing=%s not fetchable", unfetchable)
+    HOLD_OVERRULED_COUNT[0] += 1
+    result.answerable = True
+    result.missing = []
+    result.question = None
+    return result
+
+
+HOLD_OVERRULED_COUNT = [0]     # read by the verify harness; Argus wiring is Fix 3
 
 
 @dataclass
@@ -301,6 +405,21 @@ def _parse(text: str) -> TriageResult | None:
     return None
 
 
+
+def _subjects_from(manifest: str | None):
+    """Manifest subjects, taken from the manifest string the caller already
+    passes, so there is no second place that decides what the prompt contains."""
+    if not manifest:
+        return ()
+    out = []
+    for seg in manifest.split("\u2014")[1:]:
+        for piece in seg.split(".")[0].split(";"):
+            piece = piece.strip()
+            if piece:
+                out.append(piece)
+    return tuple(out)
+
+
 async def triage_gate(user_text: str, context: str,
                       manifest: str | None = None) -> TriageResult:
     """Decide whether `user_text` is answerable given `context`.
@@ -345,6 +464,8 @@ async def triage_gate(user_text: str, context: str,
             result = _parse(content)
             if result is None:
                 return _fail_open("PARSE")
+            if not result.answerable:
+                enforce_fetchable(result, _subjects_from(manifest))
             if not result.answerable:
                 result.question = _clarifying(result.missing, user_text, result.question)
             return result
