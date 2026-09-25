@@ -257,3 +257,92 @@ def test_the_ordering_is_stated_in_the_source():
     assert body.index("_NAMED_RE.search(text)") < body.index("_INTERIORITY_RE.search(text)"), \
         "interiority is being tested before the named-work branch"
     assert "FUZZY" in body, "the reason the resolver is gated is not recorded"
+
+
+# ── TIER ZERO: her own name, and pleasantries ────────────────────────────────
+# 2026-09-25 18:36, live: TRIAGE_HOLD — missing=['Phoebe', 'today'] on
+# "Hey, Phoebe, how you doing today, darling?" with no OVERRULED line.
+# She could not be greeted.
+#
+# CAUSE, confirmed in code and NOT what it looked like: the manifest is off
+# (config/triage.json manifest:false), so subjects was empty and the
+# subject-matching branch could not have fired. Both items reached step 4 of
+# classify() — the default — which I had flipped from overrule to HOLD earlier
+# that day so "company name" would hold. Everything the interiority list does
+# not recognise now holds, and it does not recognise her name.
+#
+# The aggregation invariant was NOT lost in the rework: `if "overrule" in
+# verdicts` still strips the whole hold. It never fired because neither item
+# classified as overrule. It is pinned below anyway.
+
+def test_her_own_name_is_never_missing_context():
+    """She is the one entity a user cannot supply. A hold naming her is
+    definitionally garbage, and this is checked before every other tier —
+    before manifest state, before the resolver, before vocabulary."""
+    for name in ("Phoebe", "phoebe", "Ph3b3", "ph3b3", "PHOEBE"):
+        assert triage.classify(name) == "overrule", f"{name!r} could hold a turn"
+
+
+def test_her_name_overrules_even_when_a_manifest_subject_would_hold():
+    """Tier zero outranks subject matching, so no manifest content can resurrect
+    the bug."""
+    subjects = ("your image engines, and readable text inside a picture", "Phoebe")
+    assert triage.classify("Phoebe", subjects) == "overrule"
+
+
+def test_the_exact_incident_is_inverted():
+    r = triage.enforce_fetchable(_held(["Phoebe", "today"]))
+    assert r.answerable is True, "she still cannot be greeted"
+    assert r.missing == [] and r.question is None
+
+
+def test_ANY_unfetchable_item_strips_the_whole_hold():
+    """Re-pinned. A verdict reasoning partly from garbage is a garbage verdict;
+    hold-tier items do not outvote an overrule."""
+    r = triage.enforce_fetchable(_held(["the document", "Phoebe"]))
+    assert r.answerable is True, "a hold-tier item outvoted an overrule"
+
+
+def test_subject_matching_is_word_boundary_not_bare_substring():
+    """The old bidirectional `in` meant any single common word appearing inside
+    a subject phrase filed a social turn as fetchable context."""
+    subjects = ("your image engines, and readable text inside a picture",)
+    assert triage.classify("text", subjects) == "hold"        # a real subject word
+    assert triage.classify("your breakfast", subjects) == "overrule"
+
+
+# ── the phatic fast path ─────────────────────────────────────────────────────
+PHATIC = ["Hey, Phoebe, how you doing today, darling?", "hi", "hello Phoebe",
+          "good morning", "how are you?", "thanks!", "thank you so much",
+          "goodnight", "nice to talk to you again", "love you"]
+
+JUDGED = ["hey Phoebe, can you edit text?", "hi, what image engines do you have?",
+          "morning — summarize the document", "how do you make images?",
+          "hey, take a photo", "thanks, now tell me a joke",
+          "what did you have for breakfast",
+          "hello, is it better to be feared or loved"]
+
+
+@pytest.mark.parametrize("text", PHATIC)
+def test_a_pure_pleasantry_never_reaches_the_judge(text):
+    assert triage.is_phatic(text), f"{text!r} would still be judged"
+
+
+@pytest.mark.parametrize("text", JUDGED)
+def test_a_real_question_wearing_a_hello_is_still_judged(text):
+    """Scope discipline: better ten judged greetings than one skipped real
+    question. Recognition is whole-message — one token outside the pleasantry
+    vocabulary and the turn goes through the gate."""
+    assert not triage.is_phatic(text), f"{text!r} skipped the gate"
+
+
+def test_a_long_message_is_not_a_greeting():
+    assert not triage.is_phatic("hi " * 40)
+
+
+def test_the_skip_is_auditable_and_counted():
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    assert "TRIAGE_SKIP_PHATIC" in src
+    assert "SKIP_PHATIC_COUNT" in src
+    assert src.index("is_phatic(user_msg)") < src.index("await triage_gate("), \
+        "the phatic check runs after the judge has already been asked"

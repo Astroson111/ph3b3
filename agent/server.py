@@ -211,7 +211,8 @@ from vad_turns import END_CAP, END_VADEND                 # per-turn VAD diagnos
 import camera_module          # webcam pan/tilt/zoom (UVC v4l2); master switch, default OFF
 import apelles                   # photo editor — edits only, never generates (ruling A)
 import audio_monitor             # Silero VAD endpointing + level meter (chat cutoff / ghost readout)
-from triage import triage_gate, gate_enabled, manifest_enabled   # clarification guard before main inference
+from triage import (triage_gate, gate_enabled, manifest_enabled,   # clarification guard
+                    is_phatic)                                    # ...and what never needs one
 import context_manifest          # tells that guard what assembly will add to the context
 
 
@@ -3066,7 +3067,20 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # straight through. It sits in front of all of chat, so when it misbehaves
     # she is unusable, and the operator needs a lever that does not require an
     # edit and a restart in the middle of an incident.
-    if not gate_enabled():
+    if is_phatic(user_msg):
+        # A turn that can never legitimately be held is not judged at all. On
+        # 2026-09-25 the gate held "Hey, Phoebe, how you doing today, darling?"
+        # with missing=['Phoebe', 'today'] — she could not be greeted. Every
+        # judge invocation is a place a wrong verdict can happen, and small talk
+        # is where this week's wrong verdicts lived. Recognition is strict and
+        # whole-message: one word outside the pleasantry vocabulary and the turn
+        # goes through the gate as normal.
+        import triage as _tri
+        _tri.SKIP_PHATIC_COUNT[0] += 1
+        log.info("TRIAGE_SKIP_PHATIC — pleasantry, not judged (total %d)",
+                 _tri.SKIP_PHATIC_COUNT[0])
+        _triage = _TriagePass()
+    elif not gate_enabled():
         log.warning("TRIAGE_OFF — gate bypassed by config; turns pass unguarded")
         _triage = _TriagePass()
     else:

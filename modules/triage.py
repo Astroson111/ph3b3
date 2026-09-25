@@ -312,6 +312,22 @@ _INTERIORITY_RE = re.compile(
     r"personality|life|wellbeing|sleep)\b", re.I)
 
 
+# HER OWN NAME. Injected/extendable, defaulting to what she is called. She is
+# the one entity that can never be "missing context the user supplies": a hold
+# naming her is definitionally garbage. Measured 2026-09-25 18:36 —
+# TRIAGE_HOLD missing=['Phoebe', 'today'] on "Hey, Phoebe, how you doing today,
+# darling?". She could not be greeted.
+SELF_NAMES = {n.strip().lower() for n in
+              os.getenv("PH3B3_SELF_NAMES", "phoebe,ph3b3,pheobe,phoeby,fee bee").split(",")
+              if n.strip()}
+
+_WORD_RE = re.compile(r"[a-z0-9']+")
+
+
+def _is_self(text: str) -> bool:
+    return bool(SELF_NAMES & set(_WORD_RE.findall((text or "").lower())))
+
+
 def classify(item: str, subjects=(), resolver=None):
     """One of: 'hold', 'decline', 'overrule'. Deterministic, in this order.
 
@@ -326,11 +342,24 @@ def classify(item: str, subjects=(), resolver=None):
     if not text:
         return "overrule"
 
+    # 0. HER OWN NAME, before everything. No manifest state, no resolver, no
+    #    vocabulary tier gets a vote on this one.
+    if _is_self(text):
+        return "overrule"
+
     # 1. Manifest subjects first — the caller's own statement of what the
     #    assembled prompt will carry.
+    # WORD-BOUNDARY, not bare substring. The old bidirectional `in` meant any
+    # single common word appearing anywhere inside a subject phrase filed a
+    # social turn as fetchable context.
+    tl = text.lower()
+    t_words = set(_WORD_RE.findall(tl))
     for subj in subjects or ():
         sl = str(subj).strip().lower()
-        if sl and (sl in text.lower() or text.lower() in sl):
+        if not sl:
+            continue
+        s_words = set(_WORD_RE.findall(sl))
+        if sl in tl or (t_words and t_words <= s_words):
             return "hold"
 
     # 2. Does it LOOK like a named work? Only then is the store consulted.
@@ -409,7 +438,54 @@ def enforce_fetchable(result, subjects=(), resolver=None):
 
 
 DECLINE_COUNT = [0]
+SKIP_PHATIC_COUNT = [0]     # Argus-visible with the rest
 HOLD_OVERRULED_COUNT = [0]     # read by the verify harness; Argus wiring is Fix 3
+
+
+# ── Pure pleasantries never reach the judge ─────────────────────────────────
+# House law: a turn that can never legitimately be held should not be judged at
+# all. Every judge invocation is a place a wrong verdict can happen, and this
+# week's evidence is unanimous that small talk is where wrong verdicts live —
+# breakfast, mornings, opinions, and on 2026-09-25 at 18:36 her own name:
+# TRIAGE_HOLD missing=['Phoebe', 'today'] on "Hey, Phoebe, how you doing today,
+# darling?". She could not be greeted.
+#
+# RECOGNITION IS WHOLE-MESSAGE AND STRICT, not "contains a greeting". Every
+# token must be in the pleasantry vocabulary; one word outside it and the turn
+# goes through the gate as normal. "Hey Phoebe, can you edit text?" is a real
+# question wearing a hello, and it gets judged. Better ten judged greetings than
+# one skipped real question.
+_PHATIC_WORDS = {
+    # greetings and farewells
+    "hi", "hey", "heya", "hello", "hullo", "yo", "howdy", "sup", "morning",
+    "afternoon", "evening", "night", "goodnight", "goodbye", "bye", "byebye",
+    "cya", "later", "welcome", "back",
+    # how-are-you
+    "how", "are", "you", "u", "ya", "doing", "going", "is", "it", "been",
+    "feeling", "today", "tonight", "everything", "things",
+    # thanks
+    "thanks", "thank", "ty", "thx", "cheers", "appreciate", "appreciated",
+    # warmth and endearments
+    "nice", "good", "great", "lovely", "wonderful", "see", "talk", "talking",
+    "hear", "from", "again", "love", "missed", "miss", "glad", "happy",
+    "darling", "dear", "hun", "honey", "friend", "mate", "buddy", "pal",
+    "girl", "sweetheart", "babe",
+    # harmless filler
+    "please", "well", "so", "and", "the", "a", "an", "my", "im", "i", "m",
+    "just", "to", "say", "hope", "all", "ok", "okay", "alright", "there",
+    "yes", "no", "yeah", "yep", "of", "course", "much", "very", "too",
+}
+_PHATIC_EXTRA = {w.strip().lower() for w in
+                 os.getenv("PH3B3_PHATIC_EXTRA", "").split(",") if w.strip()}
+
+
+def is_phatic(text: str) -> bool:
+    """True only when the WHOLE message is pleasantry. Never raises."""
+    words = _WORD_RE.findall((text or "").lower())
+    if not words or len(words) > 12:          # a long message is not a greeting
+        return False
+    allowed = _PHATIC_WORDS | _PHATIC_EXTRA | SELF_NAMES
+    return all(w in allowed for w in words)
 
 
 @dataclass
