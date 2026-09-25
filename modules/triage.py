@@ -288,52 +288,127 @@ _FETCHABLE_RE = re.compile(
     r"|filename|attachment)s?\b", re.I)
 
 
-def _fetchable(item: str, subjects=()) -> bool:
-    """Is this missing item something the user could actually supply or point at?
+# Injected by the server: does this text name something the stores can actually
+# resolve? Deterministic — the same resolve() path the named-story bypass uses.
+# Kept as a hook rather than an import so triage owns no library state.
+named_resolver = None          # callable(str) -> bool
 
-    Two ways to qualify: it names a fetchable KIND of thing (a document, a job,
-    an upload), or it names a manifest SUBJECT — the capabilities and documents
-    the assembled prompt will carry, which the caller passes in rather than this
-    module guessing at.
+
+# A named work or proper reference: a quoted phrase, or a run of capitalised
+# words (lowercase joiners allowed, as in "The Lighthouse at Dunwich").
+_NAMED_RE = re.compile(
+    r"[\"\u201c\u2018']([^\"\u201d\u2019']{3,})[\"\u201d\u2019']"
+    r"|\b(?:[A-Z][\w'-]+)(?:\s+(?:of|at|the|and|in|on|a|an|for|to)\s+[A-Z][\w'-]+"
+    r"|\s+[A-Z][\w'-]+)+")
+
+# Her own interiority. These are the items a user CANNOT supply, because they
+# are about her experience or her opinions — the breakfast/morning class that
+# started the livelock. This is the ONLY tier that strips a veto.
+_INTERIORITY_RE = re.compile(
+    r"\b(?:your|my|her|their)?\s*"
+    r"(?:breakfast|lunch|dinner|supper|meal|meals|morning|afternoon|evening|night|"
+    r"day|days|weekend|mood|feeling|feelings|thought|thoughts|opinion|opinions|"
+    r"view|views|experience|experiences|memory|memories|preference|preferences|"
+    r"personality|life|wellbeing|sleep)\b", re.I)
+
+
+def classify(item: str, subjects=(), resolver=None):
+    """One of: 'hold', 'decline', 'overrule'. Deterministic, in this order.
+
+    RESOLUTION BEFORE VOCABULARY. The first version of this recognised category
+    NOUNS only and never proper names, so "The Lighthouse at Dunwich" — a title
+    the shelf does not have — read as unfetchable, lost its veto, and she
+    invented a 2015 horror film, then a public-domain summary, then a 1930s
+    radio serial. Three fabrications, three different lies, from a check meant
+    to make her more honest.
     """
-    text = (item or "").strip().lower()
+    text = (item or "").strip()
     if not text:
-        return False
-    if _FETCHABLE_RE.search(text):
-        return True
+        return "overrule"
+
+    # 1. Manifest subjects first — the caller's own statement of what the
+    #    assembled prompt will carry.
     for subj in subjects or ():
         sl = str(subj).strip().lower()
-        if sl and (sl in text or text in sl):
-            return True
-    return False
+        if sl and (sl in text.lower() or text.lower() in sl):
+            return "hold"
+
+    # 2. Does it LOOK like a named work? Only then is the store consulted.
+    #    shelf.resolve() is FUZZY — measured 2026-09-25, it returns True for
+    #    "the user's mood" — so asking it about arbitrary prose turns a social
+    #    hold into a legitimate one and the livelock comes straight back. It is
+    #    a good title matcher and a bad general oracle; it is now only ever
+    #    asked about things shaped like titles.
+    if _NAMED_RE.search(text):
+        if resolver is not None:
+            try:
+                if resolver(text):
+                    return "hold"          # a real work: she recalls it properly
+            except Exception:              # noqa: BLE001
+                pass                       # a lookup fault never gates a turn
+        return "decline"                   # named but absent: say so, never invent
+
+    # 3. Her own interiority — the only thing a user genuinely cannot supply.
+    if _INTERIORITY_RE.search(text):
+        return "overrule"
+
+    # 4. Everything else HOLDS. A user-suppliable specific ("company name",
+    #    "today's date", "the document") is precisely what a clarifying question
+    #    is for. Defaulting to hold is the conservative direction: the cost is a
+    #    question, where the cost of over-overruling is an invented answer.
+    return "hold"
 
 
-def enforce_fetchable(result, subjects=()):
-    """Coerce a hold that cannot be fixed by the user into an answerable turn.
+def _fetchable(item: str, subjects=()) -> bool:
+    """Back-compat shim: 'is a hold legitimate for this item?'"""
+    return classify(item, subjects, named_resolver) == "hold"
 
-    ANY missing item outside the fetchable categories overrules the whole hold:
-    a verdict reasoning from "breakfast" is not made sound by also mentioning a
-    document. Returns the result, mutated in place.
+
+def _decline_line(items) -> str:
+    named = next((str(i).strip() for i in items
+                  if _NAMED_RE.search(str(i or ""))), None)
+    if named:
+        return (f"I don't have anything called {named} — it isn't on my shelf or "
+                "in what I've filed. I'd rather tell you that than make one up.")
+    return ("I don't have that one — it isn't on my shelf or in what I've filed. "
+            "I'd rather tell you that than make one up.")
+
+
+def enforce_fetchable(result, subjects=(), resolver=None):
+    """Three outcomes, not two. Returns the result, mutated in place.
+
+      hold      every item resolves, or is a user-suppliable specific
+      decline   something is NAMED but absent — say so, never improvise it
+      overrule  the hold rests on her own interiority, which no user can supply
     """
     if result.answerable:
         return result
     missing = list(result.missing or [])
-    # No missing list at all is a PARSE degradation, not a garbage verdict — the
-    # prose fallback yields a confident hold it could not itemise. Overruling
-    # those was over-reach on my part and silently discarded real holds.
     if not missing:
+        return result                                  # prose fallback; leave it alone
+
+    res = resolver if resolver is not None else named_resolver
+    verdicts = [classify(m, subjects, res) for m in missing]
+
+    # Precedence: decline beats overrule. A turn naming an absent work must
+    # never be handed to the brain to imagine, even if it also mentions
+    # something social.
+    if "decline" in verdicts:
+        DECLINE_COUNT[0] += 1
+        log.warning("TRIAGE_HOLD_DECLINED — missing=%s named but absent", missing)
+        result.question = _decline_line(missing)
         return result
-    unfetchable = [m for m in missing if not _fetchable(m, subjects)]
-    if not unfetchable:
-        return result
-    log.warning("TRIAGE_HOLD_OVERRULED — missing=%s not fetchable", unfetchable)
-    HOLD_OVERRULED_COUNT[0] += 1
-    result.answerable = True
-    result.missing = []
-    result.question = None
+    if "overrule" in verdicts:
+        bad = [m for m, v in zip(missing, verdicts) if v == "overrule"]
+        log.warning("TRIAGE_HOLD_OVERRULED — missing=%s not fetchable", bad)
+        HOLD_OVERRULED_COUNT[0] += 1
+        result.answerable = True
+        result.missing = []
+        result.question = None
     return result
 
 
+DECLINE_COUNT = [0]
 HOLD_OVERRULED_COUNT = [0]     # read by the verify harness; Argus wiring is Fix 3
 
 
@@ -465,7 +540,7 @@ async def triage_gate(user_text: str, context: str,
             if result is None:
                 return _fail_open("PARSE")
             if not result.answerable:
-                enforce_fetchable(result, _subjects_from(manifest))
+                enforce_fetchable(result, _subjects_from(manifest), named_resolver)
             if not result.answerable:
                 result.question = _clarifying(result.missing, user_text, result.question)
             return result

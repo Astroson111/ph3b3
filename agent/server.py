@@ -191,6 +191,22 @@ import apelles                   # photo editor — edits only, never generates 
 import audio_monitor             # Silero VAD endpointing + level meter (chat cutoff / ghost readout)
 from triage import triage_gate, gate_enabled, manifest_enabled   # clarification guard before main inference
 import context_manifest          # tells that guard what assembly will add to the context
+
+
+# The gate's veto-stripper resolves names against the STORES rather than
+# guessing from vocabulary — the same resolve() path the named-story bypass
+# uses. Injected, so triage owns no library state and there is one place that
+# decides what exists.
+def _triage_named_resolver(text: str) -> bool:
+    try:
+        return bool(shelf.resolve(text).get("ok") or canon.resolve(text).get("ok"))
+    except Exception:                                  # noqa: BLE001
+        return False                                   # a lookup fault never gates a turn
+
+
+triage_mod = sys.modules.get("triage")
+if triage_mod is not None:
+    triage_mod.named_resolver = _triage_named_resolver
 import absent_artifact           # "the file I sent you" when no file was ever sent
 import dio_head                  # "look down" reaches her neck, deterministically
 

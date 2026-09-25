@@ -139,7 +139,7 @@ def test_the_breakfast_parrot_is_impossible_now():
 # ── wiring ───────────────────────────────────────────────────────────────────
 def test_the_check_runs_before_the_clarifier_is_built():
     src = (ROOT / "modules" / "triage.py").read_text(encoding="utf-8")
-    assert src.index("enforce_fetchable(result, _subjects_from(manifest))") < \
+    assert src.index("enforce_fetchable(result, _subjects_from(manifest)") < \
            src.index("result.question = _clarifying(")
 
 
@@ -147,3 +147,113 @@ def test_the_override_is_counted():
     before = triage.HOLD_OVERRULED_COUNT[0]
     triage.enforce_fetchable(_held(["breakfast"]))
     assert triage.HOLD_OVERRULED_COUNT[0] == before + 1
+
+
+# ── THREE OUTCOMES, added 2026-09-25 after the repair ────────────────────────
+# The first version of _fetchable() recognised category NOUNS and never proper
+# names, so "The Lighthouse at Dunwich" — a title the shelf does not have — read
+# as unfetchable, lost its veto, and she invented a 2015 horror film, then a
+# public-domain summary, then a 1930s radio serial. Three fabrications, three
+# different lies, produced by a check written to make her more honest.
+#
+# Fetchability is now RESOLVED against the stores, not inferred from vocabulary.
+
+_FILED = ["Esmeralda's Garden", "Arthur and Eliza", "The Crooked Man of Flintstone"]
+
+
+def _fake_resolver(text):
+    return any(t.lower() in text.lower() for t in _FILED)
+
+
+@pytest.mark.parametrize("title", _FILED)
+def test_a_filed_title_resolves_and_the_hold_stands(title):
+    """She is held to recall a real thing properly rather than improvise it."""
+    assert triage.classify(title, (), _fake_resolver) == "hold"
+    r = triage.enforce_fetchable(_held([title]), (), _fake_resolver)
+    assert r.answerable is False
+
+
+def test_an_absent_named_work_is_DECLINED_not_overruled():
+    """The trap. Overruling hands it to the brain to imagine; holding asks the
+    user to supply a story she cannot be given. The third answer is the truth."""
+    assert triage.classify("The Lighthouse at Dunwich", (), _fake_resolver) == "decline"
+    r = triage.enforce_fetchable(_held(["The Lighthouse at Dunwich"]), (), _fake_resolver)
+    assert r.answerable is False, "an absent named work was overruled into invention"
+    assert "don't have anything called" in r.question
+    assert "The Lighthouse at Dunwich" in r.question
+    assert "make one up" in r.question
+
+
+def test_decline_beats_overrule_when_a_turn_has_both():
+    """A turn naming an absent work must never reach the brain, even if it also
+    mentions something social."""
+    r = triage.enforce_fetchable(
+        _held(["The Lighthouse at Dunwich", "your breakfast"]), (), _fake_resolver)
+    assert r.answerable is False
+    assert "don't have anything called" in r.question
+
+
+@pytest.mark.parametrize("item", ["your breakfast", "your morning", "thoughts",
+                                  "your personal views or opinions",
+                                  "a brief description of what happened in my day"])
+def test_the_social_path_is_untouched(item):
+    """Her own interiority is the ONLY tier that strips a veto."""
+    assert triage.classify(item, (), _fake_resolver) == "overrule"
+    assert triage.enforce_fetchable(_held([item]), (), _fake_resolver).answerable is True
+
+
+@pytest.mark.parametrize("item", ["company name", "today's date", "the document",
+                                  "the uploaded file", "which spreadsheet"])
+def test_user_suppliable_specifics_now_hold_legitimately(item):
+    """These were being overruled by accident — 'company name' 11 times in one
+    day. A clarifying question is exactly what they are for. Defaulting to hold
+    is the conservative direction: the cost is a question, where the cost of
+    over-overruling is an invented answer."""
+    assert triage.classify(item, (), _fake_resolver) == "hold"
+    assert triage.enforce_fetchable(_held([item]), (), _fake_resolver).answerable is False
+
+
+def test_a_resolver_fault_never_gates_a_turn():
+    def _boom(text):
+        raise RuntimeError("shelf on fire")
+    assert triage.classify("your breakfast", (), _boom) == "overrule"
+
+
+def test_the_server_injects_a_store_backed_resolver():
+    src = (ROOT / "agent" / "server.py").read_text(encoding="utf-8")
+    i = src.index("def _triage_named_resolver(")
+    body = src[i:i + 400]
+    assert "shelf.resolve(" in body and "canon.resolve(" in body
+    assert "named_resolver = _triage_named_resolver" in src
+
+
+def test_the_fuzzy_resolver_is_only_asked_about_title_shaped_items():
+    """shelf.resolve() is a good TITLE matcher and a bad general oracle.
+
+    Measured 2026-09-25: shelf.resolve("the user's mood") returns True. An
+    earlier ordering consulted it first, for every missing item, so a social
+    hold came back 'hold' and the livelock returned for that phrasing — caught
+    only because the full suite polluted these unit tests with the live
+    resolver, which is the sort of accident that usually hides a bug instead of
+    exposing one.
+    """
+    def _says_yes_to_everything(text):
+        return True
+
+    # Not title-shaped: the resolver must never be consulted, so interiority wins.
+    assert triage.classify("the user's mood", (), _says_yes_to_everything) == "overrule"
+    assert triage.classify("your breakfast", (), _says_yes_to_everything) == "overrule"
+    # Title-shaped: now it is consulted, and it decides.
+    assert triage.classify("The Lighthouse at Dunwich", (), _says_yes_to_everything) == "hold"
+
+    def _says_no_to_everything(text):
+        return False
+    assert triage.classify("The Lighthouse at Dunwich", (), _says_no_to_everything) == "decline"
+
+
+def test_the_ordering_is_stated_in_the_source():
+    src = (ROOT / "modules" / "triage.py").read_text(encoding="utf-8")
+    body = src[src.index("def classify("):src.index("def _fetchable(")]
+    assert body.index("_NAMED_RE.search(text)") < body.index("_INTERIORITY_RE.search(text)"), \
+        "interiority is being tested before the named-work branch"
+    assert "FUZZY" in body, "the reason the resolver is gated is not recorded"
