@@ -2215,8 +2215,39 @@ async def chat_with_tools(messages, device="nyx", session_id=""):
             response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
             response.raise_for_status()
         except Exception as e:
-            log.error(f"Ollama initial request failed: {e}")
-            return f"I can't reach my language model right now ({HEAVY_MODEL}). Is Ollama running?", messages
+            # ── Cold card: she is waking, not broken ─────────────────────────
+            # A render evicts Ollama on the way in, and a turn that lands in the
+            # restore window used to get a plumbing string: "I can't reach my
+            # language model right now (ph3b3-chat:latest). Is Ollama running?"
+            # That named the implementation and asked the user to go and check a
+            # service — twice over what the one-voice rule forbids. Measured
+            # 2026-09-25: render 2.0s, next social turn 5.8s with that string,
+            # recovery turn 26.5s.
+            #
+            # So: wait for the warm-up herakles kicked on lease release (starting
+            # one if this was some other kind of stall), then try once more. Most
+            # turns just come back slightly slow and the user sees nothing odd.
+            log.warning("[chat] brain unreachable (%s) — waiting on the warm-up", e)
+            warmed = False
+            try:
+                warmed = await morpheus.await_brain(timeout=45.0)
+            except Exception as we:                        # noqa: BLE001
+                log.error("[chat] brain warm-up errored: %s", we)
+            if warmed:
+                try:
+                    response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
+                    response.raise_for_status()
+                except Exception as e2:
+                    log.error(f"Ollama retry after warm-up failed: {e2}")
+                    return ("Something's gone wrong at my end and I can't think "
+                            "straight — it isn't anything you did. Give me a "
+                            "minute and try again."), messages
+            else:
+                # Still not ready, or the warm-up itself failed. In voice, no
+                # implementation names, no instructions to go fix a service.
+                log.error(f"Ollama initial request failed and the brain did not warm: {e}")
+                return ("Give me a moment — I'm just waking back up. Ask me "
+                        "again in a few seconds and I'll be here."), messages
         msg = response.json()["message"]
         called_tools: set = set()
         tool_cache: dict = {}

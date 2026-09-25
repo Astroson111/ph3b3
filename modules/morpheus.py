@@ -2018,6 +2018,84 @@ async def evict_ollama_all(http: httpx.AsyncClient) -> list[str]:
         f"reporting an eviction that did not happen")
 
 
+# ── Put the brain back ───────────────────────────────────────────────────────
+# The mirror of evict_hermes below, and it lives here rather than in herakles
+# for a reason: herakles is ruled "explicit ask only, never automatic", and
+# tests/test_herakles.py enforces that by grepping the module for create_task.
+# A self-scheduling warm-up inside herakles would break that ruling to fix a
+# smaller thing. The eviction happens here, so the restore belongs here too.
+#
+# THE FAULT, measured 2026-09-25 (single-model config, mixed traffic):
+#   render          2.0s   ps -> ph3b3-chat 5.2G
+#   next social     5.8s   ps -> NONE   "I can't reach my language model..."
+#   recovery turn  26.5s   ps -> NONE   (cold reload)
+# A render evicts Ollama on the way in and nothing put it back.
+#
+# THE MODEL IS READ, NEVER CHOSEN — whatever PH3B3_HEAVY_MODEL says gets warmed,
+# so a pending brain ruling lands on top of this with no rework.
+_brain_task = None
+
+
+def brain_model() -> str:
+    return os.getenv("PH3B3_HEAVY_MODEL", os.getenv("PH3B3_MODEL", "hermes3"))
+
+
+async def warm_brain(http=None) -> bool:
+    """Seat the chat model with a one-token request. True if it answered."""
+    own = httpx.AsyncClient(timeout=300) if http is None else None
+    client = http or own
+    try:
+        r = await client.post(f"{OLLAMA_HOST}/api/chat", json={
+            "model": brain_model(),
+            "messages": [{"role": "user", "content": "ok"}],
+            "stream": False, "options": {"num_predict": 1}})
+        ok = r.status_code == 200
+        log.info("[morpheus] brain %s after render (%s)", brain_model(),
+                 "warm" if ok else f"HTTP {r.status_code}")
+        return ok
+    except Exception as e:                             # noqa: BLE001
+        log.warning("[morpheus] brain warm-up failed (%s): %s", brain_model(), e)
+        return False
+    finally:
+        if own is not None:
+            await own.aclose()
+
+
+def restore_brain_soon() -> bool:
+    """Kick a NON-BLOCKING warm-up. The render response must not wait on it.
+
+    Called only after release_card has returned — never while a card lease is
+    held, which is what keeps this from fighting the eviction it follows. One
+    in flight is enough, so a batch of renders on one lease warms once.
+    """
+    global _brain_task
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    if _brain_task is not None and not _brain_task.done():
+        return True
+    _brain_task = loop.create_task(warm_brain())
+    return True
+
+
+async def await_brain(timeout: float = 45.0) -> bool:
+    """Wait for an in-flight warm-up, starting one if none is running.
+
+    The chat path calls this when it finds an empty card, so a turn landing in
+    the restore window waits for her instead of showing the user plumbing.
+    """
+    global _brain_task
+    if _brain_task is None or _brain_task.done():
+        restore_brain_soon()
+    if _brain_task is None:
+        return await warm_brain()
+    try:
+        return bool(await asyncio.wait_for(asyncio.shield(_brain_task), timeout))
+    except Exception:                                  # noqa: BLE001
+        return False
+
+
 async def evict_hermes(http: httpx.AsyncClient) -> None:
     # Empty-prompt generate with keep_alive:0 — Ollama blocks until unloaded.
     # On this install, returns {"done_reason": "unload"} synchronously.
@@ -2892,6 +2970,11 @@ async def run_generation(job_id: str, params: dict) -> None:
                     except Exception as exc:        # noqa: BLE001
                         log.error("Morpheus: job %s could not release the card: %s",
                                   job_id, exc)
+                    # THIRD DIRECTION, after the release and never during it:
+                    # the render evicted Ollama on the way in and release_card
+                    # only restores Whisper and ComfyUI. Fire-and-forget so the
+                    # job response is not held up by it.
+                    restore_brain_soon()
 
 
 # ── img2img (Edit Mode) — same checkpoint + sampler family as txt2img ─────────
