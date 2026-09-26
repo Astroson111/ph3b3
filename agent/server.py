@@ -164,7 +164,8 @@ from tts_chunker import split_for_tts
 import voices
 from occult_module import OccultModule
 from jokes_module import JokesModule
-from vision_module import VisionModule
+import vision_module                      # the module itself, for the
+from vision_module import VisionModule    # injected make_headroom hook
 from tts_module import TTSModule, trim_silence_b64, rms_b64, PREVIEW_RMS_FLOOR
 from stt_module import STTModule
 from paths import PH3B3_DATA  # [DBG-AUDIO] instrumentation save-dir root
@@ -241,6 +242,9 @@ import dio_head                  # "look down" reaches her neck, deterministical
 class _DioStateProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data, addr):
         log.info("DIO_STATE %s (from %s)", data.decode("utf-8", "replace").strip(), addr[0])
+
+
+_SERVER_LOOP = None          # set in lifespan; read by worker-thread helpers
 
 
 @asynccontextmanager
@@ -362,6 +366,11 @@ async def lifespan(app):
                 log.debug("[comfyui] heartbeat skip: %s", e)
             await asyncio.sleep(60)
     _comfyui_hb = asyncio.create_task(_comfyui_heartbeat())
+
+    # The loop, kept for work that starts in a worker thread and needs to hand
+    # something back — see _vision_headroom's brain warm-up.
+    global _SERVER_LOOP
+    _SERVER_LOOP = asyncio.get_running_loop()
 
     _dio_state_transport = None
     try:
@@ -6258,6 +6267,76 @@ morpheus.video_lane_open = lambda: VIDEO_LANE_ENABLED
 QWEN_ENABLED = os.getenv("PH3B3_QWEN", "off").strip().lower() \
     in ("1", "true", "yes", "on")
 morpheus.qwen_open = lambda: QWEN_ENABLED
+
+
+# ── VRAM headroom for the camera's vision model ──────────────────────────────
+# Injected the same way morpheus.qwen_open and apelles.text_edit_state are: the
+# vision module must not reach into morpheus, and the decision about WHICH tenant
+# may be evicted belongs here, where the models are named.
+#
+# Why this exists: on 2026-09-26 "take a picture and see what you see" returned
+# "[I took a frame but couldn't describe it — the vision model failed (HTTP
+# 500)]". Ollama's log: available="5.0 GiB", then "cudaMalloc failed: out of
+# memory" on a 966.92 MiB buffer with the chat brain resident. The UPLOAD lane
+# already evicts before calling vision._analyze; the CAMERA lane did not.
+#
+# Called from a WORKER THREAD — describe_view runs under asyncio.to_thread — so
+# it owns its own event loop for the eviction and schedules the warm-up back onto
+# the server's loop. If it is ever called from the loop thread it returns False
+# rather than deadlocking, and the retry stays honest about having freed nothing.
+#
+# WHISPER IS NEVER TOUCHED. The only tenant evicted is the chat brain, through
+# morpheus.evict_hermes, which waits on /api/ps before returning.
+def _vision_headroom() -> bool:
+    """Evict the chat brain so the vision model can load. True if VRAM was freed."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass                      # no loop in this thread: the expected case
+    else:
+        log.warning("[vision] headroom asked for on the event loop — declining")
+        return False
+
+    async def _evict():
+        async with httpx.AsyncClient() as http:
+            await morpheus.evict_hermes(http)
+
+    try:
+        asyncio.run(_evict())
+    except Exception as e:        # noqa: BLE001
+        log.warning("[vision] could not evict the chat brain: %s", e)
+        return False
+    log.info("[vision] evicted %s to make room for %s",
+             morpheus.brain_model(), vision_module.VISION_MODEL)
+
+    return True
+
+
+def _vision_release() -> None:
+    """Put the brain back, AFTER the vision lane is finished with the card.
+
+    Warming inside _vision_headroom raced the eviction: the card went to 9.9 GiB
+    free, the warm-up reseated the brain, and the retry OOMed in the same band
+    0.5s later (measured live 2026-09-26 17:17). The room has to stay free until
+    the vision model has had its turn at it.
+
+    Non-blocking: the camera turn does not wait on the reload. Scheduled onto the
+    server's loop because this runs in a worker thread, where
+    morpheus.restore_brain_soon() would find no loop and quietly do nothing.
+    """
+    loop = globals().get("_SERVER_LOOP")
+    if loop is None or loop.is_closed():
+        log.debug("[vision] no server loop — the brain reloads on the next turn")
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(morpheus.warm_brain(), loop)
+        log.info("[vision] brain warm-up queued after the vision call")
+    except Exception as e:        # noqa: BLE001
+        log.debug("[vision] brain warm-up could not be scheduled: %s", e)
+
+
+vision_module.make_headroom = _vision_headroom
+vision_module.release_headroom = _vision_release
 
 # Qwen in the EDIT tab, gated separately from Qwen in Generate. The generate
 # lane is measured and shipped; the edit lane is a trial that has not run, so

@@ -117,6 +117,71 @@ _SRC_TAG = {
 }
 
 
+# ── VRAM headroom for the vision model (INJECTED by the server) ──────────────
+# 2026-09-26 15:04:16, live, "Can you take a picture with your camera and see
+# what you see?". She took the frame and refused to describe it, which is
+# correct. What failed was the load, and Ollama's own log says why:
+#
+#   gpu memory: available="5.0 GiB" free="5.4 GiB"
+#   load request: GPULayers:29 ... ProjectorPath:...      <- accepted the fit
+#   allocating 966.92 MiB on device 0: cudaMalloc failed: out of memory
+#   llama runner terminated, error="exit status 2"
+#   [GIN] 500 | POST "/api/generate"
+#
+# The chat brain was resident (7.6 GB) on top of the server's own ~4.5 GB of
+# Whisper and embeddings, leaving about 5 GB; Ollama's planner accepted that as a
+# fit for minicpm-v and then died allocating. The same signature hit at 09:02:12
+# the same morning, so this is not a one-off — it is whatever the card looks like
+# at the moment someone asks.
+#
+# THE ASYMMETRY that caused it: the UPLOAD lane makes headroom before it calls
+# _analyze (server.py: "GPU-swap: evict Hermes so LLaVA fits in VRAM"), and this
+# module — the CAMERA lane — did not. Same model, same box, two lanes, one of
+# which prepared the card.
+#
+# LAZY, not eager. The eviction happens only after a 5xx, so a quiet card costs
+# nothing and the chat brain stays seated; a full card costs one brain reload
+# instead of a refusal. Evicting on every camera turn would make a cheap turn
+# expensive to fix a case that only sometimes happens.
+#
+# The hook is INJECTED rather than imported: this module must not reach into the
+# server or morpheus, and the server owns which model may be evicted. The default
+# does nothing, so a caller that never injects behaves exactly as before.
+#
+# HARD CONSTRAINT, honoured by the injected implementation: headroom NEVER comes
+# from evicting Whisper. The chat brain is the only tenant it touches.
+def _no_headroom() -> bool:
+    """Default: no way to free VRAM. Returns False so the retry is honest."""
+    return False
+
+
+def _no_release() -> None:
+    """Default: nothing was freed, so nothing is owed back."""
+    return None
+
+
+make_headroom = _no_headroom
+# Called AFTER the attempts finish, and only if headroom was actually made.
+#
+# This is not tidiness, it is the bug. The first version of this fix warmed the
+# brain back inside make_headroom(), and measured live 2026-09-26 17:17 the
+# restore raced the eviction it followed:
+#
+#   available 5.4 -> 5.0  minicpm load -> cudaMalloc OOM -> 500   (attempt 1)
+#   ...eviction...        available="9.9 GiB"                      (card freed)
+#   ...warm_brain()...                                             (brain back)
+#   available 5.4 -> 5.0  minicpm load -> cudaMalloc OOM -> 500   (attempt 2)
+#
+# The card was freed and then refilled by the very call that freed it, 0.5s
+# before the retry needed the room. morpheus.restore_brain_soon's own docstring
+# says never to warm while a lease is held; this is that rule, applied to the
+# vision lane's borrowed headroom.
+release_headroom = _no_release
+
+# id(jpeg) -> did this call borrow the card? Read once, in the finally.
+_FREED: dict = {}
+
+
 class VisionModelDown(RuntimeError):
     """The frame WAS captured but the describer failed. Never a description.
 
@@ -515,11 +580,30 @@ class VisionModule:
         error string where an observation belongs — one relay away from being read
         aloud as what she sees. Failures raise; the caller states them.
 
-        Retries ONCE. The observed failure is a VRAM race: ollama tries to load the
-        vision model while the chat model is still resident, the runner dies
-        ("llama runner terminated, exit status 2" → HTTP 500), and that crash frees
-        the memory — so the second attempt usually succeeds. One retry, not a loop.
+        Retries ONCE, and the retry CHANGES SOMETHING. The failure is VRAM: ollama
+        loads the vision model while the chat model is resident, the runner dies
+        ("llama runner terminated, exit status 2" → HTTP 500).
+
+        The old comment said the crash itself frees the memory so a plain second
+        attempt usually succeeds. Measured 2026-09-26, it does not: both attempts
+        failed 3 seconds apart with the identical error, and a third after that. A
+        retry that re-runs the same request under the same conditions is not a
+        retry. So on a 5xx the chat brain is evicted first — via the injected
+        make_headroom(), the server's own eviction path — and only then is the
+        request repeated.
         """
+        last = ""
+        freed_any = False
+        try:
+            return self._attempt_loop(jpeg, prompt)
+        finally:
+            if _FREED.pop(id(jpeg), False):
+                try:
+                    release_headroom()
+                except Exception as e:          # noqa: BLE001
+                    log.warning("vision headroom release failed: %s", e)
+
+    def _attempt_loop(self, jpeg: bytes, prompt: str) -> str:
         last = ""
         for attempt in (1, 2):
             try:
@@ -539,7 +623,22 @@ class VisionModule:
             except Exception as e:
                 last = f"the vision model is unreachable ({type(e).__name__})"
             if attempt == 1:
-                log.warning("vision model attempt 1 failed (%s) — retrying once", last)
-                time.sleep(2.0)
+                # Only a server-side 5xx is the OOM shape. "returned nothing" is a
+                # model answering badly, and "unreachable" means ollama is down —
+                # evicting a model to fix either would be superstition.
+                freed = False
+                if "HTTP 5" in last:
+                    try:
+                        freed = bool(make_headroom())
+                    except Exception as e:          # noqa: BLE001
+                        log.warning("vision headroom step failed: %s", e)
+                    if freed:
+                        _FREED[id(jpeg)] = True
+                log.warning("vision model attempt 1 failed (%s) — %s, retrying once",
+                            last, "freed VRAM first" if freed
+                            else "no headroom available")
+                # evict_hermes already blocks until /api/ps is clear, so a freed
+                # card needs a settle, not a wait.
+                time.sleep(0.5 if freed else 2.0)
         raise VisionModelDown(last)
 
