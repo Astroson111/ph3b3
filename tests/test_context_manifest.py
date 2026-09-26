@@ -79,6 +79,12 @@ _CLASS = {
     "preamble":    "conduct",   # an instruction about the section, not a subject
     "images":      "subject",
     "edit":        "subject",
+    # Split out of "edit" on 2026-09-25. Editing PROSE has nothing to do with
+    # the image edit lane, and the only text paragraph she had was gated behind
+    # a picture flag — so asked "can you edit text?" the only fact available was
+    # the picture one, and she claimed it. Unconditional now, and the one
+    # authority on both halves.
+    "text_edit":   "subject",
     "video":       "subject",
     "watermark":   "subject",   # "did you sign that?" is a real question
     "embodiment":  "subject",   # "what did you have for breakfast?" is a real question

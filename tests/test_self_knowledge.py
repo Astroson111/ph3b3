@@ -56,15 +56,37 @@ def test_she_never_names_the_implementation(flags):
 # ---------- the rung-4 caveat handles itself -----------------------------
 def test_edit_text_is_in_trials_while_its_flag_is_off(flags):
     """The generate lane is measured and shipped; the edit lane is a trial that
-    has not run. Silence would read as "no" when the truth is "not yet"."""
-    txt = flags(qwen=True, edit=True, qwen_edit=False).lower()
-    assert "trial" in txt and "not something you can do yet" in txt
+    has not run. Silence would read as "no" when the truth is "not yet".
+
+    Asserted against the REASON the refusal itself gives, not a phrase typed
+    here: since 2026-09-25 the paragraph derives from apelles.text_edit_state(),
+    the one reader of that switch, so pinning wording in this test would pin the
+    copy instead of the source."""
+    import apelles
+    txt = flags(qwen=True, edit=True, qwen_edit=False)
+    assert apelles.text_edit_state()[1] in txt
+    assert "trial" in txt.lower(), "the not-yet reads as a flat no"
+    assert "never offer it" in txt.lower(), \
+        "nothing tells her not to offer a lane she does not have"
 
 
 def test_edit_text_is_offered_once_the_trial_flag_flips(flags):
     txt = flags(qwen=True, edit=True, qwen_edit=True).lower()
-    assert "correcting text that came out wrong" in txt
+    assert "existing picture works too" in txt
     assert "trial" not in txt, "it still hedges after the trial passed"
+    assert "never offer" not in txt, "it still forbids a lane that is now on"
+
+
+def test_editing_prose_is_stated_in_every_state(flags):
+    """The fact that was MISSING. Asked "can you edit text?" with no artifact
+    named, she answered "Yes, I can edit text within an image... upload the
+    image" — because the only text paragraph she had was the picture one. The
+    prose half has nothing to do with any image flag, so it is unconditional."""
+    for combo in ({}, {"qwen": True}, {"qwen": True, "edit": True},
+                  {"qwen": True, "edit": True, "qwen_edit": True}):
+        txt = flags(**combo).lower()
+        assert "edit and rewrite text you are given" in txt, \
+            f"the prose-editing fact vanished at {combo}"
 
 
 def test_no_edit_lane_means_no_edit_paragraph(flags):
@@ -115,7 +137,15 @@ def test_it_is_a_few_hundred_tokens_not_an_encyclopedia():
     finally:
         m.qwen_open = original
     approx_tokens = len(txt) / 4
-    assert approx_tokens < 450, f"self-knowledge has grown to ~{approx_tokens:.0f} tokens"
+    # 450 -> 500 on 2026-09-25, measured, and the trade recorded rather than the
+    # number quietly nudged: the block was at 448 (two tokens of headroom) and
+    # the text-edit split cost +33. What it bought is a false capability claim
+    # that survived two wording passes — "Yes, I can edit text within an image"
+    # with the trial flag off — and it PAID part of its own way by removing the
+    # picture-text clause from the edit paragraph, which now has one author.
+    # This is a budget, not an invariant: if it needs raising again, the thing
+    # to question is the preamble, which is the longest CONDUCT text in here.
+    assert approx_tokens < 500, f"self-knowledge has grown to ~{approx_tokens:.0f} tokens"
 
 
 def test_the_prompt_is_built_per_conversation_not_once_at_import():

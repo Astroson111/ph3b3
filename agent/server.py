@@ -831,29 +831,58 @@ def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str, str | No
     out.append(("images", tuple(img_topics), " ".join(img), img_answer))
 
     if EDIT_LANE_ENABLED:
-        edit = ["You can edit an image you have been given, rather than only "
-                "making new ones."]
-        edit_answer = "I can edit an image you give me, not only make new ones."
-        if qwen and QWEN_EDIT_ENABLED:
-            edit.append("That includes correcting text that came out wrong in an "
-                        "existing picture.")
-            edit_answer += " That includes correcting text that came out wrong."
-        elif qwen:
-            # The generate lane is proven; the EDIT lane is not. Silence here
-            # would read as "no" and the truth is "not yet" — and she is the one
-            # people will ask, so she says which.
-            edit.append("Correcting text inside an existing picture is still "
-                        "being trialled and is NOT something you can do yet — "
-                        "say so plainly if asked, rather than guessing.")
-            edit_answer += (" Correcting text inside an existing picture is still "
-                            "being trialled and is not something I can do yet.")
-        # One topic in both states on purpose. The question "can you fix the text
-        # in an existing image?" must reach her whether the answer is yes or
-        # not-yet; it is her job to say which, and triage's only job is to stop
-        # holding it. A topic that appeared only when the trial flag flipped
-        # would hold the turn precisely while the honest answer was "not yet".
-        out.append(("edit", ("editing an image you were given, and its text",),
-                    " ".join(edit), edit_answer))
+        out.append(("edit", ("editing an image you were given",),
+                    "You can edit an image you have been given, rather than only "
+                    "making new ones.",
+                    "I can edit an image you give me, not only make new ones."))
+
+    # ── TEXT: the two things that are constantly confused ────────────────────
+    # Asked the bare question "can you edit text?" she answered "Yes, I can edit
+    # text within an image… upload the image and make changes directly on the
+    # screen" — false twice over, with the trial flag off. The refusal from
+    # 485d6f3 did not fire because it deliberately requires BOTH a text word and
+    # a picture word, and the bare phrasing carries only one.
+    #
+    # Measured before writing this (chat logs + mnemosyne, every arrival to
+    # date): of 46 edit+text turns, 44 name a picture, 2 are this bare phrasing,
+    # and NOT ONE names a file or paragraph. So the bare case is not a corner —
+    # it is the only phrasing a human has ever actually typed here.
+    #
+    # The root cause is not the regex. Nothing in her prompt said she can edit
+    # PROSE, so asked about editing text the only fact she had was the picture
+    # one, and she reached for it. Both halves are stated here, in one place, so
+    # the two cannot be confused again:
+    #
+    #   prose text  — always true, no engine, no flag
+    #   text inside a picture — a lane, and its state is read from the ONE
+    #                           reader of that switch, so this paragraph cannot
+    #                           disagree with the refusal that answers the
+    #                           picture phrasing
+    #
+    # Always rendered, unlike the edit section above: editing what someone
+    # pastes has nothing to do with the image edit lane, and silence about it is
+    # what produced the false answer.
+    _te_ok, _te_reason, _ = _text_edit_state()
+    te = ["You can edit and rewrite TEXT you are given — wording, spelling, "
+          "phrasing, tone — pasted in or in a document; no engine needed."]
+    te_answer = ("I can edit and rewrite text you give me — wording, spelling, "
+                 "phrasing, tone — pasted in or in a document. That needs no "
+                 "engine and has always worked.")
+    if _te_ok:
+        te.append("Text inside an existing PICTURE works too.")
+        te_answer += (" Correcting text inside a picture that already exists is a "
+                      "different job, and it works too.")
+    else:
+        # Silence here would read as "no, never"; the truth is usually "not
+        # yet", and the reason says which. She is the one people ask, so she
+        # says it rather than guessing at it.
+        te.append("Text inside an existing PICTURE is a different lane and you "
+                  f"do not have it: {_te_reason}. Never offer it.")
+        te_answer += (" Correcting text inside a picture that already exists is a "
+                      f"different job, and I can't do that one: {_te_reason}.")
+    out.append(("text_edit",
+                ("editing or rewriting text, and text inside a picture",),
+                " ".join(te), te_answer))
 
     if VIDEO_LANE_ENABLED:
         out.append(("video", ("short video clips",),
@@ -924,6 +953,22 @@ def capability_answer() -> str:
         " If any of that is switched off, I'll say so plainly.")
 
 
+def text_editing_answer() -> str:
+    """Asked bare "can you edit text?", answer from the block, not the model.
+
+    Returns the text_edit section's own first-person answer verbatim — both
+    halves, prose and picture, in whatever state the switch is in. No sentence
+    is written here, so the route cannot drift from what she reads; and when the
+    trial flag flips on, this answer changes with it and no code does.
+    """
+    for key, _topics, _text, answer in _self_knowledge_sections():
+        if key == "text_edit":
+            return answer
+    # The section is unconditional, so this cannot happen. If it ever does, fall
+    # back to the whole inventory rather than improvising a sentence.
+    return capability_answer()
+
+
 # ── "What can you do?" is claimed, not judged ────────────────────────────────
 # It was held by the triage gate (TRIAGE_HOLD missing=['image engines']) and,
 # before that, deflected by the model while the answer sat 86% through its own
@@ -958,6 +1003,45 @@ _NOT_SELF_CAP_RE = re.compile(
 
 intent_registry.register("self_knowledge", "capabilities",
                          _SELF_CAP_RE, exclude=_NOT_SELF_CAP_RE)
+
+
+# ── "can you edit text?" — the bare phrasing, claimed ────────────────────────
+# Registered AFTER capabilities on purpose: "what can you do with text?" is the
+# general question and should get the general inventory. This claim is only for
+# the narrow shape that produced the false answer — a yes/no question about
+# editing text with NO artifact named at all.
+#
+# Route A ("fix the text in this image") belongs to apelles.blocked_request,
+# which runs above this and is unchanged. Route C ("fix the wording in this
+# paragraph") is a real capability and must reach the work, not a capability
+# statement — so any named artifact, and any sign that content was supplied or
+# pointed at, vetoes the claim.
+_TEXT_EDIT_ASK_RE = re.compile(
+    r"\b(?:can|could|are|do)\s+you\b[^.?]{0,25}"
+    r"\b(?:edit|editing|fix|fixing|correct|correcting|change|rewrite|rewriting|"
+    r"reword|proofread)\b[^.?]{0,20}"
+    r"\b(?:text|wording|words|spelling|typos?|grammar|punctuation)\b"
+    r"|\bdo\s+you\s+(?:do|handle|offer|support)\b[^.?]{0,20}"
+    r"\b(?:text\s+edit\w*|copy[\s-]?edit\w*|proofread\w*|rewrit\w*)\b",
+    re.I)
+
+_NOT_TEXT_EDIT_ASK_RE = re.compile(
+    # A picture noun -> the deterministic refusal owns it.
+    r"\b(?:image|images|picture|pictures|pic|pics|photo|photos|photograph\w*|"
+    r"render|poster|artwork|jpe?g|png|thumbnail|banner|screenshot|sign)\b"
+    # Any other artifact -> she can actually do it; let the turn reach the work.
+    r"|\b(?:file|files|document|docs?|docx|pdf|paragraph|sentence|post|message|"
+    r"email|readme|markdown|code|script|commit|caption|notes?|lines?|story|"
+    r"chapter|draft|essay|resume|cv|log|subtitle|transcript)\b"
+    # Content supplied or pointed at -> a REQUEST, not a question about what she
+    # is. Answering a request with a capability statement is a deflection, which
+    # is the failure this whole lane exists to stop, pointing the other way.
+    r"|\b(?:this|that|these|those|following|mine|my|it|here|below|above)\b"
+    r"|[:\"]",
+    re.I)
+
+intent_registry.register("self_knowledge", "text_editing",
+                         _TEXT_EDIT_ASK_RE, exclude=_NOT_TEXT_EDIT_ASK_RE)
 
 
 
@@ -2236,6 +2320,15 @@ async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
     """Route a claimed turn to its owning module. Grows by module key, never by a
     branch inside the request path."""
     if claim.module == "self_knowledge":
+        if claim.handler == "text_editing":
+            # A STAGED DOCUMENT turns "can you fix the text?" into a request
+            # about that document, not a question about what she is. Answering a
+            # request with a capability statement is a deflection — the same
+            # failure this route exists to fix, pointing the other way. So it
+            # stands down and the turn reaches the work.
+            if kadmos.get_pending(session_id or "default"):
+                return None
+            return text_editing_answer()  # both halves, from the same block
         return capability_answer()        # from config, deterministic, no model
     if claim.module == "atalanta":
         return await _answer_sports(user_msg, session_id)   # None → no league named → fall through
@@ -6204,8 +6297,16 @@ EDIT_LANE_ENABLED = os.getenv("PH3B3_EDIT_LANE", "").strip().lower() in ("1", "t
 # Injected rather than re-read, the same way morpheus.qwen_open is: the flags
 # are defined here and must have exactly one reader.
 def _text_edit_state():
-    """(available, reason, fix) for correcting text inside an existing image."""
-    if not QWEN_ENABLED:
+    """(available, reason, fix) for correcting text inside an existing image.
+
+    The qwen half is asked of morpheus rather than of QWEN_ENABLED directly,
+    because morpheus.qwen_open IS that flag (injected above) and the
+    self-knowledge block now derives its text-edit paragraph from this function.
+    One reader for one switch: before this, the block parsed QWEN_EDIT_ENABLED a
+    second time, which is how a capability map starts disagreeing with the
+    refusal that describes the same lane.
+    """
+    if not morpheus.engine_enabled("qwen"):
         return (False,
                 "the second image engine — the one that gets lettering right — "
                 "is switched off on this box",

@@ -97,11 +97,24 @@ def test_the_switch_decides_whether_she_claims_the_text_engine(flags):
 def test_the_trial_state_is_stated_rather_than_promised(flags):
     """The exact honesty failure that made the edit lane a deterministic refusal:
     she used to answer "Yes, I can fix the text in an existing image"."""
-    trial = flags(qwen=True, edit=True, qwen_edit=False).lower()
-    assert "still being trialled" in trial and "not something i can do yet" in trial
+    import apelles
+    trial = flags(qwen=True, edit=True, qwen_edit=False)
+    # The reason comes from apelles.text_edit_state() — the one reader of that
+    # switch — so this asserts on the source rather than on a copy of its words.
+    assert apelles.text_edit_state()[1] in trial
+    assert "i can't do that one" in trial.lower()
     live = flags(qwen=True, edit=True, qwen_edit=True).lower()
-    assert "correcting text that came out wrong" in live
+    assert "different job, and it works too" in live
     assert "trial" not in live
+
+
+def test_the_answer_separates_prose_from_pictures(flags):
+    """Both halves, always, in one sentence pair — the confusion that produced
+    "Yes, I can edit text within an image" was that only the picture half
+    existed."""
+    a = flags(qwen=True, edit=True, qwen_edit=False).lower()
+    assert "i can edit and rewrite text you give me" in a
+    assert "inside a picture that already exists" in a
 
 
 def test_a_lane_that_is_off_is_absent_from_the_answer(flags):
