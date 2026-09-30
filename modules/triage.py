@@ -321,6 +321,18 @@ SELF_NAMES = {n.strip().lower() for n in
               os.getenv("PH3B3_SELF_NAMES", "phoebe,ph3b3,pheobe,phoeby,fee bee").split(",")
               if n.strip()}
 
+# Invention intent lives in its own module because the SERVER needs the same
+# answer (it must not inject canon text into an invention turn) and two readers
+# of one rule is how they drift. Guarded: if it cannot be imported, invention is
+# simply never detected and every turn behaves exactly as it did before — the
+# conservative direction, since the failure mode of NOT detecting invention is a
+# wrong refusal, and of wrongly detecting it is a fabricated work.
+try:
+    import story_intent as _story_intent
+except Exception:                                      # noqa: BLE001
+    _story_intent = None
+
+
 _WORD_RE = re.compile(r"[a-z0-9']+")
 
 
@@ -328,8 +340,12 @@ def _is_self(text: str) -> bool:
     return bool(SELF_NAMES & set(_WORD_RE.findall((text or "").lower())))
 
 
-def classify(item: str, subjects=(), resolver=None):
+def classify(item: str, subjects=(), resolver=None, turn: str = ""):
     """One of: 'hold', 'decline', 'overrule'. Deterministic, in this order.
+
+    `turn` is the user's whole message. It is optional and defaults to "", so
+    every existing caller keeps the exact behaviour it had — without it the
+    invention tier cannot fire.
 
     RESOLUTION BEFORE VOCABULARY. The first version of this recognised category
     NOUNS only and never proper names, so "The Lighthouse at Dunwich" — a title
@@ -361,6 +377,21 @@ def classify(item: str, subjects=(), resolver=None):
         s_words = set(_WORD_RE.findall(sl))
         if sl in tl or (t_words and t_words <= s_words):
             return "hold"
+
+    # 1b. AN EXPLICIT ASK TO INVENT, before the named-but-absent tier.
+    #
+    # 2026-09-29: "Can you make up a story about King Tom…" was declined with
+    # "I'd rather tell you that than make one up" — she was asked to make one up.
+    # The tier below decides on SHAPE and RESOLUTION and has no notion of what
+    # the turn wanted, so this is the only place the distinction can be made
+    # without letting the decline fire first.
+    #
+    # This tier can only ever turn a DECLINE into an overrule. A turn that
+    # resolves still holds (tier 2 below returns "hold" for a real work, and a
+    # named work that exists is reached the same way it always was), and a retell
+    # of an absent work still declines, which is the Dunwich canary.
+    if turn and _story_intent is not None and _story_intent.is_invention(turn):
+        return "overrule"
 
     # 2. Does it LOOK like a named work? Only then is the store consulted.
     #    shelf.resolve() is FUZZY — measured 2026-09-25, it returns True for
@@ -403,12 +434,111 @@ def _decline_line(items) -> str:
             "I'd rather tell you that than make one up.")
 
 
-def enforce_fetchable(result, subjects=(), resolver=None):
+# ── The payload veto: a turn that carries its content cannot be missing it ───
+# Measured live on 2026-09-25, four wrong holds out of six edit requests:
+#
+#   "fix the wording in this paragraph: the quick brown fox jumped over a lazy
+#    dogs."                       -> TRIAGE_HOLD missing=['paragraph to fix']
+#   "proofread this for me: their going to the store tommorow"
+#                                 -> TRIAGE_HOLD missing=['going','store','tomorrow']
+#   'Rewrite this sentence so it reads better: "The report was wrote by..."'
+#                                 -> TRIAGE_HOLD missing=['sentence to rewrite']
+#   "Here is a paragraph. Please tighten it.\n\nWe have decided that..."
+#                                 -> TRIAGE_HOLD missing=['paragraph']
+#
+# The second is the one that shows what is really happening: the judge listed the
+# WORDS OF THE SUPPLIED SENTENCE as missing subjects. It read the payload as
+# unresolved references to things it could not find.
+#
+# The judge already receives the whole message — modules/triage.py has always
+# sent `REQUEST:\n{user_text}` in full, so this was never a missing-input bug and
+# no amount of giving it the text again would fix it. It is the familiar shape
+# instead: a probabilistic gate reaching a wrong verdict on input it had. So the
+# guarantee is deterministic and sits here, where the verdict is enforced.
+#
+# TWO PARTS, both required:
+#   1. does the turn carry a PAYLOAD at all — content the user pasted, rather
+#      than a reference to content elsewhere. No payload, no veto: "summarize the
+#      document" and "make me a poster with readable text" hold exactly as today.
+#   2. does a missing item name something whose words are IN the turn. The user
+#      cannot be asked to supply what they just supplied.
+#
+# KNOWN SOFT EDGE, pre-accepted by ruling: "summarize the document: it's the one
+# I mentioned" carries a payload segment ("it's the one I mentioned") and the word
+# "document" is in the turn, so the veto fires on a legitimate no-document hold.
+# The degradation is graceful — the turn flows to the brain — and absent_artifact
+# runs ABOVE this gate, so it answers that shape first. Measured 2026-09-26:
+# absent_artifact.claim() takes it on the FIRST turn of a conversation and
+# returns None mid-conversation, which is where the edge actually lives. Not
+# engineered around on purpose.
+_PAYLOAD_MIN_WORDS = 4
+_PAYLOAD_MIN_CHARS = 20
+
+# A colon that introduces content: preceded by a non-digit (so "at 3:30" is not a
+# payload) and followed by whitespace (so "https://host" is not either).
+_COLON_BODY_RE = re.compile(r"(?<!\d):\s+(.+)", re.S)
+# A quoted span long enough to be content rather than a scare-quoted word.
+_QUOTED_BODY_RE = re.compile(r"[\"“‘']([^\"”’']{%d,})[\"”’']"
+                             % _PAYLOAD_MIN_CHARS, re.S)
+# A body after a line break: "Here is a paragraph.\n\nWe have decided that..."
+_NEWLINE_BODY_RE = re.compile(r"\n+(.+)", re.S)
+
+
+def _is_body(seg: str) -> bool:
+    seg = (seg or "").strip()
+    return (len(seg) >= _PAYLOAD_MIN_CHARS
+            and len(_WORD_RE.findall(seg.lower())) >= _PAYLOAD_MIN_WORDS)
+
+
+def payload_segment(text: str) -> str | None:
+    """The part of the turn that IS the content, or None if it carries none.
+
+    Deterministic and deliberately dumb: the longest of three shapes — after a
+    colon, inside a long quoted span, after a line break. A turn with none of
+    them is a REFERENCE to content ("summarize the document"), and a hold on it
+    is the clarifying question doing its job.
+    """
+    found = []
+    for rx in (_COLON_BODY_RE, _QUOTED_BODY_RE, _NEWLINE_BODY_RE):
+        m = rx.search(text or "")
+        if m and _is_body(m.group(1)):
+            found.append(m.group(1).strip())
+    return max(found, key=len) if found else None
+
+
+def supplied_in_turn(missing, text: str) -> list:
+    """Which missing items name something already present in the turn.
+
+    Same machinery as _names_any: word-boundary tokens, stop-filtered, longer
+    than two characters — so "the paragraph to fix" is ['paragraph', 'fix'] and
+    an article never carries a veto on its own.
+    """
+    if not payload_segment(text):
+        return []
+    have = set(_WORD_RE.findall((text or "").lower()))
+    present = []
+    for item in missing or ():
+        words = [w for w in _WORD_RE.findall(str(item).lower())
+                 if w not in _STOP and len(w) > 2]
+        if words and any(w in have for w in words):
+            present.append(item)
+    return present
+
+
+PAYLOAD_OVERRULED_COUNT = [0]   # Argus-visible with the rest
+
+
+def enforce_fetchable(result, subjects=(), resolver=None, text=""):
     """Three outcomes, not two. Returns the result, mutated in place.
 
       hold      every item resolves, or is a user-suppliable specific
       decline   something is NAMED but absent — say so, never improvise it
-      overrule  the hold rests on her own interiority, which no user can supply
+      overrule  the hold rests on her own interiority, OR on content the turn
+                already carries, which no user can be asked to supply twice
+
+    `text` is the user's turn, FULL and untruncated — the payload veto reads it.
+    It defaults to "" so every existing caller and test keeps the exact
+    behaviour it had; without the text the veto simply cannot fire.
     """
     if result.answerable:
         return result
@@ -417,7 +547,7 @@ def enforce_fetchable(result, subjects=(), resolver=None):
         return result                                  # prose fallback; leave it alone
 
     res = resolver if resolver is not None else named_resolver
-    verdicts = [classify(m, subjects, res) for m in missing]
+    verdicts = [classify(m, subjects, res, turn=text) for m in missing]
 
     # Precedence: decline beats overrule. A turn naming an absent work must
     # never be handed to the brain to imagine, even if it also mentions
@@ -431,6 +561,18 @@ def enforce_fetchable(result, subjects=(), resolver=None):
         bad = [m for m, v in zip(missing, verdicts) if v == "overrule"]
         log.warning("TRIAGE_HOLD_OVERRULED — missing=%s not fetchable", bad)
         HOLD_OVERRULED_COUNT[0] += 1
+        result.answerable = True
+        result.missing = []
+        result.question = None
+        return result
+
+    # The payload veto, last: decline still wins (a named work absent from the
+    # shelf is never handed to the brain to imagine, whatever else the turn
+    # carries), and interiority is already handled above.
+    supplied = supplied_in_turn(missing, text)
+    if supplied:
+        PAYLOAD_OVERRULED_COUNT[0] += 1
+        log.warning("TRIAGE_HOLD_OVERRULED — content present in turn: %s", supplied)
         result.answerable = True
         result.missing = []
         result.question = None
@@ -571,6 +713,28 @@ def _subjects_from(manifest: str | None):
     return tuple(out)
 
 
+# ── The request half of the judge prompt is bounded ──────────────────────────
+# The judge ALREADY receives the whole turn (it always has). What it does not
+# have is a budget that survives a pasted essay: the gate runs on a 6s cap, and
+# a 20,000-character paste in the prompt spends that cap on reading rather than
+# judging, which ends in TRIAGE_FAILOPEN_TIMEOUT — the guard not running.
+#
+# So the text the JUDGE reads is capped, with a marker saying content continues.
+# The text the VETO reads is not: enforce_fetchable gets the full turn, because
+# "did the user already supply this?" must be asked of everything they supplied,
+# not of the first 1,200 characters of it.
+_MAX_REQUEST_CHARS = 1200        # ~300 tokens; the whole judge prompt stays small
+
+
+def _bounded_request(text: str) -> str:
+    t = text or ""
+    if len(t) <= _MAX_REQUEST_CHARS:
+        return t
+    return (t[:_MAX_REQUEST_CHARS]
+            + "\n… [content continues — the rest of the pasted text is present "
+              "in this turn]")
+
+
 async def triage_gate(user_text: str, context: str,
                       manifest: str | None = None) -> TriageResult:
     """Decide whether `user_text` is answerable given `context`.
@@ -594,7 +758,8 @@ async def triage_gate(user_text: str, context: str,
                 "messages": [
                     {"role": "system", "content": _system_for(manifest)},
                     {"role": "user",
-                     "content": f"CONTEXT:\n{context or '(none)'}\n\nREQUEST:\n{user_text}"},
+                     "content": f"CONTEXT:\n{context or '(none)'}\n\n"
+                                f"REQUEST:\n{_bounded_request(user_text)}"},
                 ],
                 "stream": False,
                 "format": "json",
@@ -616,7 +781,8 @@ async def triage_gate(user_text: str, context: str,
             if result is None:
                 return _fail_open("PARSE")
             if not result.answerable:
-                enforce_fetchable(result, _subjects_from(manifest), named_resolver)
+                enforce_fetchable(result, _subjects_from(manifest), named_resolver,
+                                  text=user_text)
             if not result.answerable:
                 result.question = _clarifying(result.missing, user_text, result.question)
             return result

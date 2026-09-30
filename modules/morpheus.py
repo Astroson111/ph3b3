@@ -2234,6 +2234,75 @@ def build_workflow(params: dict) -> dict:
     return wf
 
 
+# ── Reading ComfyUI's rejection out loud ─────────────────────────────────────
+# A rejection used to read "node 5 (TextEncodeAceStepAudio1.5): Value not in
+# list", which is the message ComfyUI puts in `message` — and it names neither the
+# field nor the value. Everything needed was already in the same response, one
+# level down, and was being dropped:
+#
+#   "details": "keyscale: 'd minor' not in (list of length 34)"
+#   "extra_info": {"input_name": "keyscale", "received_value": "d minor"}
+#
+# So the field and the value are named, and where the node's options can be read
+# back, the nearest legal spelling is offered. A failure a person can act on
+# beats a failure that is merely logged.
+def _nearest(value: str, options) -> str | None:
+    """The option a human most likely meant. Case first, then close spelling."""
+    if not value or not options:
+        return None
+    want = " ".join(str(value).strip().split()).lower()
+    for o in options:
+        if str(o).lower() == want:
+            return str(o)
+    import difflib
+    hit = difflib.get_close_matches(str(value), [str(o) for o in options], n=1, cutoff=0.6)
+    return hit[0] if hit else None
+
+
+def _node_enum_options(class_type: str, input_name: str):
+    """The live options for one COMBO input, or None. Never raises: this runs on
+    an error path and must not replace the real failure with its own."""
+    try:
+        r = httpx.get(f"{COMFY_HOST}/object_info/{class_type}", timeout=8.0)
+        req = ((r.json() or {}).get(class_type, {}).get("input", {}) or {}).get("required", {})
+        entry = req.get(input_name)
+        if isinstance(entry, list) and len(entry) > 1 and isinstance(entry[1], dict):
+            return entry[1].get("options")
+        if isinstance(entry, list) and entry and isinstance(entry[0], list):
+            return entry[0]
+    except Exception:                                       # noqa: BLE001
+        pass
+    return None
+
+
+def explain_rejection(resp: dict) -> str:
+    """ComfyUI's /prompt rejection, in words that name the field and the value."""
+    parts = []
+    for nid, ne in (resp.get("node_errors") or {}).items():
+        ct = ne.get("class_type", "?")
+        for e in ne.get("errors", []):
+            info = e.get("extra_info") or {}
+            field = info.get("input_name")
+            got = info.get("received_value")
+            if field is not None and got is not None:
+                line = f"node {nid} ({ct}): {field} does not accept {got!r}"
+                near = _nearest(got, _node_enum_options(ct, field))
+                if near and str(near) != str(got):
+                    line += f" — did you mean {near!r}?"
+            else:
+                line = f"node {nid} ({ct}): {e.get('message', '')}"
+                if e.get("details"):
+                    line += f" ({e['details']})"
+            parts.append(line)
+    if not parts:
+        err = resp.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            parts.append(err["message"])
+            if err.get("details"):
+                parts.append(str(err["details"]))
+    return " | ".join(parts) or str(resp)[:300]
+
+
 async def comfy_queue(http: httpx.AsyncClient, workflow: dict) -> str:
     r = (await http.post(
         f"{COMFY_HOST}/prompt",
@@ -2244,15 +2313,7 @@ async def comfy_queue(http: httpx.AsyncClient, workflow: dict) -> str:
         # ComfyUI rejected the workflow (validation / missing node or model). Surface
         # a readable reason instead of a bare KeyError('prompt_id') — that opaque
         # failure is exactly what flipped a Wan clip to a blank Error badge.
-        parts = []
-        err = r.get("error")
-        if isinstance(err, dict) and err.get("message"):
-            parts.append(err["message"])
-        for nid, ne in (r.get("node_errors") or {}).items():
-            ct = ne.get("class_type", "?")
-            for e in ne.get("errors", []):
-                parts.append(f"node {nid} ({ct}): {e.get('message', '')}")
-        raise RuntimeError("ComfyUI rejected the workflow: " + (" | ".join(parts) or str(r)[:300]))
+        raise RuntimeError("ComfyUI rejected the workflow: " + explain_rejection(r))
     return r["prompt_id"]
 
 
@@ -3130,6 +3191,109 @@ VIDEO_PRESETS: dict = {
 }
 DEFAULT_VIDEO_PRESET = "ltx-fast"
 
+# ── One aspect, both stages ──────────────────────────────────────────────────
+# The keyframe is rendered at the aspect the clip will be produced at, and the
+# I2V graph is driven from the same setting. Before this, wan_i2v.json carried a
+# hardcoded 816x1088 (3:4) while a keyframe would have come out 1024x1024 — which
+# means either a crop or a stretch between the two stages, on the one frame the
+# whole clip is built from. Text that survives Qwen's letterforms does not
+# survive being squeezed 4:3 into 9:16.
+#
+# Dimensions are multiples of 16, which is what the Wan latent wants. They are
+# NOT applied to the LTX presets: LTX's graph has its own resolution and its own
+# constraint (32), and the keyframe flow this exists for is Qwen -> Wan I2V. An
+# LTX keyframe lane would need its own measured table.
+CLIP_ASPECTS: dict = {
+    "9:16": (720, 1280),      # vertical, the ruled default for this use
+    "16:9": (1280, 720),
+    "3:4":  (816, 1088),      # what wan_i2v.json used to hardcode
+    "4:3":  (1088, 816),
+    "1:1":  (960, 960),
+}
+DEFAULT_CLIP_ASPECT = "9:16"
+
+
+def clip_dims(aspect: str | None) -> tuple[int, int]:
+    """(width, height) for an aspect name. Falls back to the ruled default."""
+    return CLIP_ASPECTS.get((aspect or "").strip() or DEFAULT_CLIP_ASPECT,
+                            CLIP_ASPECTS[DEFAULT_CLIP_ASPECT])
+
+
+def aspect_of(width: int, height: int) -> str | None:
+    """The aspect name a rendered still matches, or None if it matches none.
+
+    Used to refuse animating a keyframe whose dimensions do not match the clip
+    about to be made from it — the check that makes "no crop/stretch" a fact
+    rather than an intention.
+    """
+    for name, (w, h) in CLIP_ASPECTS.items():
+        if (w, h) == (int(width), int(height)):
+            return name
+    return None
+
+
+# ── VRAM: the driver's number, not ComfyUI's opinion ─────────────────────────
+# Measured on this card 2026-09-26, one full wan-fast render: it started with
+# 5,284 MiB used (11,096 MiB free) and completed in 12m17s, peaking at 15,684
+# MiB with BOTH experts reporting "0.00 MB loaded, 10423.12 MB offloaded".
+#
+# READ THAT AGAIN, because it decides what this gate can honestly promise: Wan
+# ALWAYS offloads on a 16 GB card. Each expert is 11 GB, the fp8 text encoder is
+# 6.3 GB, and Whisper holds 4.5 GB inside the server process and is untouchable
+# by ruling. There is no state of this box in which an A14B expert is fully
+# resident, so a gate that refused to "start into offload" would refuse every
+# Wan render ever made here.
+#
+# What this gate does instead: refuse to start when the card is in WORSE shape
+# than the state we have measured a successful render from. Below this line the
+# render does not degrade gracefully — it thrashes, or ComfyUI's planner accepts
+# a fit it cannot honour and the runner dies with cudaMalloc (the same failure
+# the camera lane hit at ~5 GiB free).
+WAN_NEED_MB = 10500          # measured floor: 11,096 MiB free ran clean
+
+
+def free_vram_mb() -> int | None:
+    """Free VRAM per the DRIVER. None when it cannot be read.
+
+    nvidia-smi rather than pynvml: pynvml is not installed on this box, and a
+    number from ComfyUI would be the opinion of the process we are checking up
+    on. None is returned rather than a guess — the caller decides what to do
+    with "unknown", and it must not read as "plenty".
+    """
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=15)
+        if out.returncode != 0:
+            return None
+        return int(out.stdout.strip().splitlines()[0].strip())
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
+class VramTooTight(RuntimeError):
+    """Raised instead of starting a Wan render onto a card that cannot hold it."""
+
+
+def assert_vram_for_wan(need_mb: int = WAN_NEED_MB) -> int:
+    """Driver-confirmed free VRAM, or raise loudly. Returns the free MiB.
+
+    Called AFTER the eviction and the ComfyUI free, so it measures the state the
+    render will actually begin in rather than the state it was asked in.
+    """
+    free = free_vram_mb()
+    if free is None:
+        raise VramTooTight(
+            "I can't read the card's free memory from the driver, so I won't "
+            "start a 12-minute render blind. nvidia-smi did not answer.")
+    if free < need_mb:
+        raise VramTooTight(
+            f"Not enough VRAM to start the clip: {free} MiB free, {need_mb} MiB "
+            f"needed. Something else is still holding the card — the render "
+            f"would thrash or die partway, so it has not been started.")
+    return free
+
 
 def video_eta(preset: str) -> int:
     return VIDEO_PRESETS.get(preset, VIDEO_PRESETS[DEFAULT_VIDEO_PRESET])["eta_s"]
@@ -3161,6 +3325,16 @@ def build_video_workflow(params: dict) -> dict:
             ins["image"] = img_name
         if "noise_seed" in ins:      # add-noise=disable nodes ignore their seed → harmless
             ins["noise_seed"] = seed
+    # One aspect for both stages. Applied to the WAN graphs only — LTX keeps its
+    # own resolution (see CLIP_ASPECTS). A node is a size node if it carries both
+    # width and height, which is true of WanImageToVideo and of the latent nodes
+    # and false of everything else in these graphs.
+    if str(params.get("preset", "")).startswith("wan"):
+        w, h = clip_dims(params.get("aspect"))
+        for node in wf.values():
+            ins = node.get("inputs", {})
+            if "width" in ins and "height" in ins:
+                ins["width"], ins["height"] = w, h
     return wf
 
 
@@ -3291,6 +3465,22 @@ async def run_video(job_id: str, params: dict) -> None:
 
                 jobs[job_id]["state"] = "starting"
                 await ensure_comfy_up(http)
+
+                # ── The card is cleared, then CONFIRMED clear, before a Wan
+                # render starts. Two stages back to back (a 14.5 GB Qwen
+                # keyframe, then a Wan clip that peaks at 15.7 GB) do not fit on
+                # a 16 GB card, so the keyframe's models must be gone — and
+                # "must be gone" is checked against the driver rather than
+                # assumed from having asked.
+                #
+                # Fails LOUD. The alternative is what the camera lane did at
+                # ~5 GiB free: ComfyUI accepts a fit it cannot honour, the runner
+                # dies on cudaMalloc partway in, and the user waited for it.
+                if str(params.get("preset", "")).startswith("wan"):
+                    await comfy_free(http)
+                    free = await asyncio.to_thread(assert_vram_for_wan)
+                    log.info("[video] job %s starting with %d MiB free (need %d)",
+                             job_id, free, WAN_NEED_MB)
 
                 jobs[job_id]["state"] = "loading"
                 wf = build_video_workflow(params)

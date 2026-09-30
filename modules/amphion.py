@@ -75,6 +75,135 @@ CLEAN_WINDOW_SECONDS = 240.0
 # nothing else validates. Bar math reads this; it does not assume 4/4.
 TIMESIG_OPTIONS = ("2", "3", "4", "6")
 
+# ── The node's COMBO inputs, and why they are named here ─────────────────────
+# 2026-09-26: the panel's Key field was free text. Typing "d minor" (lowercase)
+# built a workflow ComfyUI rejected outright:
+#
+#   node_errors: {"5": {"errors": [{"type": "value_not_in_list",
+#     "details": "keyscale: 'd minor' not in (list of length 34)",
+#     "extra_info": {"input_name": "keyscale", "received_value": "d minor"}}],
+#     "class_type": "TextEncodeAceStepAudio1.5"}}
+#
+# "D minor" is in the list; "d minor" is not. A free-text box in front of a
+# closed enum is a trap with 33 wrong answers for every right one, and the whole
+# render died at validation — after the user had waited for it to start.
+#
+# THE OPTIONS BELONG TO THE NODE, so they are read from /object_info at runtime
+# (node_options()) and this table is only the fallback for when ComfyUI is down.
+# It is pinned from the live node on 2026-09-26 rather than hand-written, so the
+# offline list and the online one agree.
+KEYSCALE_OPTIONS = (
+    "C major", "C# major", "Db major", "D major", "D# major", "Eb major",
+    "E major", "F major", "F# major", "Gb major", "G major", "G# major",
+    "Ab major", "A major", "A# major", "Bb major", "B major",
+    "C minor", "C# minor", "Db minor", "D minor", "D# minor", "Eb minor",
+    "E minor", "F minor", "F# minor", "Gb minor", "G minor", "G# minor",
+    "Ab minor", "A minor", "A# minor", "Bb minor", "B minor",
+)
+
+# The node's language COMBO. Two-letter codes plus "unknown".
+LANGUAGE_OPTIONS = (
+    "ar", "az", "bg", "bn", "ca", "cs", "da", "de", "el", "en", "es", "fa",
+    "fi", "fr", "he", "hi", "hr", "ht", "hu", "id", "is", "it", "ja", "ko",
+    "la", "lt", "ms", "ne", "nl", "no", "pa", "pl", "pt", "ro", "ru", "sa",
+    "sk", "sr", "sv", "sw", "ta", "te", "th", "tl", "tr", "uk", "ur", "vi",
+    "yue", "zh", "unknown",
+)
+
+NODE_CLASS = "TextEncodeAceStepAudio1.5"
+_ENUM_INPUTS = ("keyscale", "timesignature", "language")
+_options_cache: dict = {}
+
+
+def node_options(http=None) -> dict:
+    """The COMBO options the NODE accepts, read from ComfyUI.
+
+    Synchronous and cached: the panel asks once when the tab opens, and a render
+    must never wait on it. Falls back to the pinned tables above when ComfyUI is
+    unreachable — a selector with slightly stale options still cannot produce
+    "d minor", which is the failure being removed.
+
+    The dict is keyed by the NODE's input names, not the panel's field names, so
+    a mismatch between the two shows up as a missing key rather than as a
+    silently unvalidated field.
+    """
+    if _options_cache.get("options"):
+        return _options_cache["options"]
+    fallback = {"keyscale": list(KEYSCALE_OPTIONS),
+                "timesignature": list(TIMESIG_OPTIONS),
+                "language": list(LANGUAGE_OPTIONS)}
+    try:
+        r = httpx.get(f"{morpheus.COMFY_HOST}/object_info/{NODE_CLASS}", timeout=10.0)
+        spec = (r.json() or {}).get(NODE_CLASS) or {}
+        req = (spec.get("input") or {}).get("required") or {}
+        live = {}
+        for name in _ENUM_INPUTS:
+            entry = req.get(name)
+            # COMBO carries its options in the second element; older builds put
+            # the list in the first. Both shapes are read, neither is assumed.
+            if isinstance(entry, list) and len(entry) > 1 and isinstance(entry[1], dict):
+                opts = entry[1].get("options")
+            elif isinstance(entry, list) and entry and isinstance(entry[0], list):
+                opts = entry[0]
+            else:
+                opts = None
+            if opts:
+                live[name] = [str(o) for o in opts]
+        if len(live) == len(_ENUM_INPUTS):
+            _options_cache["options"] = live
+            _options_cache["source"] = "comfyui"
+            return live
+        log.warning("[amphion] /object_info gave no options for %s — using the "
+                    "pinned tables", [n for n in _ENUM_INPUTS if n not in live])
+    except Exception as e:                                  # noqa: BLE001
+        log.warning("[amphion] could not read %s options from ComfyUI (%s) — "
+                    "using the pinned tables", NODE_CLASS, e)
+    _options_cache["options"] = fallback
+    _options_cache["source"] = "fallback"
+    return fallback
+
+
+def options_source() -> str:
+    """"comfyui" or "fallback" — so the panel can say which it is showing."""
+    if not _options_cache:
+        node_options()
+    return _options_cache.get("source", "fallback")
+
+
+def normalise_keyscale(value) -> str | None:
+    """The node's exact spelling for whatever the caller sent, or None.
+
+    CASE AND SPACING ONLY. This is the fallback the brief asks for, not the fix:
+    the fix is that the panel cannot send a bad value at all. It exists because
+    her own tool path and the HTTP API both reach this code without a selector in
+    front of them, and "d minor" from a script should not cost a render either.
+
+    Deliberately NOT a music parser. "Dm", "D-minor" and "dorian" return None,
+    because guessing at a key is worse than saying which values exist — a wrong
+    guess conditions the whole track on the wrong scale and nobody is told.
+    """
+    if value is None:
+        return None
+    want = " ".join(str(value).strip().split()).lower()
+    if not want:
+        return None
+    for opt in node_options().get("keyscale", KEYSCALE_OPTIONS):
+        if opt.lower() == want:
+            return opt
+    return None
+
+
+def keyscale_for_node(value) -> str:
+    """The value that goes into the workflow. Always one the node accepts."""
+    return normalise_keyscale(value) or "C major"
+
+
+def language_for_node(value) -> str:
+    want = str(value or "").strip().lower()
+    opts = node_options().get("language", LANGUAGE_OPTIONS)
+    return want if want in opts else "en"
+
+
 # In-memory job state (job_id -> {state, ...}). Mirrors morpheus.jobs.
 # states: queued -> loading -> generating -> done | error | cancelled
 jobs: dict[str, dict] = {}
@@ -389,8 +518,13 @@ def build_workflow(job_id: str, p: dict) -> dict:
       "5":  {"class_type": "TextEncodeAceStepAudio1.5", "inputs": {
                 "clip": ["2", 0], "tags": p["tags"], "lyrics": p.get("lyrics", ""),
                 "seed": p["seed"], "bpm": p.get("bpm", 120), "duration": float(p["seconds"]),
-                "timesignature": timesig_for_node(p.get("timesig")), "language": p.get("language", "en"),
-                "keyscale": p.get("keyscale", "C major"), "generate_audio_codes": True,
+                # Every COMBO input goes through its own normaliser. Before this,
+                # keyscale was p.get("keyscale", "C major") — raw from the request
+                # body — and one lowercase letter failed the whole render at
+                # ComfyUI validation.
+                "timesignature": timesig_for_node(p.get("timesig")),
+                "language": language_for_node(p.get("language")),
+                "keyscale": keyscale_for_node(p.get("keyscale")), "generate_audio_codes": True,
                 "cfg_scale": 2.0, "temperature": 0.85, "top_p": 0.9, "top_k": 0, "min_p": 0.0}},
       "6":  {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["5", 0]}},
       "7":  {"class_type": "EmptyAceStep1.5LatentAudio", "inputs": {"seconds": float(p["seconds"]), "batch_size": 1}},

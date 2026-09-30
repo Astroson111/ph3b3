@@ -1744,6 +1744,44 @@
           <option value="wan-fast">Clip · Quality — Wan (~10 min)</option>
         </select>
       </div>
+      <!-- ── Start from keyframe (clip modes only) ──────────────────────────
+           The motion stage is ~12 minutes on this card, so the frame it is built
+           from gets looked at first. Nothing here auto-proceeds: Animate is a
+           separate press from Render, and the server refuses a frame that is not
+           the approved one. -->
+      <div class="morph-eng-row" id="morphKfRow" style="display:none">
+        <label class="morph-qual-hint" style="display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="morphKfOn"> Start from keyframe
+        </label>
+        <label for="morphKfAspect" class="sr">Aspect</label>
+        <select id="morphKfAspect" class="morph-eng-sel" title="One aspect for the keyframe and the clip — no crop between stages">
+          <option value="9:16" selected>9:16 vertical</option>
+          <option value="16:9">16:9</option>
+          <option value="3:4">3:4</option>
+          <option value="4:3">4:3</option>
+          <option value="1:1">1:1</option>
+        </select>
+      </div>
+      <div id="morphKfPanel" style="display:none">
+        <input type="text" id="morphKfPrompt" class="ari-url" style="width:100%"
+               placeholder='the still — put words in "quotes" and they are passed through verbatim'>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center">
+          <button type="button" class="btn-send ari-btn" id="morphKfRender">Render keyframe</button>
+          <label class="morph-qual-hint" style="cursor:pointer">
+            or upload <input type="file" id="morphKfUpload" accept="image/png,image/jpeg,image/webp" style="display:none">
+            <span id="morphKfUploadName"></span>
+          </label>
+          <span class="morph-qual-hint" id="morphKfState"></span>
+        </div>
+        <div id="morphKfPreviewWrap" style="display:none;margin-top:8px">
+          <img id="morphKfPreview" alt="keyframe" style="max-width:100%;border-radius:10px;display:block">
+          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+            <button type="button" class="btn-send ari-btn" id="morphKfReroll">Re-roll</button>
+            <button type="button" class="btn-send ari-btn" id="morphKfApprove">Approve &amp; animate</button>
+          </div>
+          <div class="morph-qual-hint" id="morphKfNote" style="margin-top:4px"></div>
+        </div>
+      </div>
       <div class="morph-eng-row" id="morphQualRow">
         <label for="morphQualSel" class="sr">Quality</label>
         <select id="morphQualSel" class="morph-eng-sel" title="Sampling quality — higher tiers take longer">
@@ -2224,7 +2262,16 @@
         </div>
         <div class="amp-row">
           <label data-i18n="amphion.key">Key</label>
-          <input type="text" id="ampKey" class="ari-url" value="C major" placeholder="C major">
+          <!-- A SELECTOR, never a text box. "d minor" typed here used to build a
+               workflow ComfyUI rejected outright (keyscale: 'd minor' not in a
+               list of 34), and the render died at validation after the user had
+               already been told it was starting. The options are filled from the
+               running node via /amphion/options; this single option is only what
+               shows for the instant before that returns. -->
+          <select id="ampKey" class="ari-url" aria-label="key and scale">
+            <option value="C major" selected>C major</option>
+          </select>
+          <span class="ari-hint" id="ampKeyNote" style="display:none;margin-left:6px"></span>
         </div>
         <div class="amp-row">
           <label data-i18n="amphion.seed">Seed</label>
@@ -2260,7 +2307,8 @@
     <div class="card" id="ampJobCard" style="display:none">
       <div class="card-title" data-i18n="amphion.working">Generating…</div>
       <div id="ampJobState" class="ari-hint"></div>
-      <button class="btn-send ari-btn" id="ampCancel" data-i18n="amphion.cancel">Cancel</button>
+      <!-- Hidden until a job is actually running; ampSetRunning owns it. -->
+      <button class="btn-send ari-btn" id="ampCancel" style="display:none" data-i18n="amphion.cancel">Cancel</button>
     </div>
 
     <div class="card">
@@ -3555,6 +3603,25 @@ let apInit;
     } catch(e){ /* leave prior */ }
   };
 
+  // ── Running or not running: one function, every exit ─────────────────────
+  // A failed render used to leave Cancel live on a job that had already stopped
+  // — a button offering to stop something finished. Cancel is now tied to the
+  // RUNNING state rather than to the card, and every path out of a generation
+  // goes through here, so there is no exit that forgets one of them.
+  function ampSetRunning(on){
+    const c = $('ampCancel');
+    if (c) c.style.display = on ? '' : 'none';
+    const g = $('ampGenerate');
+    if (g) g.disabled = !!on;
+  }
+  function ampEndedWith(text, holdMs){
+    curJob = null;
+    if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+    ampSetRunning(false);
+    if (text) $('ampJobState').textContent = text;
+    if (holdMs) setTimeout(() => { $('ampJobCard').style.display='none'; }, holdMs);
+  }
+
   async function poll(){
     if (!curJob) return;
     try {
@@ -3562,12 +3629,12 @@ let apInit;
       const map = {queued:'Queued…', loading:'Loading the model…', generating:'Composing…', done:'Done.', error:'Failed.', cancelled:'Cancelled.'};
       $('ampJobState').textContent = map[j.state] || j.state;
       if (['done','error','cancelled'].includes(j.state)){
-        clearInterval(pollTimer); pollTimer = null;
-        $('ampGenerate').disabled = false;
-        if (j.state === 'error') $('ampJobState').textContent = 'Failed: ' + (j.error||'').slice(0,120);
-        setTimeout(() => { $('ampJobCard').style.display='none'; }, j.state==='done'?800:4000);
-        curJob = null;
-        if (j.state === 'done') ampRefreshLibrary();
+        const was = j.state;
+        // The server's reason, not a generic one: it now names the field and the
+        // value ComfyUI refused, which is the only version a person can act on.
+        ampEndedWith(was === 'error' ? 'Failed: ' + (j.error||'').slice(0,200) : null,
+                     was === 'done' ? 800 : 6000);
+        if (was === 'done') ampRefreshLibrary();
       }
     } catch(e){ /* keep polling */ }
   }
@@ -3639,6 +3706,53 @@ let apInit;
   $('ampTags').addEventListener('input', ampSyncSuggest);
   ampSyncSuggest();
 
+  // ── The node's own vocabulary, filled from the node ───────────────────────
+  // /amphion/options reads ComfyUI's /object_info, so these lists are whatever
+  // the installed node actually accepts rather than what was true when this file
+  // was written. On failure the selects keep the values already in the markup —
+  // never reverting to free text, which is the failure being removed.
+  const AMP_TS_LABEL = { '2': '2/4', '3': '3/4', '4': '4/4', '6': '6/8' };
+  let ampOptionsLoaded = false;
+  async function ampLoadOptions(){
+    if (ampOptionsLoaded) return;
+    let d;
+    try { d = await fetch('/amphion/options').then(r => r.json()); }
+    catch(e){ return; }                      // keep the markup's values
+    const o = (d && d.options) || {};
+    const keySel = $('ampKey');
+    if (keySel && Array.isArray(o.keyscale) && o.keyscale.length){
+      const want = keySel.value || 'C major';
+      keySel.innerHTML = '';
+      o.keyscale.forEach(function(k){
+        const opt = document.createElement('option');
+        opt.value = k; opt.textContent = k;
+        if (k === want) opt.selected = true;
+        keySel.appendChild(opt);
+      });
+      if (!keySel.value) keySel.value = o.keyscale[0];
+    }
+    const tsSel = $('ampTimesig');
+    if (tsSel && Array.isArray(o.timesignature) && o.timesignature.length){
+      const want = tsSel.value || '4';
+      tsSel.innerHTML = '';
+      o.timesignature.forEach(function(v){
+        const opt = document.createElement('option');
+        opt.value = v; opt.textContent = AMP_TS_LABEL[v] || (v + '/4');
+        if (v === want) opt.selected = true;
+        tsSel.appendChild(opt);
+      });
+      if (!tsSel.value) tsSel.value = '4';
+    }
+    ampOptionsLoaded = true;
+    // Say which list is on screen. A selector built from the pinned fallback is
+    // a different promise from one built from the running node.
+    if (d.source === 'fallback'){
+      const note = $('ampKeyNote');
+      if (note){ note.textContent = 'ComfyUI is unreachable — showing the last known key list.'; note.style.display=''; }
+    }
+  }
+  ampLoadOptions();
+
   $('ampGenerate').addEventListener('click', async () => {
     const tags = $('ampTags').value.trim();
     if (!tags){ $('ampTags').focus(); return; }
@@ -3652,7 +3766,7 @@ let apInit;
       // conditioning as well as arithmetic, and leaving it out is what made the
       // workflow silently 4/4 for every song ever generated here.
       timesig: ($('ampTimesig')||{}).value || '4',
-      keyscale: ($('ampKey').value.trim()||'C major'),
+      keyscale: (($('ampKey')||{}).value || 'C major'),
       // Whatever is in the box right now, suggested or typed — sent as-is. A
       // blank one is fine and the server names it untitled-<seed>-<date>; the
       // browser never fills this in on its own at render time.
@@ -3684,9 +3798,9 @@ let apInit;
     if (remixOf)      url = '/amphion/remix/' + encodeURIComponent(remixOf);
     else if (count>1) { url = '/amphion/variations'; body.count = count; }
 
-    $('ampGenerate').disabled = true;
     $('ampJobCard').style.display = 'block';
     $('ampJobState').textContent = 'Queued…';
+    ampSetRunning(true);
     try {
       const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
       if (r.status === 403){
@@ -3696,9 +3810,7 @@ let apInit;
         // A refusal nobody can read is a refusal nobody can write around.
         let why = 'Refused by the content floor.';
         try { const d = await r.json(); if (d && d.detail) why = d.detail; } catch(e){}
-        $('ampJobState').textContent = why;
-        $('ampGenerate').disabled=false;
-        setTimeout(()=>{$('ampJobCard').style.display='none';}, 12000);
+        ampEndedWith(why, 12000);
         return;
       }
       const d = await r.json();
@@ -3707,32 +3819,36 @@ let apInit;
         // state was only cleared on success, so a remix of a deleted track left
         // the button saying "Remix" forever, pointing at an id that no longer
         // exists — indistinguishable from "the Generate button disappeared".
-        $('ampJobState').textContent = 'Error: ' + (d.detail||'could not start');
+        // The server names the field and the value it refused (Key doesn't
+        // accept 'd minor'. Closest: D minor.) — show that, not "could not start".
+        let why = 'Error: ' + (d.detail || 'could not start');
         if (remixOf){
           ampClearRemix();
-          $('ampJobState').textContent += ' — remix cancelled, back to Generate.';
+          why += ' — remix cancelled, back to Generate.';
           ampRefreshLibrary();
         }
-        $('ampGenerate').disabled=false;
+        ampEndedWith(why, 12000);
         return;
       }
       if (remixOf) ampClearRemix();
       // A variation set returns job_ids; follow the first and let the library
       // show the rest as they land.
       const jid = d.job_id || (d.job_ids && d.job_ids[0]);
-      if (!jid){ $('ampJobState').textContent = 'Error: could not start'; $('ampGenerate').disabled=false; return; }
+      if (!jid){ ampEndedWith('Error: could not start', 12000); return; }
       if (d.job_ids && d.job_ids.length > 1)
         $('ampJobState').textContent = 'Queued ' + d.job_ids.length + ' variations…';
       if (d.duration_note) $('ampJobState').textContent += ' (' + d.duration_note + ')';
       curJob = jid;
       pollTimer = setInterval(poll, 1500); poll();
-    } catch(e){ $('ampJobState').textContent = 'Network error.'; $('ampGenerate').disabled=false; }
+    } catch(e){ ampEndedWith('Network error.', 12000); }
   });
 
   $('ampCancel').addEventListener('click', async () => {
     if (!curJob) return;
     await fetch('/amphion/job/'+curJob, {method:'DELETE'});
-    $('ampJobState').textContent = 'Cancelled.';
+    // The poll confirms the server's own 'cancelled' state; this is the
+    // immediate feedback, and it takes the button out of reach either way.
+    ampEndedWith('Cancelled.', 4000);
   });
 
   // ── Duration control (measured curve: ~0.36 s gen per audio-second) ──────────
@@ -4511,8 +4627,25 @@ async function startHold() {
   holdRecording = true;
   holdChunks = [];
   try {
+    // RAW CAPTURE, same as the singing paths above. 2026-09-28: with the
+    // browser's processing on, a weak webcam mic came through like this —
+    //
+    //   in 319532 B ~3.33s  peak=32768/32767  rms=8514
+    //   GATED (no_speech_prob 0.62>0.6) phantom='Can you hear me?'
+    //
+    // — Whisper transcribed it CORRECTLY and the hallucination gate threw it
+    // away by 0.02. autoGainControl (on by default in Firefox when unset) hauls
+    // a quiet mic up until it clips at 32768, and clipped audio is exactly what
+    // raises no_speech_prob. noiseSuppression on a signal that weak can also
+    // classify the whole utterance as noise and emit digital zeros, which is the
+    // other symptom seen the same morning.
+    //
+    // The gain belongs upstream, on the source, where it can be set to a level
+    // that does not clip — not in an automatic control that only sees one press
+    // at a time.
     micStream = await navigator.mediaDevices.getUserMedia({
-      audio: {channelCount:1, echoCancellation:true, noiseSuppression:true},
+      audio: {channelCount:1, echoCancellation:false, noiseSuppression:false,
+              autoGainControl:false},
     });
     micCtx    = new AudioContext();
     micSR     = micCtx.sampleRate;
@@ -5742,13 +5875,167 @@ document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
 
   genBtn.addEventListener('click', generate);
 
+  // ── Start from keyframe: render, look, approve, then animate ─────────────
+  // THE RULE THIS IMPLEMENTS: approval binds to one exact job id. A re-roll
+  // invalidates it (server-side, the moment the new render is queued), and only
+  // the approved id may be sent as source_job_id. The browser keeps its own copy
+  // of that state purely so the buttons make sense — the server is the authority
+  // and refuses anything else with a reason.
+  const KF_SID = (function(){
+    try {
+      let v = sessionStorage.getItem('ph3b3-kf-sid');
+      if (!v){ v = 'panel-' + Math.random().toString(36).slice(2, 10); sessionStorage.setItem('ph3b3-kf-sid', v); }
+      return v;
+    } catch(e){ return 'panel-default'; }
+  })();
+  let kfJob = null, kfApproved = false, kfUploadId = null, kfPoll = null;
+
+  function kfEl(id){ return document.getElementById(id); }
+  function kfSetState(msg){ const e = kfEl('morphKfState'); if (e) e.textContent = msg || ''; }
+  function kfSetNote(msg){ const e = kfEl('morphKfNote'); if (e) e.textContent = msg || ''; }
+
+  function kfShowPanel(){
+    const on = kfEl('morphKfOn') && kfEl('morphKfOn').checked;
+    const isClip = modeSel && modeSel.value !== 'image';
+    if (kfEl('morphKfRow')) kfEl('morphKfRow').style.display = isClip ? '' : 'none';
+    if (kfEl('morphKfPanel')) kfEl('morphKfPanel').style.display = (isClip && on) ? '' : 'none';
+  }
+
+  function kfReset(why){
+    kfJob = null; kfApproved = false; kfUploadId = null;
+    if (kfPoll){ clearInterval(kfPoll); kfPoll = null; }
+    if (kfEl('morphKfPreviewWrap')) kfEl('morphKfPreviewWrap').style.display = 'none';
+    kfSetNote(''); kfSetState(why || '');
+  }
+
+  async function kfRender(){
+    const prompt = (kfEl('morphKfPrompt').value || '').trim();
+    if (!prompt){ kfEl('morphKfPrompt').focus(); return; }
+    // A re-roll is simply another render: the server invalidates the previous
+    // approval when this one is REGISTERED, so there is no window in which the
+    // old frame is still animatable while the new one renders.
+    kfReset('rendering the keyframe…');
+    kfEl('morphKfRender').disabled = true;
+    try {
+      const r = await fetch('/morpheus/keyframe', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({positive: prompt, aspect: kfEl('morphKfAspect').value,
+                              session_id: KF_SID})});
+      const d = await r.json().catch(()=>({}));
+      if (!r.ok){ kfSetState(d.detail || ('could not start (' + r.status + ')')); kfEl('morphKfRender').disabled = false; return; }
+      kfJob = d.job_id;
+      kfSetState('rendering at ' + d.width + '×' + d.height + ' (~' + (d.seconds||25) + 's)…');
+      kfPoll = setInterval(kfCheck, 1200);
+    } catch(e){ kfSetState('network error'); kfEl('morphKfRender').disabled = false; }
+  }
+
+  async function kfCheck(){
+    if (!kfJob) return;
+    try {
+      const j = await fetch('/morpheus/jobs/' + kfJob).then(r=>r.json());
+      if (j.state === 'done'){
+        clearInterval(kfPoll); kfPoll = null;
+        kfEl('morphKfRender').disabled = false;
+        kfEl('morphKfPreview').src = '/image/file/' + kfJob + '?t=' + Date.now();
+        kfEl('morphKfPreviewWrap').style.display = '';
+        kfSetState('look at it, then approve or re-roll');
+      } else if (j.state === 'error' || j.state === 'blocked' || j.state === 'cancelled'){
+        clearInterval(kfPoll); kfPoll = null;
+        kfEl('morphKfRender').disabled = false;
+        kfSetState((j.state === 'blocked' ? 'refused: ' : 'failed: ') + (j.error || j.state));
+        kfJob = null;
+      }
+    } catch(e){ /* keep polling */ }
+  }
+
+  async function kfApproveAndAnimate(){
+    const motion = (promptEl.value || '').trim();
+    if (!motion){ kfSetNote('the motion prompt is empty — say how it should move'); promptEl.focus(); return; }
+    kfEl('morphKfApprove').disabled = true;
+    kfSetNote('');
+    // Approval FIRST, and the server checks the image itself here. Only if that
+    // returns 200 does anything reach Wan.
+    if (!kfUploadId){
+      try {
+        const r = await fetch('/morpheus/keyframe/approve', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({job_id: kfJob, session_id: KF_SID})});
+        const d = await r.json().catch(()=>({}));
+        if (!r.ok){
+          kfSetNote(d.detail || ('approval refused (' + r.status + ')'));
+          kfEl('morphKfApprove').disabled = false;
+          return;
+        }
+        kfApproved = true;
+        kfSetNote('approved ' + d.width + '×' + d.height + ' — animating');
+      } catch(e){ kfSetNote('network error during approval'); kfEl('morphKfApprove').disabled = false; return; }
+    }
+    genBtn.disabled = true;
+    setStatePill('queued');
+    await generateClip(motion, (negEl && negEl.value || '').trim(), {
+      sourceJobId: kfUploadId ? null : kfJob,
+      sourceUploadId: kfUploadId,
+      aspect: kfEl('morphKfAspect').value});
+    kfEl('morphKfApprove').disabled = false;
+  }
+
+  async function kfUpload(ev){
+    const f = ev.target.files && ev.target.files[0];
+    if (!f) return;
+    kfReset('uploading…');
+    try {
+      const fd = new FormData(); fd.append('file', f);
+      const r = await fetch('/image/edit/upload', {method:'POST', body: fd});
+      const d = await r.json().catch(()=>({}));
+      if (!r.ok){ kfSetState(d.detail || 'upload failed'); return; }
+      kfUploadId = d.upload_id || d.id;
+      kfEl('morphKfUploadName').textContent = ' ' + f.name;
+      kfEl('morphKfPreview').src = URL.createObjectURL(f);
+      kfEl('morphKfPreviewWrap').style.display = '';
+      kfSetState('uploaded — look at it, then approve or pick another');
+      // The server floor-checks an upload when it is ANIMATED (source_upload_id),
+      // so the check still happens; the aspect is the caller's own, so say so
+      // rather than silently letting Wan letterbox it.
+      const img = new Image();
+      img.onload = function(){
+        const want = kfEl('morphKfAspect').value;
+        const r2 = (img.width / img.height).toFixed(3);
+        const table = {'9:16': 0.563, '16:9': 1.778, '3:4': 0.750, '4:3': 1.333, '1:1': 1.000};
+        if (Math.abs(r2 - table[want]) > 0.02)
+          kfSetNote('this image is ' + img.width + '×' + img.height + ', which is not ' + want +
+                    ' — the clip will be made at the image\'s own shape');
+      };
+      img.src = kfEl('morphKfPreview').src;
+    } catch(e){ kfSetState('upload error'); }
+  }
+
+  (function kfWire(){
+    const on = kfEl('morphKfOn');
+    if (on) on.addEventListener('change', function(){ kfShowPanel(); if (!on.checked) kfReset(''); });
+    if (modeSel) modeSel.addEventListener('change', kfShowPanel);
+    if (kfEl('morphKfRender')) kfEl('morphKfRender').addEventListener('click', kfRender);
+    if (kfEl('morphKfReroll')) kfEl('morphKfReroll').addEventListener('click', kfRender);
+    if (kfEl('morphKfApprove')) kfEl('morphKfApprove').addEventListener('click', kfApproveAndAnimate);
+    if (kfEl('morphKfUpload')) kfEl('morphKfUpload').addEventListener('change', kfUpload);
+    if (kfEl('morphKfAspect')) kfEl('morphKfAspect').addEventListener('change', function(){
+      if (kfJob) kfSetNote('aspect changed — re-roll the keyframe so it matches the clip');
+    });
+    kfShowPanel();
+  })();
+
   // ── Video (clip) generation ──────────────────────────────────────────────
   function fmtDur(s){ s=Math.max(0,Math.floor(s)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
 
-  async function generateClip(positive, negative_prompt) {
+  async function generateClip(positive, negative_prompt, opts) {
     try {
+      opts = opts || {};
       const body = {positive, negative_prompt, preset: modeSel.value};
-      if (sourceJobId) body.source_job_id = sourceJobId;
+      // The keyframe flow passes its own approved source and the aspect BOTH
+      // stages were rendered at; the plain clip path is unchanged.
+      if (opts.aspect) body.aspect = opts.aspect;
+      if (opts.sourceUploadId) body.source_upload_id = opts.sourceUploadId;
+      else if (opts.sourceJobId) body.source_job_id = opts.sourceJobId;
+      else if (sourceJobId) body.source_job_id = sourceJobId;
       const res = await fetch('/morpheus/video', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));

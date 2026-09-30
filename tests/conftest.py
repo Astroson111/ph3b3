@@ -149,3 +149,53 @@ def wait_vec():
             time.sleep(0.05)
         return False
     return _wait
+
+
+# ── --vision-live: the camera is opt-in, and says so ─────────────────────────
+# 2026-09-26, 09:02:06. A full-suite run I launched unattended reached
+# tests/test_persona_smoke.py and sent "what do you see right now?" to the live
+# service, which fell back to /dev/video0 and wrote a real frame of the Captain's
+# room to ~/ph3b3_data/captures. He asked where the photo came from and whether
+# she had done it on her own. She had not: the trigger was a genuine user turn
+# whose "user" was my test harness.
+#
+# The test was right to exist and right to be live — the failure it guards
+# (describing a scene with no capture behind it) cannot be proved any other way.
+# What was wrong is that it opened a camera in a room, with no warning, at
+# whatever moment a suite happened to run.
+#
+# So: fixtures by default, hardware only when asked for, and a banner when
+# asked. `pytest tests/` never opens the shutter.
+def pytest_addoption(parser):
+    parser.addoption(
+        "--vision-live", action="store_true", default=False,
+        help="Allow live-camera probes to open /dev/video0 and write real frames "
+             "to ~/ph3b3_data/captures. Off by default: the same probes run "
+             "against fixtures instead.")
+
+
+def pytest_configure(config):
+    if config.getoption("--vision-live"):
+        # stderr, not print: the banner must survive -q, and a camera warning
+        # that only shows up in verbose mode is not a warning.
+        import sys as _sys
+        bar = "=" * 74
+        _sys.stderr.write(
+            f"\n{bar}\n"
+            "  VISION LIVE — the camera will open. Real frames of whatever is in\n"
+            "  front of it will be written to ~/ph3b3_data/captures and kept\n"
+            "  under the usual 7-day retention.\n"
+            "  Run without --vision-live to exercise the same checks on fixtures.\n"
+            f"{bar}\n\n")
+        _sys.stderr.flush()
+
+
+def pytest_report_header(config):
+    return ("vision: LIVE — the camera will open" if config.getoption("--vision-live")
+            else "vision: fixtures (pass --vision-live for hardware)")
+
+
+@pytest.fixture(scope="session")
+def vision_live(request):
+    """True only when the run explicitly asked for hardware."""
+    return bool(request.config.getoption("--vision-live"))

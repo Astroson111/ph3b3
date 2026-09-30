@@ -164,6 +164,7 @@ from tts_chunker import split_for_tts
 import voices
 from occult_module import OccultModule
 from jokes_module import JokesModule
+import keyframe                           # clip keyframe approval binding
 import vision_module                      # the module itself, for the
 from vision_module import VisionModule    # injected make_headroom hook
 from tts_module import TTSModule, trim_silence_b64, rms_b64, PREVIEW_RMS_FLOOR
@@ -231,6 +232,7 @@ def _triage_named_resolver(text: str) -> bool:
 triage_mod = sys.modules.get("triage")
 if triage_mod is not None:
     triage_mod.named_resolver = _triage_named_resolver
+import story_intent             # invention vs retell, one reader for both
 import absent_artifact           # "the file I sent you" when no file was ever sent
 import dio_head                  # "look down" reaches her neck, deterministically
 
@@ -3117,6 +3119,26 @@ async def _run_chat_pipeline(body: dict, request: Request):
         session.add("assistant", _absent)
         return _absent
 
+    # ── A declarative premise is not a request for a story ───────────────────
+    # "King Tom is the story of Earth and Mars." asked for nothing, and on
+    # 2026-09-29 it was answered "I don't have anything called King Tom — I'd
+    # rather tell you that than make one up." A refusal to a turn that made no
+    # request reads as contradicting the person rather than as honesty about the
+    # shelf.
+    #
+    # Claimed here, above the gate, for the reason every deterministic answer
+    # ended up here: the gate would decline it and the model would improvise a
+    # work to agree with. It says plainly that she does not have it and offers
+    # the one thing she can actually do. Only for names the stores do NOT have —
+    # a premise about a real work is ordinary conversation about that work.
+    _premise = story_intent.declarative_premise(user_msg) if user_msg else None
+    if _premise and not _triage_named_resolver(_premise):
+        _offer = story_intent.offer_line(_premise)
+        log.info("[story] declarative premise about an unknown work: %r", _premise)
+        session.add("user", user_msg)
+        session.add("assistant", _offer)
+        return _offer
+
     # A named story is answerable BY CONSTRUCTION — do not let triage hold it.
     #
     # Triage refuses anything referring to "a specific file, artifact or prior
@@ -3131,8 +3153,19 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # Resolving here is cheap: both are directory listings and a string match, no
     # model call. If either store can name it, the turn is answerable and triage
     # is skipped for the same reason an early intent claim skips it.
+    # ── Invention is decided FIRST, and it suppresses the shelf short-circuit ──
+    # Ruled 2026-09-29. shelf.resolve is fuzzy — "make up a new story about Eliza"
+    # resolves to "Arthur and Eliza" on one shared token — and a resolved story
+    # gets its FULL TEXT injected further down with "the user's message refers to
+    # <title>". On an invention turn that is canon leaking into a request for
+    # something new: she would be handed 1,084 words of an existing work and
+    # asked to invent, which is how a variation gets mistaken for the original.
+    #
+    # So an explicit ask to invent never consults the shelf at all.
+    _invention = bool(user_msg and story_intent.is_invention(user_msg))
+
     _story_claim = False
-    if user_msg:
+    if user_msg and not _invention:
         try:
             _story_claim = bool(shelf.resolve(user_msg).get("ok")
                                 or canon.resolve(user_msg).get("ok"))
@@ -3440,7 +3473,23 @@ async def _run_chat_pipeline(body: dict, request: Request):
         # — above that the tool remains the route, because a truncated work would
         # be worse than no work at all: she would speak from a fragment and sound
         # exactly as certain.
-        _named = shelf.resolve(user_msg) if user_msg else {"ok": False}
+        # `not _invention`: the same rule as the short-circuit above, enforced at
+        # the point of injection too. One flag, both readers — a request to make
+        # something new never receives an existing work's text.
+        # ── An invented story announces itself ───────────────────────────────
+        # Ruled: nothing is filed, so the only thing separating a new story from
+        # canon is that she says so. One line, in her own voice, and the sentence
+        # comes from story_intent so the gate and the prompt cannot disagree
+        # about what "new" means.
+        if _invention:
+            messages.insert(1, {"role": "system", "content":
+                "The user asked you to MAKE UP a story. Invent it — it is not on "
+                "your shelf and you are not retelling anything. Open by saying "
+                f"exactly this, on its own line: \"{story_intent.announce_line()}\" "
+                "Then tell the story. Do not claim it is filed, saved or part of "
+                "your canon, because it is not."})
+
+        _named = shelf.resolve(user_msg) if (user_msg and not _invention) else {"ok": False}
         if _named.get("ok") and _named["book"]["words"] <= SHELF_INLINE_MAX_WORDS:
             _b = _named["book"]
             _story_inlined = True
@@ -7150,6 +7199,123 @@ _video_seq = 0
 _VIDEO_ACTIVE = {"queued", "evicting", "starting", "loading", "rendering", "saving"}
 
 
+# ── Clip keyframe: render a still, look at it, THEN animate it ───────────────
+# The motion stage costs ~12 minutes on this card and 91% of that is sampling
+# with both 14B experts offloaded. So a human looks at the frame first. There is
+# NO auto-proceed: /morpheus/video refuses a keyframe-origin image that is not
+# approved, and a re-roll invalidates the previous approval the moment it starts.
+#
+# The still is rendered by the SAME image lane as everything else — engine=qwen,
+# Qwen-Image-Edit-2509 driven as text-to-image, 4-step Lightning, measured 100%
+# letterform accuracy at delivery scale. Nothing new renders it, so the prompt
+# gate, the output check and the watermark all apply unchanged.
+@app.post("/morpheus/keyframe")
+async def morpheus_keyframe(request: Request, body: dict, background_tasks: BackgroundTasks):
+    positive = (body.get("positive") or body.get("prompt") or "").strip()
+    if not positive:
+        raise HTTPException(400, "a keyframe description is required")
+    if not morpheus.qwen_open():
+        raise HTTPException(
+            400, "The keyframe engine is switched off on this box (PH3B3_QWEN). "
+                 "A keyframe needs the engine that gets lettering right.")
+    aspect = (body.get("aspect") or morpheus.DEFAULT_CLIP_ASPECT).strip()
+    if aspect not in morpheus.CLIP_ASPECTS:
+        raise HTTPException(400, f"unknown aspect; choose from {list(morpheus.CLIP_ASPECTS)}")
+    negative = (body.get("negative_prompt") or body.get("negative") or "").strip()
+
+    # Floor on the keyframe PROMPT — the first of the three surfaces. Off-thread
+    # for the same reason as every other caller: the judge is a blocking call.
+    await asyncio.to_thread(_morpheus_floor_gate, positive, negative, request)
+
+    width, height = morpheus.clip_dims(aspect)
+    params = {
+        "engine": "qwen",
+        # VERBATIM. Quoted text in a keyframe prompt is the entire reason this
+        # lane uses Qwen, so nothing rewrites, expands or "enhances" it here.
+        "positive": positive,
+        "negative": negative,
+        "width": width, "height": height,
+        "seed": int(body.get("seed", -1)),
+        "ckpt_name": morpheus.SDXL_CKPT,
+        "_keyframe": True,
+    }
+    job_id = morpheus.create_job()
+    # Registered BEFORE the render is queued: a re-roll must invalidate the
+    # previous approval the instant it is asked for, not when it finishes.
+    keyframe.register(body.get("session_id", "default"), job_id, positive, aspect)
+    background_tasks.add_task(morpheus.run_generation, job_id, params)
+    log.info("[keyframe] job %s queued at %s (%dx%d)", job_id, aspect, width, height)
+    return {"job_id": job_id, "aspect": aspect, "width": width, "height": height,
+            "engine": "qwen", "seconds": morpheus.QWEN_SECONDS}
+
+
+@app.post("/morpheus/keyframe/approve")
+async def morpheus_keyframe_approve(body: dict):
+    """Bind approval to this exact frame, after the floor has looked at it.
+
+    The IMAGE is checked here — the second of the three surfaces — and the verdict
+    is stored with the approval, so the animate call does not re-run a vision
+    model that shares the card with the render it is about to start. The same
+    reasoning the video route already uses for a gallery source: what makes it
+    safe is not where it came from, it is that a verdict exists for it.
+
+    A check that could not RUN is a 503, never a refusal.
+    """
+    job_id = (body.get("job_id") or "").strip()
+    sid = body.get("session_id", "default")
+    if not (len(job_id) == 36 and all(c in "0123456789abcdef-" for c in job_id)):
+        raise HTTPException(400, "invalid job_id")
+    cur = keyframe.current(sid)
+    if not cur or cur.get("job_id") != job_id:
+        raise HTTPException(
+            409, "That frame is not the one on screen any more — a newer keyframe "
+                 "has been rendered. Approve the frame you can see.")
+    path = morpheus.IMAGE_DIR / f"{job_id}.png"
+    if not path.exists():
+        raise HTTPException(404, "that keyframe has not finished rendering yet")
+    try:
+        raw = await asyncio.to_thread(path.read_bytes)
+    except OSError:
+        raise HTTPException(400, "could not read that keyframe")
+    try:
+        blocked = await asyncio.to_thread(morpheus.source_minor_check, raw)
+    except morpheus.SafetyCheckUnavailable as exc:
+        log.error("[safety] keyframe check UNAVAILABLE — %s (frame kept)", exc)
+        raise HTTPException(
+            503,
+            detail=("The safety check that has to look at the frame could not run "
+                    "just now — usually because something else is using the GPU. "
+                    "The frame is still here; try again in a moment. This is not "
+                    "a refusal."),
+            headers={"Retry-After": "30"})
+    if blocked:
+        log.warning("[safety] keyframe %s blocked — category: child-depiction", job_id)
+        raise HTTPException(403, "That frame can't be used as the first frame of a clip.")
+
+    # The frame's own dimensions decide the aspect, so there is nothing to crop or
+    # stretch when Wan animates it.
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            w, h = im.size
+    except Exception:                                        # noqa: BLE001
+        raise HTTPException(400, "could not read that keyframe's size")
+    aspect = morpheus.aspect_of(w, h)
+    if aspect is None:
+        raise HTTPException(
+            409, f"that frame is {w}x{h}, which is not one of the clip aspects — "
+                 f"animating it would crop or stretch it. Render the keyframe from "
+                 f"the Clip tab so it comes out at the clip's shape.")
+    if not keyframe.approve(sid, job_id, image_checked=True):
+        raise HTTPException(409, "that frame is not the current keyframe any more")
+    return {"approved": job_id, "aspect": aspect, "width": w, "height": h}
+
+
+@app.get("/morpheus/keyframe/current")
+async def morpheus_keyframe_current(session_id: str = "default"):
+    return {"keyframe": keyframe.current(session_id)}
+
+
 @app.post("/morpheus/video")
 async def morpheus_video(request: Request, body: dict, background_tasks: BackgroundTasks):
     global _video_seq
@@ -7168,9 +7334,23 @@ async def morpheus_video(request: Request, body: dict, background_tasks: Backgro
     # request, the chat socket, device heartbeats — for the judge's duration.
     await asyncio.to_thread(_morpheus_floor_gate, positive, negative, request)
 
+    _aspect = (body.get("aspect") or morpheus.DEFAULT_CLIP_ASPECT).strip()
+    if _aspect not in morpheus.CLIP_ASPECTS:
+        raise HTTPException(400, f"unknown aspect; choose from {list(morpheus.CLIP_ASPECTS)}")
     params = {"positive": positive, "negative": negative, "preset": preset,
-              "seed": int(body.get("seed", -1))}
-    job_id = morpheus.create_job()
+              "seed": int(body.get("seed", -1)), "aspect": _aspect}
+    # NOTHING IS MINTED UNTIL THE REQUEST IS KNOWN GOOD. create_job() used to run
+    # here, above every source check, so each refusal below — an invalid id, a
+    # missing render, a floor block, a superseded keyframe — left a job sitting
+    # in state "queued" forever. Herakles reads that as a render holding the
+    # card ("Not while Morpheus render <id> (queued) is using the card"), so
+    # exercising a SAFETY refusal wedged the next render until someone cancelled
+    # the ghost by hand. Found 2026-09-27 by the keyframe end-to-end run, which
+    # refuses on purpose and then could not render anything afterwards.
+    #
+    # The id is needed only by prepare_video_source's filename, so it is created
+    # below, once there is something to prepare.
+    _resolved_src: Path | None = None
     # ── I2V sources: TWO provenances, each with its own reason to be trusted ──
     #
     #   source_job_id     an existing gallery render. Trusted because it was
@@ -7234,6 +7414,16 @@ async def morpheus_video(request: Request, body: dict, background_tasks: Backgro
                 403, "That image can't be used as the first frame of a clip.")
 
     if src_job:
+        # A keyframe-origin image may be animated ONLY while approved. This is what
+        # makes "no auto-proceed" a control rather than a UI convention: dropping a
+        # flag from the request does not help, because registration is what made
+        # the id keyframe-origin and that fact travels with the id. An ordinary
+        # gallery render returns None here and keeps its own provenance rule.
+        _kf_refusal = keyframe.refuse_reason(src_job)
+        if _kf_refusal:
+            log.warning("[keyframe] animate refused for %s — %s", src_job, _kf_refusal)
+            raise HTTPException(403, f"I can't animate that frame: {_kf_refusal}.")
+
         # I2V input-image gate: accept ONLY a real gallery-render job UUID. The
         # strict UUID shape (36 chars, hex+hyphen) forbids path separators/dots,
         # so this can never traverse out of IMAGE_DIR to animate an un-floored
@@ -7245,21 +7435,31 @@ async def morpheus_video(request: Request, body: dict, background_tasks: Backgro
             raise HTTPException(400, "invalid source_job_id")
         if not src_path.exists():
             raise HTTPException(404, "source render not found")
-        params["_comfy_image"] = await asyncio.to_thread(
-            morpheus.prepare_video_source, str(src_path), job_id)
+        _resolved_src = src_path
     elif _upload_src is not None:
         # Checked above. Same preparation as a gallery source from here on — the
         # two provenances converge once the verdict exists.
+        _resolved_src = _upload_src
+
+    # Every refusal is behind us: now the job exists.
+    job_id = morpheus.create_job()
+    if _resolved_src is not None:
         params["_comfy_image"] = await asyncio.to_thread(
-            morpheus.prepare_video_source, str(_upload_src), job_id)
+            morpheus.prepare_video_source, str(_resolved_src), job_id)
 
     _video_seq += 1
     eta = morpheus.video_eta(preset)
-    morpheus.jobs[job_id].update(kind="video", preset=preset, eta_s=eta, created_seq=_video_seq)
+    # The keyframe is linked to its clip, so the gallery can show the frame the
+    # motion was built from rather than only the motion.
+    _kf_link = src_job if (src_job and keyframe.is_keyframe(src_job)) else None
+    morpheus.jobs[job_id].update(kind="video", preset=preset, eta_s=eta,
+                                 created_seq=_video_seq, aspect=_aspect,
+                                 keyframe_job_id=_kf_link)
     background_tasks.add_task(morpheus.run_video, job_id, params)
     return {"job_id": job_id, "preset": preset, "eta_s": eta,
             "label": morpheus.VIDEO_PRESETS[preset]["label"],
             "mode": "i2v" if (src_job or src_upload) else "t2v",
+            "aspect": _aspect, "keyframe_job_id": _kf_link,
             "source": "render" if src_job else ("upload" if src_upload else None)}
 
 
@@ -7606,12 +7806,44 @@ def _amphion_duration(body: dict) -> dict:
             "bpm_supplied": bpm_supplied, "timesig_supplied": timesig_supplied}
 
 
+def _reject_bad_enum(body: dict) -> None:
+    """Refuse a COMBO value the node will reject — named, before a job exists.
+
+    Otherwise the failure arrives ~20s later as ComfyUI's "Value not in list",
+    with no field named, after the user has watched it say Composing. And
+    amphion.keyscale_for_node() would quietly substitute "C major": silently
+    conditioning a whole track on the wrong scale is worse than being told which
+    spellings exist.
+
+    Only values the caller actually SENT are checked. An absent field keeps its
+    server-side default and is not an error.
+    """
+    import difflib
+    ks = body.get("keyscale")
+    if ks not in (None, "") and amphion.normalise_keyscale(ks) is None:
+        near = difflib.get_close_matches(str(ks), amphion.node_options()["keyscale"],
+                                         n=3, cutoff=0.4)
+        raise HTTPException(400, f"Key doesn't accept {ks!r}. "
+                                 + (f"Closest: {', '.join(near)}." if near
+                                    else "Pick one of the node's keys, e.g. 'D minor'."))
+    lang = body.get("language")
+    if lang not in (None, "") and str(lang).strip().lower() \
+            not in amphion.node_options()["language"]:
+        raise HTTPException(400, f"Language doesn't accept {lang!r} — it takes "
+                                 "two-letter codes like 'en', or 'unknown'.")
+    ts = body.get("timesig")
+    if ts not in (None, "") and amphion.normalise_timesig(ts) is None:
+        raise HTTPException(400, f"Time signature doesn't accept {ts!r} — the node "
+                                 "takes 2/4, 3/4, 4/4 or 6/8.")
+
+
 @app.post("/amphion/generate")
 async def amphion_generate(request: Request, body: dict):
     tags = (body.get("tags") or "").strip()
     if not tags:
         raise HTTPException(400, "a song description is required")
     lyrics = (body.get("lyrics") or "").strip()
+    _reject_bad_enum(body)
 
     # ── Emotion — composed BEFORE both floors ─────────────────────────────────
     # Same ordering rule as Morpheus: the gates below see the FINAL tag string.
@@ -7679,6 +7911,24 @@ async def amphion_voice_delete(name: str):
     if not ok:
         raise HTTPException(404, "no such voice (built-ins can't be deleted)")
     return {"deleted": name}
+
+
+@app.get("/amphion/options")
+async def amphion_options():
+    """The COMBO values the ACE-Step node accepts, for the panel's selectors.
+
+    The panel used to render Key as a free-text box, and "d minor" (lowercase)
+    failed the whole render at ComfyUI validation — 33 wrong spellings for every
+    right one, discovered only after the user had waited for it to start. The
+    options belong to the node, so they come from the node.
+
+    `source` says whether they were read live or fell back to the pinned tables,
+    because a selector built from a stale list is a different promise from one
+    built from the running node, and the panel should be able to say which.
+    """
+    opts = await asyncio.to_thread(amphion.node_options)
+    return {"options": opts, "source": amphion.options_source(),
+            "node": amphion.NODE_CLASS}
 
 
 @app.get("/amphion/estimate")
