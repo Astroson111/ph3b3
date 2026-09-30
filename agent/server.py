@@ -2916,6 +2916,35 @@ def _now_full() -> str:
     return datetime.now(_TZ).strftime("%A, %B %-d, %Y, %-I:%M %p %Z")
 
 
+# ── Verified device identity ─────────────────────────────────────────────────
+# request.state.device is set by the auth middleware ONLY when the caller proved
+# it is that device with its own per-device key (device_auth.verify). The
+# X-Ph3b3-Device HEADER is a claim, not proof: any authed LAN client can send
+# "stackchan".
+#
+# The distinction was already understood for dio_host, which verifies a real
+# camera server before adopting an IP ("a spoofed X-Ph3b3-Device header from any
+# authed LAN client must not be able to hijack dio_host"), and for the Argus
+# heartbeat, which rejects a "stackchan" beat from any IP but the verified one.
+# It was NOT applied to the five sites below, each of which routed hardware or
+# shaped the prompt from the header alone. Audited and switched 2026-09-30.
+#
+# Labelling is deliberately left on the header: a chat-log source tag or a
+# [DBG-MIC] line names what called itself what, and mislabelling a log entry is
+# not the same class of problem as pointing a camera.
+def verified_device(request) -> str | None:
+    """The device name this turn PROVED it is, or None. Never a header claim."""
+    return getattr(getattr(request, "state", None), "device", None)
+
+
+def claimed_device(request) -> str:
+    """What the caller SAYS it is. For labels and logs only — never capability."""
+    try:
+        return request.headers.get("X-Ph3b3-Device", "") or ""
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
 async def _run_chat_pipeline(body: dict, request: Request):
     """Shared /chat brain: wake-gate → recitation → triage → inference.
 
@@ -2938,7 +2967,7 @@ async def _run_chat_pipeline(body: dict, request: Request):
         return "I won't help with that — that crosses a hard line for me."
 
     # ── Tap-to-wake (Dio / Stack-Chan) — no voice wake word; suppress her echo by content ─
-    if request.headers.get("X-Ph3b3-Device", "") == "stackchan":
+    if verified_device(request) == "stackchan":
         if _looks_like_self_echo(body.get("session_id", "default"), user_msg):
             log.info("[echo-guard] dropped self-echo: %r", user_msg)
             return None
@@ -2951,7 +2980,7 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # answer an audio-control request it cannot perform: return a deterministic,
     # spoken clarification instead — never a fabricated confirmation. Detection is
     # a loose superset of parse(); it never dispatches (dispatch stays in /transcribe).
-    if request.headers.get("X-Ph3b3-Device", "") == "iris" \
+    if verified_device(request) == "iris" \
             and device_commands.is_device_intent(user_msg):
         _clar = device_commands.clarify(user_msg)
         log.info("[device-cmd] iris near-miss (no clean parse) → clarify, LLM skipped: %r", user_msg[:60])
@@ -3122,7 +3151,9 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # the header directly here rather than moving that assignment and disturbing
     # everything between. Same value, computed earlier.
     _vision_claim = _vision_intercept(
-        user_msg, device=(request.headers.get("X-Ph3b3-Device", "") or "nyx"))
+        # Camera choice is hardware routing: an unverified caller gets the
+        # local webcam ("nyx"), never Dio's lens.
+        user_msg, device=(verified_device(request) or "nyx"))
     # ── Context manifest — what the assembled prompt WILL contain ────────────
     #
     # Triage judges answerability against a context that does not exist yet.
@@ -3476,7 +3507,9 @@ async def _run_chat_pipeline(body: dict, request: Request):
             "No preamble, no salutation."
         ),
     }
-    device = request.headers.get("X-Ph3b3-Device", "")
+    # The note tells her which body she is speaking through, so it is identity
+    # and must be proven rather than claimed.
+    device = verified_device(request) or ""
     device_note = None
     if device in _DEVICE_NOTES:
         device_note = {"role": "system", "content": _DEVICE_NOTES[device]}
@@ -4176,8 +4209,14 @@ async def transcribe_audio(request: Request, body: dict):
         # SC_DEVICE_NAME and keeps "dio" as a legacy alias, so the two sides can
         # be rolled out in either order without a broken window.
         _resp = {"text": _text, "error": result.get("error")}
-        if _device in device_auth.STACKCHAN_DEVICES and _vision_intercept(_text, device=_device) == "look":
-            _resp["camera"] = "dio" if _device == "stackchan" else _device
+        # VERIFIED identity only: this field tells a Stack-Chan to run its
+        # on-device capture loop, which is a camera firing in a room. A header
+        # claim must never reach it (audited 2026-09-30) — _device above stays
+        # header-derived because it also labels the debug lines.
+        _verified = verified_device(request)
+        if _verified in device_auth.STACKCHAN_DEVICES \
+                and _vision_intercept(_text, device=_verified) == "look":
+            _resp["camera"] = "dio" if _verified == "stackchan" else _verified
         return _resp
     finally:
         try:
