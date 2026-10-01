@@ -66,16 +66,23 @@ def test_look_up_the_weather_is_the_case_that_matters():
 
 
 # ── failure is spoken, never silent ──────────────────────────────────────────
+# Re-anchored 2026-10-01. These pinned the words "can't reach my neck" and
+# "isn't responding" — both false, since this lane moves her drawn pupils and
+# never touches a servo. The BEHAVIOUR they guard is right and unchanged:
+# failure is spoken, never silent. They now assert that the failure names the
+# TRANSPORT (Dio, unreachable) and makes no claim about a body part.
 def test_an_unknown_host_says_so_rather_than_pretending():
     out = dio_head.send("down", None)
-    assert "can't reach my neck" in out
+    assert "dio" in out.lower(), "the failure does not name who was unreachable"
     assert "address" in out
+    assert "neck" not in out.lower(), "a transport failure blamed the neck"
 
 
 def test_an_unreachable_device_says_so():
     out = dio_head.send("down", "203.0.113.1")     # TEST-NET-3, never routable
-    assert "isn't responding" in out
+    assert "couldn't reach dio" in out.lower()
     assert "rather say that than pretend" in out
+    assert "neck" not in out.lower()
 
 
 def test_every_direction_has_something_to_say():
