@@ -1,0 +1,137 @@
+"""A device that is still booting must not lose its camera for five minutes.
+
+MEASURED END TO END, 2026-10-02. The server and Dio restarted together. Her first
+check-in triggered the dio_host verification probe while her ESP32 was still
+bringing up the camera and the core-0 VAD task — her HTTP server is
+single-threaded and did not answer inside the 2 s timeout. The failure was cached
+under a FLAT 300 s cooldown, and for those five minutes:
+
+    [head] down -> I couldn't reach Dio — I don't have her address right now
+    dio_host 192.168.0.16 unverified: no camera server at :8080
+
+…while she answered that exact endpoint in 0.1 s, measured five times running:
+
+    GET :8080/cam/status -> 200 {"camera":true,"monitor":false}  in 0.09–0.26 s
+
+Both the head commands and the photos were blocked by the cached failure, not by
+anything wrong with the robot.
+
+WHAT IS KEPT. The window exists for two real reasons — don't flood the log, and
+don't let a spoofed X-Ph3b3-Device header make us probe on every request. Neither
+is given up: only the SHAPE changes. Quick retries while "still booting" is a
+plausible explanation, escalating to the original 300 s for a host that keeps
+failing. A spoofer still reaches five minutes; a rebooting robot is back in
+seconds.
+"""
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "modules"))
+
+import vision_module as vm  # noqa: E402
+
+
+class _Resp:
+    def __init__(self, code=200, text='{"camera":true}'):
+        self.status_code = code
+        self.text = text
+
+
+@pytest.fixture
+def vis(monkeypatch):
+    v = vm.VisionModule.__new__(vm.VisionModule)
+    v.dio_host = None
+    v._dio_verify_fail = {}
+    return v
+
+
+def _fail(*a, **k):
+    raise OSError("refused")
+
+
+# ── the schedule itself ──────────────────────────────────────────────────────
+def test_the_backoff_escalates_and_ends_at_the_original_window():
+    assert vm.DIO_VERIFY_BACKOFF[0] <= 5, "the first retry is not quick"
+    assert list(vm.DIO_VERIFY_BACKOFF) == sorted(vm.DIO_VERIFY_BACKOFF), \
+        "the backoff is not monotonic"
+    assert vm.DIO_VERIFY_BACKOFF[-1] == vm.DIO_VERIFY_COOLDOWN, \
+        "a persistently failing host no longer settles at the original cooldown"
+
+
+# ── the bug, inverted ────────────────────────────────────────────────────────
+def test_a_booting_device_is_retried_within_seconds(vis, monkeypatch):
+    """THE REGRESSION. One failed probe must not cost five minutes."""
+    monkeypatch.setattr(vm.requests, "get", _fail)
+    assert vis.try_set_dio_host("10.0.0.5") is False
+
+    # it answers a moment later, as a booted device does.
+    # NOTE: capture the real clock BEFORE patching — a lambda that calls
+    # time.time() after the patch calls itself.
+    _now = time.time()
+    monkeypatch.setattr(vm.requests, "get", lambda *a, **k: _Resp())
+    monkeypatch.setattr(vm.time, "time",
+                        lambda: _now + vm.DIO_VERIFY_BACKOFF[0] + 0.1)
+    assert vis.try_set_dio_host("10.0.0.5") is True
+    assert vis.dio_host == "10.0.0.5"
+
+
+def test_an_immediate_reprobe_is_still_refused(vis, monkeypatch):
+    """The flood guard survives: back-to-back requests do not each probe."""
+    monkeypatch.setattr(vm.requests, "get", _fail)
+    assert vis.try_set_dio_host("10.0.0.5") is False
+    calls = []
+    monkeypatch.setattr(vm.requests, "get",
+                        lambda *a, **k: calls.append(1) or _Resp())
+    assert vis.try_set_dio_host("10.0.0.5") is False, "re-probed with no wait"
+    assert not calls, "the probe ran inside the backoff window"
+
+
+def test_a_persistently_absent_host_reaches_the_long_window(vis, monkeypatch):
+    """A spoofer gets the original five-minute treatment, just not immediately."""
+    monkeypatch.setattr(vm.requests, "get", _fail)
+    base = time.time()
+    for i in range(len(vm.DIO_VERIFY_BACKOFF) + 2):
+        monkeypatch.setattr(vm.time, "time", lambda: base + i * 10000)
+        vis.try_set_dio_host("10.0.0.9")
+    _last, strikes = vis._dio_verify_fail["10.0.0.9"]
+    wait = vm.DIO_VERIFY_BACKOFF[min(strikes, len(vm.DIO_VERIFY_BACKOFF) - 1)]
+    assert wait == vm.DIO_VERIFY_COOLDOWN, \
+        f"a repeatedly failing host settled at {wait}s, not the full cooldown"
+
+
+def test_success_clears_the_strikes(vis, monkeypatch):
+    monkeypatch.setattr(vm.requests, "get", _fail)
+    vis.try_set_dio_host("10.0.0.5")
+    assert "10.0.0.5" in vis._dio_verify_fail
+    _now = time.time()
+    monkeypatch.setattr(vm.requests, "get", lambda *a, **k: _Resp())
+    monkeypatch.setattr(vm.time, "time", lambda: _now + 99)
+    assert vis.try_set_dio_host("10.0.0.5") is True
+    assert "10.0.0.5" not in vis._dio_verify_fail, "strikes survived a success"
+
+
+# ── the verification itself is unchanged ─────────────────────────────────────
+def test_a_host_that_is_not_her_camera_is_still_refused(vis, monkeypatch):
+    """The spoof guard is the point of this function and must not soften."""
+    monkeypatch.setattr(vm.requests, "get",
+                        lambda *a, **k: _Resp(200, "hello, I am a web server"))
+    assert vis.try_set_dio_host("10.0.0.7") is False
+    assert vis.dio_host is None
+
+
+def test_a_non_200_is_refused(vis, monkeypatch):
+    monkeypatch.setattr(vm.requests, "get", lambda *a, **k: _Resp(404, "camera"))
+    assert vis.try_set_dio_host("10.0.0.7") is False
+
+
+def test_the_same_host_is_not_reprobed_once_adopted(vis, monkeypatch):
+    vis.dio_host = "10.0.0.5"
+    calls = []
+    monkeypatch.setattr(vm.requests, "get",
+                        lambda *a, **k: calls.append(1) or _Resp())
+    assert vis.try_set_dio_host("10.0.0.5") is False
+    assert not calls

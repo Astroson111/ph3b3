@@ -60,6 +60,11 @@ PUSH_FRESH_S = float(os.getenv("PH3B3_PUSH_FRESH_S", "8"))
 # fine), it re-probes AND re-logs on every request — a flood. After a failed verify
 # for a host, skip re-probing/re-logging it for this window.
 DIO_VERIFY_COOLDOWN = float(os.getenv("PH3B3_DIO_VERIFY_COOLDOWN", "300"))
+# Seconds to wait before re-probing, indexed by consecutive failures. The first
+# few are short because the overwhelmingly likely cause of an early failure is a
+# device still booting; the tail is the original flat cooldown, which is what a
+# genuinely absent or spoofed host settles into.
+DIO_VERIFY_BACKOFF = (2.0, 5.0, 15.0, 60.0, DIO_VERIFY_COOLDOWN)
 
 
 def _audit(event: str, ok: bool, source: str = "-", reason: str = "-",
@@ -198,7 +203,7 @@ class VisionModule:
         self._latest_jpeg = None          # bytes of the most recent frame Dio POSTed
         self._latest_ts   = 0.0
         self._latest_src  = None          # 'stackchan' | 'webcam' — origin of _latest_jpeg
-        self._dio_verify_fail = {}        # host -> last failed-verify ts (dio_host probe backoff)
+        self._dio_verify_fail = {}        # host -> (last_fail_ts, consecutive_strikes)
         self._frame_event = threading.Event()
         self._cam_lock    = threading.Lock()   # serialize webcam grabs (V4L2 is single-open)
         self.baseline_jpeg = None         # baseline frame for ghost-hunt anomaly checks
@@ -216,13 +221,37 @@ class VisionModule:
         control endpoint (:{DIO_CAM_PORT}/cam/status). All devices share one
         Basic-auth cred, so a spoofed X-Ph3b3-Device header from any authed LAN
         client must not be able to hijack dio_host. A verification ping needs no
-        firmware change (a per-device token would be the stronger future fix)."""
+        firmware change (a per-device token would be the stronger future fix).
+
+        ESCALATING BACKOFF, not a flat lockout (2026-10-02). The cooldown was a
+        flat 300 s, and that produced a cold-start trap measured end to end:
+
+          * server restarts; Dio reboots at the same time
+          * her first check-in triggers a probe while her ESP32 is still bringing
+            up the camera and the core-0 VAD task — her HTTP server is
+            single-threaded and does not answer inside the 2 s timeout
+          * the failure is cached for FIVE MINUTES, during which every head
+            command says "I couldn't reach Dio" and every photo fails
+          * meanwhile she answers /cam/status in 0.1 s, measured repeatedly
+
+        A device that is merely still booting should not lose its camera and its
+        neck for five minutes. But the flat window existed for two real reasons —
+        don't flood the log, and don't let a spoofer make us probe on every
+        request — so the window is kept and only its SHAPE changes: quick retries
+        while a boot could plausibly explain it, escalating to the original 300 s
+        for a host that keeps failing. A spoofer still ends up at five minutes;
+        a rebooting robot is back within seconds.
+        """
         if not host or host == self.dio_host:
             return False
-        # Backoff: a host that recently failed verification isn't re-probed or
-        # re-logged until the cooldown passes — this is what silences the flood.
         now = time.time()
-        if now - self._dio_verify_fail.get(host, 0.0) < DIO_VERIFY_COOLDOWN:
+        last, strikes = self._dio_verify_fail.get(host, (0.0, 0))
+        # Indexed by failures SO FAR, so the first retry is the first entry:
+        # one failure -> BACKOFF[0]. Indexing by `strikes` directly made the
+        # first retry the SECOND entry, which is the kind of off-by-one that
+        # quietly doubles an outage.
+        wait = DIO_VERIFY_BACKOFF[min(max(strikes - 1, 0), len(DIO_VERIFY_BACKOFF) - 1)]
+        if now - last < wait:
             return False
         try:
             r = requests.get(f"http://{host}:{DIO_CAM_PORT}/cam/status", timeout=2)
@@ -234,12 +263,17 @@ class VisionModule:
             self._dio_verify_fail.pop(host, None)
             log.info(f"Dio camera host → {host} (verified via /cam/status)")
             return True
-        self._dio_verify_fail[host] = now
-        # Logged at most once per cooldown window (not on every request). Not
-        # necessarily a spoof: her push path is authenticated and works without
-        # dio_host; this only gates the legacy :8080 pull/monitor fallback.
-        log.warning(f"dio_host {host} unverified: no camera server at :{DIO_CAM_PORT} "
-                    f"(legacy pull disabled for it; push path unaffected)")
+        self._dio_verify_fail[host] = (now, strikes + 1)
+        nxt = DIO_VERIFY_BACKOFF[min(strikes, len(DIO_VERIFY_BACKOFF) - 1)]
+        # Logged on the FIRST failure and then only as the window escalates, so a
+        # flapping host cannot flood. Not necessarily a spoof: her push path is
+        # authenticated and works without dio_host; this only gates the legacy
+        # :8080 pull/monitor fallback.
+        if strikes == 0 or nxt != wait:
+            log.warning(f"dio_host {host} unverified: no camera server at "
+                        f":{DIO_CAM_PORT} (attempt {strikes + 1}, retrying in "
+                        f"{nxt:.0f}s; legacy pull disabled for it, push path "
+                        f"unaffected)")
         return False
 
     # ── inbound frame from Dio (POST /vision/frame) ───────────────────────────
