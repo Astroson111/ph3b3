@@ -65,6 +65,17 @@ DIO_VERIFY_COOLDOWN = float(os.getenv("PH3B3_DIO_VERIFY_COOLDOWN", "300"))
 # device still booting; the tail is the original flat cooldown, which is what a
 # genuinely absent or spoofed host settles into.
 DIO_VERIFY_BACKOFF = (2.0, 5.0, 15.0, 60.0, DIO_VERIFY_COOLDOWN)
+# Probe read-timeout. MEASURED on Dio 2026-10-02, twelve consecutive probes:
+# eleven answered in 0.06-0.29 s and one took 3.50 s. Her ESP32 HTTP server is
+# single-threaded and shares the chip with the camera and the core-0 VAD task, so
+# it stalls under load. At the old 2 s this failed about one probe in twelve —
+# and disproportionately the FIRST one after a joint restart, when she is
+# busiest booting, which is exactly when the result matters most.
+#
+# 6 s leaves clear headroom over the observed 3.5 s worst case without being
+# unbounded. The probe runs off-thread (asyncio.to_thread), so a slow answer
+# costs nothing but the probe itself.
+DIO_VERIFY_TIMEOUT = float(os.getenv("PH3B3_DIO_VERIFY_TIMEOUT", "6"))
 
 
 def _audit(event: str, ok: bool, source: str = "-", reason: str = "-",
@@ -254,7 +265,8 @@ class VisionModule:
         if now - last < wait:
             return False
         try:
-            r = requests.get(f"http://{host}:{DIO_CAM_PORT}/cam/status", timeout=2)
+            r = requests.get(f"http://{host}:{DIO_CAM_PORT}/cam/status",
+                             timeout=DIO_VERIFY_TIMEOUT)
             ok = (r.status_code == 200 and "camera" in r.text)
         except Exception:
             ok = False

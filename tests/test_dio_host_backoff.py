@@ -135,3 +135,32 @@ def test_the_same_host_is_not_reprobed_once_adopted(vis, monkeypatch):
                         lambda *a, **k: calls.append(1) or _Resp())
     assert vis.try_set_dio_host("10.0.0.5") is False
     assert not calls
+
+
+# ── the probe timeout, which is what actually failed ─────────────────────────
+# The backoff turned a five-minute outage into seconds, but the probe was still
+# FAILING. Measured on Dio 2026-10-02, twelve consecutive probes: eleven answered
+# in 0.06-0.29 s, one took 3.50 s. Her ESP32 HTTP server is single-threaded and
+# shares the chip with the camera and the core-0 VAD task. At a 2 s timeout that
+# is roughly one spurious failure in twelve — concentrated on the first probe
+# after a joint restart, when she is busiest and the answer matters most.
+def test_the_probe_timeout_clears_the_measured_worst_case():
+    assert vm.DIO_VERIFY_TIMEOUT >= 5.0, (
+        f"probe timeout is {vm.DIO_VERIFY_TIMEOUT}s; Dio was measured at 3.50s "
+        "under load, and 2s was failing ~8% of probes")
+
+
+def test_the_probe_timeout_is_still_bounded():
+    """Not unbounded: a genuinely dead host must fail, not hang the backoff."""
+    assert vm.DIO_VERIFY_TIMEOUT <= 15.0
+
+
+def test_the_probe_actually_uses_the_constant(vis, monkeypatch):
+    seen = {}
+    def _get(url, timeout=None, **k):
+        seen["timeout"] = timeout
+        return _Resp()
+    monkeypatch.setattr(vm.requests, "get", _get)
+    vis.try_set_dio_host("10.0.0.5")
+    assert seen["timeout"] == vm.DIO_VERIFY_TIMEOUT, \
+        "the probe hardcodes a timeout instead of reading the constant"
