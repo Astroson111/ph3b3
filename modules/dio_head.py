@@ -51,12 +51,31 @@ TIMEOUT = 4.0
 
 # The message must BE the command. "can you look down please" yes;
 # "look up the weather" no; "I looked down at my shoes" no.
+# VERBS, widened 2026-10-02. The list was look/turn/tilt/point, and the first
+# thing actually said to her on the bench was "Phoebe, can you move your head
+# down?" — which parsed as nothing, went to the model as ordinary conversation,
+# and produced a speaking-gaze motion that read as the robot ignoring the order.
+# "move" is the obvious word for a thing that moves; so are lower/raise/drop/lift.
+#
+# Widening a COMMAND vocabulary is not free — every verb added is a turn that can
+# no longer be ordinary conversation — so the anchoring stays strict: the message
+# must BE the command end to end, which is what keeps "look up the weather" and
+# "I moved my head" out of it.
 _CMD_RE = re.compile(
     r"^\s*(?:hey\s+|ok\s+)?(?:ph3b3|phoebe|dio)?[,\s]*"
-    r"(?:can|could|would)?\s*(?:you\s+)?(?:please\s+)?"
-    r"(?:look|turn|tilt|point)(?:\s+your\s+head)?\s+"
-    r"(?P<dir>up|down|left|right|upward|downward|forward|ahead)"
+    r"(?:can|could|would|will)?\s*(?:you\s+)?(?:please\s+)?"
+    r"(?:look|turn|tilt|point|move|aim|face)(?:\s+your\s+(?:head|neck))?\s+"
+    r"(?P<dir>up|down|left|right|upward|downward|upwards|downwards|forward|ahead)"
+    r"\s*(?:please|for\s+me|now|a\s+bit|a\s+little)?[.!?]*\s*$"
+    # "lower/raise your head" — the verb carries the direction, so no dir group.
+    r"|^\s*(?:hey\s+|ok\s+)?(?:ph3b3|phoebe|dio)?[,\s]*"
+    r"(?:can|could|would|will)?\s*(?:you\s+)?(?:please\s+)?"
+    r"(?P<vdir>lower|drop|bow|raise|lift)\s+(?:your\s+)?(?:head|neck)"
     r"\s*(?:please|for\s+me|now|a\s+bit|a\s+little)?[.!?]*\s*$", re.I)
+
+# Verbs that mean a direction by themselves.
+_VERB_DIRS = {"lower": "down", "drop": "down", "bow": "down",
+              "raise": "up", "lift": "up"}
 
 _CENTER_RE = re.compile(
     r"^\s*(?:hey\s+|ok\s+)?(?:ph3b3|phoebe|dio)?[,\s]*"
@@ -81,7 +100,12 @@ def parse(text: str) -> str | None:
     if _CENTER_RE.match(text):
         return "center"
     m = _CMD_RE.match(text)
-    return _DIRS.get(m.group("dir").lower()) if m else None
+    if not m:
+        return None
+    if m.group("dir"):
+        return _DIRS.get(m.group("dir").lower())
+    vd = m.group("vdir")
+    return _VERB_DIRS.get(vd.lower()) if vd else None
 
 
 def send(cmd: str, host: str | None) -> str:

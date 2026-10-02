@@ -102,3 +102,53 @@ def test_the_server_uses_the_verified_dio_host():
     i = src.index("_head_reply = dio_head.send(")
     assert 'vision, "dio_host"' in src[i:i + 200], \
         "the command is not addressed to the host vision actually verified"
+
+
+# ── the verbs people actually use ────────────────────────────────────────────
+# Widened 2026-10-02. The list was look/turn/tilt/point, and the first thing
+# actually said to her on the bench was "Phoebe, can you move your head down?" —
+# which parsed as nothing, fell through to the model as ordinary conversation,
+# and produced a speaking-gaze motion that read as the robot ignoring the order.
+# "move" is the obvious word for a thing that moves.
+COMMANDS = [
+    ("Phoebe, can you move your head down?", "down"),   # the bench phrasing
+    ("move your head left", "left"),
+    ("move your head up", "up"),
+    ("aim your head right", "right"),
+    ("lower your head", "down"),      # verb carries the direction
+    ("drop your head", "down"),
+    ("bow your head", "down"),
+    ("raise your head", "up"),
+    ("lift your head", "up"),
+    ("face forward", "center"),
+    ("look down", "down"),            # the originals must still work
+    ("turn your head down", "down"),
+    ("tilt your head up", "up"),
+    ("point right", "right"),
+]
+
+
+@pytest.mark.parametrize("text,want", COMMANDS)
+def test_the_verbs_people_use_are_commands(text, want):
+    assert dio_head.parse(text) == want, f"{text!r} did not parse as {want!r}"
+
+
+# Widening a COMMAND vocabulary is not free: every verb added is a turn that can
+# no longer be ordinary conversation. These are the ones that must stay
+# conversation, and the strict whole-message anchoring is what keeps them out.
+NOT_COMMANDS = [
+    "look up the weather",
+    "can you look up that address",
+    "I moved my head down",
+    "she lowered her head in the story",
+    "move the file down",
+    "what does it look like",
+    "raise your voice",
+    "tell me about moving house",
+]
+
+
+@pytest.mark.parametrize("text", NOT_COMMANDS)
+def test_ordinary_conversation_is_not_a_head_command(text):
+    assert dio_head.parse(text) is None, \
+        f"{text!r} was swallowed as a head command — a widened verb list leaked"
