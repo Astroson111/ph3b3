@@ -1,22 +1,25 @@
-"""dio_head.py — "look down" moves Dio's EYES, deterministically.
+"""dio_head.py — "look down" moves Dio's eyes AND her neck, deterministically.
 
-WHAT THIS DOES TODAY, corrected 2026-10-01. The device end of this lane calls
-face.setGaze(yaw, pitch), and setGaze stores into _gazeYaw/_gazePitch, which are
-consumed at ph3b3_face.h:208 as `gTX = _gazeYaw * EIR * 0.40f` — EIR is the eye
-iris radius, so those are PUPIL DRAWING COORDINATES. "Look down" moves her drawn
-eyes within their sockets on the screen. HER NECK DOES NOT MOVE.
+WHAT THIS DOES TODAY, verified on the bench 2026-10-02: the eyes lead via
+face.setGaze and the NECK FOLLOWS via M5StackChan.Motion.moveX/moveY. The head
+physically turns. Confirmed by watching the robot, which is the only authority
+that counts here.
 
-NECK CONTROL IS NOT IMPLEMENTED. The servo API exists and her firmware already
-uses it in gentleHome()/safeHome() — M5StackChan.Motion.moveX/moveY, with
-isXMoving/isYMoving to wait and setTorqueEnabled to detach — but nothing on this
-lane calls it. Wiring the neck is its own brief, blocked on a bench session that
-first establishes the servos move at all.
+THE HISTORY, kept because it cost a week. This file once claimed "look down
+reaches her neck" while the device end called ONLY face.setGaze — which drives
+her drawn pupils (ph3b3_face.h:208, gTX = _gazeYaw * EIR), not a servo. It
+compiled, it unit-tested green, and her neck never moved: a function name is not
+evidence of what it does. On 2026-10-01 the strings were corrected to describe
+the eyes and an explicit neck request was refused honestly. On 2026-10-02 the
+firmware was rewritten onto the servos and verified moving, so the refusal became
+the false statement and was removed in turn.
 
-This file said "reaches her neck" for a week, in six places, three of them
-sentences she says out loud. It compiled, it unit-tested green, and it was
-wrong: a function name is not evidence of what it does. The strings below now
-describe the eyes, and a turn that explicitly asks for her HEAD or NECK gets
-told plainly that it is not wired up.
+Both corrections were right when made. The rule they share is that these strings
+describe what the hardware does TODAY, and they change when it does.
+
+Every target is an OFFSET FROM HER SAVED HOME POSE, set on her own screen under
+Settings -> Head Position, so "look down" means the same gesture wherever she is
+mounted and "centre" returns to the angle her room needs.
 
 Dio's head could not be commanded at all. Every Motion call in her firmware was
 internal (idle wander, listening poses, boot homing); the only server->device
@@ -70,25 +73,6 @@ _DIRS = {"up": "up", "upward": "up", "down": "down", "downward": "down",
 _SAID = {"down": "Looking down.", "up": "Looking up.",
          "left": "Looking left.", "right": "Looking right.",
          "center": "Back to centre."}
-
-# An explicit ask for the HEAD or the NECK is a different request from "look
-# down", and it is one this box cannot do. Answering it with a gaze shift would
-# be the quiet lie this file was just corrected for: she would say "Looking
-# down" and her head would not move, in front of someone watching the robot.
-_NECK_RE = re.compile(r"\b(?:neck|head)\b", re.I)
-
-NECK_NOT_WIRED = ("I can move my eyes, but my neck isn't wired up yet — "
-                  "I'd be looking down without turning my head.")
-
-
-def asks_for_neck(text: str) -> bool:
-    """Did this turn name her head or neck specifically?
-
-    Only consulted for messages that ARE a look command (parse() already said
-    so), so "the head of the department" is never reached by it.
-    """
-    return bool(text and _NECK_RE.search(text))
-
 
 def parse(text: str) -> str | None:
     """The command this message IS, or None. Pure text, no side effects."""

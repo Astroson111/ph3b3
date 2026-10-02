@@ -234,7 +234,7 @@ if triage_mod is not None:
     triage_mod.named_resolver = _triage_named_resolver
 import story_intent             # invention vs retell, one reader for both
 import absent_artifact           # "the file I sent you" when no file was ever sent
-import dio_head                  # "look down" moves Dio's EYES (gaze); neck not wired yet
+import dio_head                  # "look down" — eyes lead, neck follows (verified 2026-10-02)
 
 # ── Dio state telemetry (UDP) ────────────────────────────────────────────────
 # Dio's serial is dead, so its state machine is invisible on-device. It fires
@@ -3084,17 +3084,11 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # message IS the command — anchored to the whole message, so "look up the
     # weather" stays a search.
     #
-    # WHAT IT ACTUALLY MOVES (corrected 2026-10-01): the device end calls
-    # face.setGaze, which drives her drawn PUPILS, not her servos. A turn that
-    # names her head or neck is therefore refused honestly rather than answered
-    # with a gaze shift — saying "Looking down" while the head stays still is the
-    # lie this correction exists to remove.
+    # WHAT IT MOVES (verified on the bench 2026-10-02): eyes lead via setGaze and
+    # the NECK FOLLOWS via Motion.moveX/moveY. The head physically turns, and
+    # targets are offsets from her saved home pose, so the gesture means the same
+    # thing wherever she is mounted.
     _head_cmd = dio_head.parse(user_msg)
-    if _head_cmd and dio_head.asks_for_neck(user_msg):
-        log.info("[head] neck named but not wired — answered honestly")
-        session.add("user", user_msg)
-        session.add("assistant", dio_head.NECK_NOT_WIRED)
-        return dio_head.NECK_NOT_WIRED
     if _head_cmd:
         _head_reply = dio_head.send(_head_cmd, getattr(vision, "dio_host", None))
         log.info("[head] %s -> %s", _head_cmd, _head_reply[:60])
