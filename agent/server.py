@@ -237,6 +237,7 @@ from vad_turns import END_CAP, END_VADEND                 # per-turn VAD diagnos
 import camera_module          # webcam pan/tilt/zoom (UVC v4l2); master switch, default OFF
 import apelles                   # photo editor — edits only, never generates (ruling A)
 import audio_monitor             # Silero VAD endpointing + level meter (chat cutoff / ghost readout)
+import no_access                             # capability refusal + credential guard
 import sandbox                               # reserved __smoke__ sessions
 import triage as _triage_mod                 # module handle: set_self_vocabulary()
 from triage import (triage_gate, gate_enabled, manifest_enabled,   # clarification guard
@@ -3431,6 +3432,20 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # the NECK FOLLOWS via Motion.moveX/moveY. The head physically turns, and
     # targets are offsets from her saved home pose, so the gesture means the same
     # thing wherever she is mounted.
+    # LAYER A — an ask she cannot perform is refused, never held.
+    #
+    # Measured 2026-10-03: "read my email" reached triage, which held it and
+    # asked the Captain to "provide the username and password for your email
+    # account". A hold asks the user to supply something; when she has no path
+    # to the thing at all there is nothing to supply, so holding can only
+    # produce a question that should never be asked.
+    _no = no_access.cannot_perform(user_msg)
+    if _no:
+        log.info("[no_access] refused an ask with no path: %r", user_msg[:60])
+        session.add("user", user_msg)
+        session.add("assistant", _no)
+        return _no
+
     _head_cmd = dio_head.parse(user_msg)
     if _head_cmd:
         if _head_take_prefired(verified_device(request), _head_cmd):
@@ -4062,6 +4077,10 @@ async def chat_endpoint(body: dict, request: Request):
         reply = await _run_chat_pipeline(body, request)
     finally:
         sandbox.leave(_sbx)
+    # LAYER B — on COMPOSED OUTPUT, whatever produced it: a clarifying question,
+    # the model, a lane or a tool result. No reply may ask for a credential.
+    # Fails closed: an error inside the check replaces the reply.
+    reply = no_access.guard_reply(reply)
     if reply is None:
         return {"response": "", "audio": ""}
     _LAST_REPLY[body.get("session_id", "default")] = reply   # echo-guard memory
@@ -4202,6 +4221,10 @@ async def chat_stream_endpoint(body: dict, request: Request):
         reply = await _run_chat_pipeline(body, request)
     finally:
         sandbox.leave(_sbx)
+    # LAYER B — on COMPOSED OUTPUT, whatever produced it: a clarifying question,
+    # the model, a lane or a tool result. No reply may ask for a credential.
+    # Fails closed: an error inside the check replaces the reply.
+    reply = no_access.guard_reply(reply)
     if not reply:
         return {"response": "", "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}
