@@ -23,6 +23,8 @@ Guarantees enforced here:
     no-op that looks like the camera ignored her.
 """
 import json
+
+import sandbox
 import logging
 import re
 import subprocess
@@ -153,6 +155,9 @@ def move(pan: int | None = None, tilt: int | None = None,
     caller asking to pan further than possible gets the edge of travel and is
     told what it actually became — never a silent no-op.
     """
+    # SANDBOX: pan/tilt/zoom moves a physical webcam in the room.
+    if sandbox.suppress("move camera", f"pan={pan} tilt={tilt} zoom={zoom}"):
+        return status()
     if not enabled():
         raise CameraOff("camera control is off — enable it in the Status tab")
     dev = _device()

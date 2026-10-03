@@ -39,6 +39,29 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import sqlite_vec
+
+# sandbox lives in modules/; this file is imported both with modules/ on the
+# path (the server) and without it (conftest, standalone). Same dual-import
+# shape thoth.reader uses for paths. NOT wrapped in a bare except: a missing
+# sandbox must be a loud ImportError, because the alternative is a guard that
+# silently is not there.
+try:
+    import sandbox
+except ModuleNotFoundError:                            # pragma: no cover
+    # server.py imports THIS FILE at line 34, before it adds modules/ to
+    # sys.path, and the service runs with neither the repo root nor modules/ on
+    # the path. `from modules import sandbox` fails for the same reason. So the
+    # path is resolved from __file__ — the only thing that is true regardless of
+    # cwd, import order, or who imported us.
+    #
+    # This broke the service on 2026-10-03: both branches raised
+    # ModuleNotFoundError and ph3b3 sat in an auto-restart loop. Not wrapped in
+    # a bare except, then or now: a missing sandbox must be a loud failure,
+    # because the alternative is a guard that silently is not there.
+    import pathlib as _pl
+    import sys as _sys
+    _sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "modules"))
+    import sandbox
 from sentence_transformers import SentenceTransformer
 
 log = logging.getLogger("ph3b3.memory_spine")
@@ -177,6 +200,12 @@ class MemorySpine:
                  role: str = "user", kind: str = "conversation",
                  metadata: dict | None = None) -> str:
         """Store a memory and return its id immediately. The embedding + vector
+        # SANDBOX: a smoke battery must leave nothing in her memory.
+        # Checked against the context flag AND the session id, because a
+        # write can be queued from a thread that lost the context.
+        if sandbox.active() or sandbox.is_smoke_session(session_id):
+            sandbox.would("remember", (text or "")[:120])
+            return ""
         insert are queued on the background worker, so the caller never waits on
         the model. The memory is recallable within moments (once the embed lands).
         """

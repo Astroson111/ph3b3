@@ -237,6 +237,8 @@ from vad_turns import END_CAP, END_VADEND                 # per-turn VAD diagnos
 import camera_module          # webcam pan/tilt/zoom (UVC v4l2); master switch, default OFF
 import apelles                   # photo editor — edits only, never generates (ruling A)
 import audio_monitor             # Silero VAD endpointing + level meter (chat cutoff / ghost readout)
+import sandbox                               # reserved __smoke__ sessions
+import triage as _triage_mod                 # module handle: set_self_vocabulary()
 from triage import (triage_gate, gate_enabled, manifest_enabled,   # clarification guard
                     is_phatic)                                    # ...and what never needs one
 import context_manifest          # tells that guard what assembly will add to the context
@@ -382,6 +384,15 @@ async def lifespan(app):
             first = False
             time.sleep(300)                            # matches heartbeat_s in the contract
     threading.Thread(target=_thoth_index_watch, daemon=True).start()
+
+    # Triage tier 0b vocabulary, derived here because this is where the registry
+    # and the self-block both live. Pushed in rather than imported the other way
+    # round: modules/triage.py must not import the server.
+    try:
+        _triage_mod.set_self_vocabulary(_self_vocabulary())
+    except Exception as e:                                     # noqa: BLE001
+        log.warning("[triage] self vocabulary not set (%s) — tier 0b falls back "
+                    "to structural nouns only", e)
 
     async def _edit_scratch_janitor():
         # Bound edit-mode scratch to the TTL even when no new uploads arrive.
@@ -872,6 +883,36 @@ def _load_devices() -> dict:
     except Exception as e:                                     # noqa: BLE001
         log.warning("[devices] registry unreadable (%s) — fleet block omitted", e)
         return {}
+
+
+def _self_vocabulary() -> set[str]:
+    """Words that name something of HERS, for triage tier 0b.
+
+    DERIVED, never hand-kept: the device registry (labels, keys, and the words
+    of each role and hardware string) plus the self-knowledge block's own topic
+    lines. Those topics exist to say what she knows about herself, which makes
+    them the right source for what counts as her. A second hand-maintained list
+    would drift from the registry inside a week.
+    """
+    words: set[str] = set()
+    reg = _load_devices()
+    for key, d in (reg.get("devices") or {}).items():
+        for part in (key, d.get("label"), d.get("role"), d.get("hardware")):
+            for w in re.findall(r"[a-z0-9']+", str(part or "").lower()):
+                words.add(w)
+    for n in device_auth.KNOWN_DEVICES:
+        words.add(str(n).lower())
+    for b in (reg.get("_background") or []):
+        for w in re.findall(r"[a-z0-9']+", str(b.get("fact", "")).lower()):
+            words.add(w)
+    try:
+        for _key, topics, _sys, _her in _self_knowledge_sections():
+            for t in topics or ():
+                for w in re.findall(r"[a-z0-9']+", str(t).lower()):
+                    words.add(w)
+    except Exception as e:                                     # noqa: BLE001
+        log.warning("[triage] self-block topics unavailable for vocabulary: %s", e)
+    return words
 
 
 def unregistered_devices() -> list[str]:
@@ -3294,6 +3335,21 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # "The Gospel of John?" -> "yes" has to mean the gospel and nothing else, so
     # it is consumed here before any other interpretation of a bare yes.
     _sid = body.get("session_id", "default")
+    # SANDBOX. A session id with the reserved __smoke__ prefix runs every lane
+    # end to end and fires NO actuator: no speech, no head motion, no camera, no
+    # memory write. Entered here, at the top of the pipeline, so the flag rides
+    # the request context into every actuator — including the ones reached
+    # through asyncio.to_thread, which copies contextvars.
+    #
+    # Same reserved-prefix pattern as __argus_probe__. Enforced AT the actuators
+    # (tts, dio_head, vision, memory_spine) rather than per lane, so a lane added
+    # later cannot forget it.
+    if sandbox.active():
+        log.warning("[sandbox] session %s — actuators suppressed for this turn", _sid)
+    # Every turn says what it was, with its session. Additive, no behaviour
+    # change — it makes an API turn as traceable as a voice one.
+    log.info("[turn] sid=%s src=%s text=%r", _sid,
+             body.get("device") or "api", (body.get("message") or "")[:160])
     _pending = _THOTH_CONFIRM.pop(_sid, None)
     if _pending:
         _chosen = thoth_svc.intent.confirm_answer(user_msg, _pending)
@@ -3554,7 +3610,14 @@ async def _run_chat_pipeline(body: dict, request: Request):
                                           manifest=_manifest))
     if not _triage.answerable:
         _q = _triage.question or "I don't have enough to go on yet — can you give me a bit more detail?"
-        log.info("TRIAGE_HOLD — missing=%s", _triage.missing or [])
+        # The TURN IS ON THE SAME LINE on purpose. Voice turns log a transcript
+        # and API turns logged nothing, so pairing a hold to its question meant
+        # reading backwards for the nearest transcript — which silently carries
+        # a STALE transcript across every API turn in between. It did exactly
+        # that on 2026-10-03: sixteen holds attributed to one unrelated voice
+        # line. A log you have to correlate is one that gets correlated wrongly.
+        log.info("TRIAGE_HOLD — missing=%s turn=%r",
+                 _triage.missing or [], user_msg[:160])
         session.add("user", user_msg)
         session.add("assistant", _q)
         return _q
@@ -3990,7 +4053,15 @@ async def vision_frame(request: Request):
 async def chat_endpoint(body: dict, request: Request):
     # Response shape is FROZEN: {response, audio} with the WHOLE reply as one WAV.
     # Iris + web UI depend on this — do not change. Chunked delivery is /chat/stream.
-    reply = await _run_chat_pipeline(body, request)
+    # SANDBOX entered HERE, not inside the pipeline: the pipeline returns from
+    # a dozen places and a contextvar that is set without being reset is a flag
+    # that can outlive its request. A leaked sandbox flag would silence a REAL
+    # conversation, which is a far worse failure than the one it prevents.
+    _sbx = sandbox.enter(body.get("session_id") or "default")
+    try:
+        reply = await _run_chat_pipeline(body, request)
+    finally:
+        sandbox.leave(_sbx)
     if reply is None:
         return {"response": "", "audio": ""}
     _LAST_REPLY[body.get("session_id", "default")] = reply   # echo-guard memory
@@ -4017,15 +4088,22 @@ def _tts_stream_gc(now):
     for k in [k for k, v in _TTS_STREAMS.items() if now - v["ts"] > _TTS_STREAM_TTL]:
         _TTS_STREAMS.pop(k, None)
 
-def _tts_stream_new(chunks, voice=None, pace=None, silence=None):
+def _tts_stream_new(chunks, voice=None, pace=None, silence=None,
+                    sandboxed: bool | None = None):
     now = time.monotonic()
     _tts_stream_gc(now)
     sid = uuid.uuid4().hex[:12]
     # Pace is fixed for the WHOLE reply, captured here rather than read per
     # chunk. If the emotion changed mid-sentence the back half would speed up
     # against the front half, which reads as a fault rather than a feeling.
+    # SANDBOX TRAVELS WITH THE STREAM. /tts/chunk/{sid}/{n} is a SEPARATE
+    # request carrying no session id, so a contextvar cannot reach it — the only
+    # place the sandbox fact survives the gap is the stream record itself.
+    # Captured at creation, when the session IS known.
     _TTS_STREAMS[sid] = {"chunks": chunks, "audio": {}, "ts": now,
-                         "voice": voice, "pace": pace, "silence": silence}
+                         "voice": voice, "pace": pace, "silence": silence,
+                         "sandbox": bool(sandbox.active() if sandboxed is None
+                                         else sandboxed)}
     return sid
 
 async def _tts_synth_into(st, n):
@@ -4106,7 +4184,24 @@ async def chat_stream_endpoint(body: dict, request: Request):
     """Chunked-TTS variant of /chat — same brain via _run_chat_pipeline, but
     returns a manifest + chunk 0 instead of one monolithic WAV. Wake-gate drop
     is preserved (empty manifest, no synthesis)."""
-    reply = await _run_chat_pipeline(body, request)
+    # SANDBOX, CHECKED EXPLICITLY FROM THE SESSION ID — not from the contextvar.
+    #
+    # The contextvar is entered around _run_chat_pipeline and left when it
+    # returns, but THIS route synthesises audio AFTER the pipeline. Measured
+    # 2026-10-03: a __smoke__ turn was correctly flagged inside the pipeline and
+    # then served 152,140 bytes of audio, because the flag was already gone by
+    # the time synthesis ran. Ambient state is only true where it is entered;
+    # the session id is true everywhere in the request.
+    _sbx_on = sandbox.is_smoke_session(body.get("session_id"))
+    # SANDBOX entered HERE, not inside the pipeline: the pipeline returns from
+    # a dozen places and a contextvar that is set without being reset is a flag
+    # that can outlive its request. A leaked sandbox flag would silence a REAL
+    # conversation, which is a far worse failure than the one it prevents.
+    _sbx = sandbox.enter(body.get("session_id") or "default")
+    try:
+        reply = await _run_chat_pipeline(body, request)
+    finally:
+        sandbox.leave(_sbx)
     if not reply:
         return {"response": "", "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}
@@ -4129,10 +4224,19 @@ async def chat_stream_endpoint(body: dict, request: Request):
     if not chunks:
         return {"response": reply, "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}
-    sid = _tts_stream_new(chunks, out_voice, *_speech_delivery(reply))
-    audio0 = await _tts_chunk_b64(sid, 0)
-    if len(chunks) > 1:
-        asyncio.create_task(_tts_chunk_b64(sid, 1))   # read-ahead
+    sid = _tts_stream_new(chunks, out_voice, *_speech_delivery(reply),
+                          sandboxed=_sbx_on)
+    # SANDBOX: the caption still goes out — the device shows the words, which is
+    # what makes the turn measurable — but nothing is synthesised and no audio
+    # bytes are served. Read-ahead is skipped too: synthesising audio nobody
+    # will hear is just GPU time.
+    if _sbx_on:
+        sandbox.would("serve audio", f"stream {sid}, {len(chunks)} chunks")
+        audio0 = ""
+    else:
+        audio0 = await _tts_chunk_b64(sid, 0)
+        if len(chunks) > 1:
+            asyncio.create_task(_tts_chunk_b64(sid, 1))   # read-ahead
     # "text" (chunk 0's words) is placed before "audio" and "response" so the
     # firmware can always peek it in its 6 KB head buffer, however long the reply
     # is — Dio shows each chunk's text while that chunk plays, syncing to her voice.
@@ -4150,6 +4254,13 @@ async def tts_chunk_endpoint(stream_id: str, n: int):
         return {"audio": "", "chunk_index": n, "last": True, "error": "unknown or expired stream"}
     if n < 0 or n >= len(st["chunks"]):
         return {"audio": "", "chunk_index": n, "last": True, "error": "chunk out of range"}
+    # SANDBOX, at the route that actually hands a device something to play.
+    # The guard in TTSModule covers the Nyx speaker; this covers the wire, which
+    # is how Dio gets sound. Text is still returned so the caption works.
+    if st.get("sandbox"):
+        sandbox.would("serve audio chunk", f"stream {stream_id} chunk {n}")
+        return {"text": st["chunks"][n], "chunk_index": n, "audio": "",
+                "last": n + 1 >= len(st["chunks"]), "sandbox": True}
     audio = await _tts_chunk_b64(stream_id, n)
     if n + 1 < len(st["chunks"]):
         asyncio.create_task(_tts_chunk_b64(stream_id, n + 1))   # read-ahead

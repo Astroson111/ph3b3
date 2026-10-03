@@ -6,6 +6,8 @@ import logging
 import queue
 import re
 import subprocess
+
+import sandbox
 import sys
 import threading
 import wave
@@ -331,6 +333,11 @@ class TTSModule:
             log.warning(f"Voice model not found at {VOICE_MODEL}")
 
     def speak(self, text, blocking=True, voice=None):
+        # SANDBOX: the first actuator a smoke turn reaches. Guarded here as well
+        # as at _play_pcm so a battery does not pay for synthesis it will not
+        # hear, and so the log line carries the TEXT rather than a byte count.
+        if sandbox.suppress("speak", text or ""):
+            return "Sandbox: speech suppressed."
         if not self._available:
             log.info(f"[TTS silent] {text[:80]}")
             return "TTS not available."
@@ -409,6 +416,12 @@ class TTSModule:
             return None
 
     def _play_pcm(self, pcm: bytes) -> bool:
+        # SANDBOX, second line of defence: the LAST function before sound leaves
+        # the machine. Anything that reaches audio — a lane added next year, a
+        # path nobody remembered — is suppressed here even if it skipped speak().
+        if sandbox.suppress("play audio", f"{len(pcm)} bytes "
+                                          f"({len(pcm)/2/22050.0:.1f}s)"):
+            return True
         """Play raw PCM through pacat. Sink is resolved per chunk by stable node
         NAME (never a volatile index) so a live plug/unplug re-routes cleanly.
         The playback timeout is derived from the chunk's own duration, so it

@@ -46,6 +46,8 @@ import re
 
 import requests
 
+import sandbox
+
 PORT = 8080
 TIMEOUT = 4.0
 
@@ -161,6 +163,10 @@ def said(cmd: str) -> str:
 
 def send(cmd: str, host: str | None) -> str:
     """Push it to her and say what happened. Never raises."""
+    # SANDBOX: a servo moves a real object in a room. Suppressed before the
+    # POST, and the reply still reads like the real one so routing is measurable.
+    if sandbox.suppress("move head", cmd):
+        return said(cmd)
     if not host:
         return ("I couldn't reach Dio — I don't have her address right now. "
                 "She has to have checked in since the last restart.")

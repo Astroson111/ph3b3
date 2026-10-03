@@ -36,6 +36,8 @@ from pathlib import Path
 
 import requests
 
+import sandbox
+
 log = logging.getLogger("ph3b3.vision")
 
 OLLAMA_API_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434") + "/api/generate"
@@ -523,6 +525,8 @@ class VisionModule:
     # request, and always land the frame in CAPTURE_DIR so the Argus feed is the
     # audit trail. Never call these proactively. One frame per call — no burst.
     def take_photo(self):
+        if sandbox.suppress("take photo", "explicit photo request"):
+            return "Sandbox: no photo taken."
         """Grab ONE webcam frame and save it (webcam_*.jpg → captures/Argus feed).
         Returns a spoken confirmation, or a NAMED failure. No retry, no guessing."""
         jpeg = self._local_capture()          # grabs + persists a webcam_*.jpg
@@ -565,6 +569,11 @@ class VisionModule:
 
     # ── timed capture (evening capture): pull + persist a frame, no analysis ──
     def capture(self) -> bool:
+        # SANDBOX: a camera firing is an event in a room, and this is the
+        # shared entry every capture path goes through. The webcam incident of
+        # 2026-10-02 is why this is at the actuator and not in the caller.
+        if sandbox.suppress("capture image", "webcam/Dio camera"):
+            return False
         """Pull one frame (Dio, else webcam fallback) and persist it to
         CAPTURE_DIR. Returns True if a frame landed, False if both sources fail.
         The frame is named by source (dio_/webcam_); _grab_frame does the save."""

@@ -1,4 +1,6 @@
 import json
+
+import sandbox
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -86,6 +88,9 @@ class MemoryModule:
         return "\n".join(lines)
 
     def remember_fact(self, key, value):
+        # SANDBOX: a battery must not leave facts behind in her memory.
+        if sandbox.suppress("remember fact", f"{key}={value}"):
+            return "Sandbox: not remembered."
         self.memory["about_user"][key] = value
         self._save()
         return f"Remembered: {key} = {value}"

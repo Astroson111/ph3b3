@@ -88,6 +88,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import sandbox
 from tts_chunker import pack_units
 
 from .booknames import normalize as normalize_book
@@ -405,6 +406,10 @@ def save_position(corpus, pos: Position) -> None:
     """Record the last verse actually SPOKEN. Written after playback, never
     after synthesis — resuming from a verse that was rendered but never heard
     would silently skip it."""
+    # SANDBOX, second line of defence. The bookmark is the Captain's place in
+    # a book: a write here is as real as a sound in the room.
+    if sandbox.suppress("move bookmark", pos.spoken()):
+        return
     ensure_schema(corpus)
     corpus._db.execute(
         "INSERT INTO reading_position (id, work_id, book, section, unit, updated_at) "
@@ -490,6 +495,20 @@ class Reading:
         """Begin reading. `continue_after` overrides the persisted setting for
         THIS reading only — a per-invocation choice should not quietly rewrite
         the configured default."""
+        # SANDBOX: do not start the reader at all.
+        #
+        # Suppressing only the AUDIO was not enough, measured 2026-10-03: a
+        # __smoke__ "read Genesis" served zero bytes and still ran the thread,
+        # which synthesised the chapter on the GPU and advanced the Captain's
+        # bookmark from Genesis 1:25 to 1:5 while I watched it drift between two
+        # reads. A silent actuator is still an actuator.
+        #
+        # The spoken line is produced by the caller either way, so routing stays
+        # measurable — which is the only thing a battery needs from this lane.
+        if sandbox.suppress("read aloud",
+                            f"{ref.book or ref.work_title} {ref.section}"
+                            f" from unit {from_unit}"):
+            return
         if self.is_running():
             return False
         self._stop.clear()
