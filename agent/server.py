@@ -638,8 +638,30 @@ async def basic_auth(request: Request, call_next):
     # Part C: only adopt a NEW IP after verifying it actually runs Dio's camera
     # server — a spoofed X-Ph3b3-Device header from any authed LAN client must
     # not be able to hijack dio_host. Verify off the loop; skip when unchanged.
-    if device == "stackchan" and request.client and request.client.host != vision.dio_host:
-        await asyncio.to_thread(vision.try_set_dio_host, request.client.host)
+    # canonical(), not == "stackchan": her firmware now sends "dio", so this
+    # gate never ran and neither note_device_alive nor the deferred probe ever
+    # fired. dio_host stayed None for the whole process lifetime, which reads
+    # downstream as "I couldn't reach Dio — I don't have her address right now"
+    # even though her camera server answers /cam/status in 0.29 s.
+    if device_auth.canonical(device) == "dio" and request.client:
+        # Hearing FROM her is proof she is present — better proof than any probe
+        # — so it clears the verification backoff before we decide whether to
+        # probe. Without this, a device that was legitimately away (powered off,
+        # in download mode) stays locked out for the whole escalated window after
+        # it comes back.
+        vision.note_device_alive(request.client.host)
+        if request.client.host != vision.dio_host:
+            # DEFERRED, NOT INLINE. Probing here means reaching out to Dio during
+            # the handling of Dio's own request — and her ESP32 is
+            # single-threaded, so while she waits on our reply her HTTP server
+            # cannot answer anything. The probe therefore hit her at the one
+            # moment she was guaranteed to be busy, and failed every time.
+            #
+            # Measured 2026-10-02: the identical call from a shell succeeded 8/8
+            # in 0.07-0.26 s while the in-request probe failed on every attempt.
+            # Raising the timeout could not fix it — she was not slow, she was
+            # blocked on us.
+            _schedule_dio_probe(request.client.host)
     return await call_next(request)
 
 spotify = SpotifyModule()
@@ -2947,6 +2969,85 @@ def claimed_device(request) -> str:
         return ""
 
 
+# ── Deferred Dio verification ────────────────────────────────────────────────
+# Probes her camera endpoint a few seconds AFTER we hear from her, so the request
+# lands when she is idle rather than while she is waiting on us. One probe in
+# flight at a time; a failure is handled by vision's own backoff.
+_dio_probe_task = None
+
+
+def _ws_note_device(websocket, dev: str) -> None:
+    """Adopt a device's IP from a WEBSOCKET handshake.
+
+    The HTTP auth middleware stamps _device_roster and schedules the dio_host
+    probe, but Starlette runs no HTTP middleware for a WebSocket. Her chat and
+    VAD streams are both WebSockets, so on a server that restarted while she
+    was already up, nothing ever adopted her address.
+    """
+    try:
+        host = websocket.client.host if websocket.client else None
+    except Exception:                                        # noqa: BLE001
+        return
+    if not host:
+        return
+    if device_auth.canonical(dev) != "dio":
+        return
+    vision.note_device_alive(host)
+    if host != vision.dio_host:
+        _schedule_dio_probe(host)
+
+
+def _schedule_dio_probe(host: str, delay: float = 3.0) -> None:
+    global _dio_probe_task
+    if _dio_probe_task is not None and not _dio_probe_task.done():
+        return                                  # one is already pending
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def _later():
+        await asyncio.sleep(delay)              # let her finish with us first
+        try:
+            await asyncio.to_thread(vision.try_set_dio_host, host)
+        except Exception as e:                  # noqa: BLE001
+            log.debug("[dio] deferred probe failed: %s", e)
+
+    _dio_probe_task = loop.create_task(_later())
+
+
+# A head command already handed to a device on the reply to its OWN request.
+#
+# Reaching back into Dio over HTTP cannot work during her turn: she blocks in
+# _http.POST(/chat) for the whole think-and-speak window, and that is exactly
+# when the head tool fires. Measured 2026-10-02: the neck moved (her TCP stack
+# queued the request and she ran it on the next service tick) but the POST had
+# already timed out, so she truthfully reported "I couldn't reach Dio" about a
+# move that did happen. Reporting a move we could not confirm would have been
+# the worse bug.
+#
+# So the directive rides the /transcribe response she is already waiting on —
+# the same channel as "camera" and Iris's "device_command" — and this records
+# that it was handed over, so the /chat turn that follows confirms it instead
+# of sending it a second time over a path that cannot answer.
+_head_prefired: dict[str, tuple[str, float]] = {}
+_HEAD_PREFIRE_TTL = 30.0
+
+
+def _head_take_prefired(device: str | None, cmd: str) -> bool:
+    """True if THIS command was already handed to that device. Consumes it."""
+    key = device_auth.canonical(device or "")
+    got = _head_prefired.get(key)
+    if not got:
+        return False
+    pending, ts = got
+    if pending != cmd or (time.time() - ts) > _HEAD_PREFIRE_TTL:
+        _head_prefired.pop(key, None)
+        return False
+    _head_prefired.pop(key, None)
+    return True
+
+
 async def _run_chat_pipeline(body: dict, request: Request):
     """Shared /chat brain: wake-gate → recitation → triage → inference.
 
@@ -2969,7 +3070,7 @@ async def _run_chat_pipeline(body: dict, request: Request):
         return "I won't help with that — that crosses a hard line for me."
 
     # ── Tap-to-wake (Dio / Stack-Chan) — no voice wake word; suppress her echo by content ─
-    if verified_device(request) == "stackchan":
+    if device_auth.canonical(verified_device(request) or "") == "dio":
         if _looks_like_self_echo(body.get("session_id", "default"), user_msg):
             log.info("[echo-guard] dropped self-echo: %r", user_msg)
             return None
@@ -3090,6 +3191,13 @@ async def _run_chat_pipeline(body: dict, request: Request):
     # thing wherever she is mounted.
     _head_cmd = dio_head.parse(user_msg)
     if _head_cmd:
+        if _head_take_prefired(verified_device(request), _head_cmd):
+            # She was handed this on her own transcribe reply and ran it locally.
+            _head_reply = dio_head.said(_head_cmd)
+            log.info("[head] %s confirmed (ran on-device, no inbound POST)", _head_cmd)
+            session.add("user", user_msg)
+            session.add("assistant", _head_reply)
+            return _head_reply
         _head_reply = dio_head.send(_head_cmd, getattr(vision, "dio_host", None))
         log.info("[head] %s -> %s", _head_cmd, _head_reply[:60])
         session.add("user", user_msg)
@@ -3924,6 +4032,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str = "default"):
     await websocket.accept()
     session = get_session(session_id)
     _ws_device = websocket.headers.get("X-Ph3b3-Device", "stackchan")
+    _ws_note_device(websocket, _ws_device)
     log.info(f"Stack-chan connected: {session_id}")
     try:
         while True:
@@ -3988,6 +4097,7 @@ async def vad_stream(websocket: WebSocket):
         return
     await websocket.accept()
     dev = websocket.headers.get("X-Ph3b3-Device", "stackchan")
+    _ws_note_device(websocket, dev)
     # Tuning is read HERE, per stream, not at import — so editing
     # config/vad_tuning.json takes effect on the next turn without a restart.
     # Dio's room has a fan and a HEPA unit, and the right numbers for it are not
@@ -4268,9 +4378,27 @@ async def transcribe_audio(request: Request, body: dict):
         # claim must never reach it (audited 2026-09-30) — _device above stays
         # header-derived because it also labels the debug lines.
         _verified = verified_device(request)
-        if _verified in device_auth.STACKCHAN_DEVICES \
+        # Head command FIRST, and it suppresses the camera field.
+        #
+        # Order matters here: "look up" is both a neck command and a word the
+        # vision patterns care about. Astro, 2026-10-02: "I told her to look up
+        # but it seems to describe a picture she took." A turn cannot be both a
+        # gesture and a capture, and a camera firing in a room is the more
+        # consequential of the two, so the narrower deterministic match wins and
+        # the capture does not run at all.
+        #
+        # VERIFIED identity only — same rule as "camera", because this moves a
+        # servo in a room.
+        _hc = (dio_head.parse(_text)
+               if device_auth.canonical(_verified or "") == "dio" else None)
+        if _hc:
+            _resp["head"] = _hc
+            _head_prefired[device_auth.canonical(_verified)] = (_hc, time.time())
+            log.info("[head] %s handed to %s on its own reply (capture suppressed)",
+                     _hc, _verified)
+        elif _verified in device_auth.STACKCHAN_DEVICES \
                 and _vision_intercept(_text, device=_verified) == "look":
-            _resp["camera"] = "dio" if _verified == "stackchan" else _verified
+            _resp["camera"] = device_auth.canonical(_verified)
         return _resp
     finally:
         try:
@@ -5465,10 +5593,11 @@ def _fleet_status_summary() -> str:
 # ── Fleet/battery intent (deterministic, pre-LLM) — the weak model won't reliably
 # call the fleet_status tool, so battery/fleet questions route here for a factual
 # answer with freshness ALWAYS attached; the tool stays as an LLM fallback. ───────
-_FLEET_LABEL = {"stackchan": "Dio", "iris": "Iris", "nyx": "Nyx", "rhea": "Rhea",
+_FLEET_LABEL = {"dio": "Dio", "stackchan": "Dio", "iris": "Iris", "nyx": "Nyx", "rhea": "Rhea",
                 "argus": "Argus", "metis": "Metis", "comfyui": "ComfyUI",
                 "helios": "Helios", "pan": "Pan"}
 _FLEET_ALIASES = {
+    "dio": ("dio", "stackchan", "stack-chan", "stack chan"),
     "stackchan": ("dio", "stackchan", "stack-chan", "stack chan"), "iris": ("iris",),
     "nyx": ("nyx",), "rhea": ("rhea", "backup drive"), "argus": ("argus",),
     "metis": ("metis",), "comfyui": ("comfyui", "morpheus"),
@@ -5609,10 +5738,15 @@ async def argus_heartbeat(request: Request):
     dio_host is known and a 'stackchan' claim arrives from a different IP, reject +
     log. Other devices verify via the shared Basic-auth cred (existing model — no
     new auth scheme)."""
-    device = request.headers.get("X-Ph3b3-Device", "unidentified")
-    if (device == "stackchan" and vision.dio_host
+    # Canonicalised on INGEST: her firmware renamed itself "stackchan" -> "dio",
+    # so heartbeats began landing under a second key while the fleet view and
+    # every historical row were keyed to the old one. The row split in two and
+    # neither looked healthy — that is the "Argus reading fails".
+    device = device_auth.canonical(
+        request.headers.get("X-Ph3b3-Device", "unidentified")) or "unidentified"
+    if (device == "dio" and vision.dio_host
             and request.client and request.client.host != vision.dio_host):
-        log.warning("[ARGUS] rejected spoofed heartbeat: 'stackchan' from %s (verified dio_host=%s)",
+        log.warning("[ARGUS] rejected spoofed heartbeat: 'dio' from %s (verified dio_host=%s)",
                     request.client.host, vision.dio_host)
         raise HTTPException(403, "unverified device identity")
     body = await request.body()

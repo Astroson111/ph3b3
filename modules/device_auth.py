@@ -31,13 +31,38 @@ KEYS_PATH = Path(PH3B3_DATA) / "device_keys.json"
 
 # Devices that authenticate over the network and get a grandfathered key.
 # name (X-Ph3b3-Device header) -> human label.
-KNOWN_DEVICES = {"iris": "Iris", "stackchan": "Dio", "pan": "Pan"}
+# "dio" and "stackchan" are the SAME physical unit. Her firmware's
+# SC_DEVICE_NAME was renamed to "dio" (units.conf), but this map still said
+# only "stackchan", so the X-Ph3b3-Device she actually sends was not a known
+# device: the device-key branch in server.py was skipped, she fell through to
+# owner Basic auth, failed it, and got throttled after ten tries. That is why
+# auth_kind was never "device" for her, and therefore why every capability
+# site gated on verified_device() refused her camera.
+#
+# The legacy name stays so a unit still running pre-rename firmware keeps
+# working without a reflash. Both names map to the same secret.
+KNOWN_DEVICES = {"iris": "Iris", "dio": "Dio", "stackchan": "Dio", "pan": "Pan"}
+DEVICE_ALIASES = {"stackchan": "dio"}      # old name -> current name
 
 # Stack-Chan-class units: the ones with an on-device camera that can run the
 # native photo loop. Iris is a combadge with no camera, so she is NOT in here.
 # Kept beside KNOWN_DEVICES so adding a third Stack-Chan is one edit, not a
 # hunt for hardcoded names scattered through the routes.
-STACKCHAN_DEVICES = frozenset({"stackchan", "pan"})
+STACKCHAN_DEVICES = frozenset({"dio", "stackchan", "pan"})
+
+
+def canonical(name: str) -> str:
+    """Resolve a device name to its current spelling.
+
+    Dio's firmware was renamed "stackchan" -> "dio", and the server compared
+    against the literal old name in several places. Each missed comparison
+    failed SILENTLY and differently: auth refused her outright, and the
+    dio_host adoption gate simply never ran, so she authenticated fine and
+    then "had no address". Behaviour gates call this instead of spelling out
+    a name list, so the next rename is one edit here.
+    """
+    n = (name or "").strip().lower()
+    return DEVICE_ALIASES.get(n, n)
 
 MIN_KEY_LEN = 8
 

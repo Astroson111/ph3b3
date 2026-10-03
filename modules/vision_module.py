@@ -227,6 +227,29 @@ class VisionModule:
         log.info(f"Vision module ready — {mode}")
 
     # ── device address (verified before we trust it — Part C) ─────────────────
+    def note_device_alive(self, host: str) -> None:
+        """Clear the verification backoff for a host we have just heard FROM.
+
+        2026-10-02: Dio was put into download mode for a few minutes. Her probes
+        failed — correctly, she was offline — and the backoff escalated to its
+        300 s window. She came back, started talking to the server again, and was
+        still locked out of her own camera and neck for the rest of that window:
+
+            [head] down -> I couldn't reach Dio — I don't have her address
+            (while she was answering /cam/status in 0.1 s)
+
+        The backoff exists to stop us hammering a host that is absent or spoofed.
+        An authenticated request FROM that host is direct evidence it is neither,
+        and it is better evidence than any probe — so it resets the strikes. The
+        next probe then happens immediately rather than up to five minutes later.
+
+        This does NOT adopt the host or skip verification: /cam/status still has
+        to answer, and still has to say "camera". Only the waiting is cleared.
+        """
+        if host and host in self._dio_verify_fail:
+            self._dio_verify_fail.pop(host, None)
+            log.info(f"dio_host backoff cleared for {host} — heard from it directly")
+
     def try_set_dio_host(self, host: str) -> bool:
         """Adopt `host` as Dio's camera IP ONLY if it actually serves her camera
         control endpoint (:{DIO_CAM_PORT}/cam/status). All devices share one

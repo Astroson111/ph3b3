@@ -61,15 +61,55 @@ TIMEOUT = 4.0
 # no longer be ordinary conversation — so the anchoring stays strict: the message
 # must BE the command end to end, which is what keeps "look up the weather" and
 # "I moved my head" out of it.
+# HER NAME AS WHISPER ACTUALLY HEARS IT.
+#
+# Measured on the bench 2026-10-02: "Phoebe, look down" came back as
+# 'BB Lookdown', "Phoebe, look up" as 'VB Lookup', and then as 'CB lookup'.
+# The transcriber keeps inventing new two-letter stabs at her name, so
+# enumerating them is a losing game — the first list held vb/bb/bebe and 'CB'
+# walked straight past it on the very next try.
+#
+# When this fails the symptom does not look like a parser bug. No command runs,
+# the turn goes to the model as conversation, and she performs the ordinary
+# thinking tell — the SAME fixed pose every time, whatever direction was asked
+# for. Astro: "she keeps making the same movements each time I ask to move."
+#
+# So the name slot is GENERAL but SUBTRACTIVE: any short token may stand where
+# her name was, EXCEPT words that would make the sentence ordinary English.
+# That accepts whatever the STT produces while keeping "I look up", "we look
+# down" and "they look left" as conversation.
+#
+# This widens only the NAME slot. The whole-message anchor is untouched, and it
+# is still the anchor — not this list — that keeps "look up the weather" a
+# search.
+_NOT_A_NAME = (
+    r"i|you|we|they|he|she|it|who|that|this|there|here|one"
+    r"|to|do|does|did|the|a|an|my|our|your|his|her|their|its"
+    r"|and|but|so|or|if|when|while|then|now|just|please|also"
+    r"|not|never|dont|don't|cant|can't|wont|won't"
+    r"|can|could|would|will|shall|should|may|might|must"
+    r"|let|lets|let's|make|made|going|gonna|want|need|try|got"
+)
+_WAKE = (r"(?:hey\s+|ok\s+|okay\s+)?"
+         r"(?:(?!(?:" + _NOT_A_NAME + r")(?:[\s,.!?]|$))"
+         r"[a-z0-9][a-z0-9.'\-]{0,7}[,\s]+)?")
+
+# The direction may be FUSED to the verb — 'Lookdown', 'Lookup' — because that
+# is what the transcriber returns for a two-word phrase said quickly. \s* rather
+# than \s+ accepts it, and the end-anchor still rejects "lookup the weather".
 _CMD_RE = re.compile(
-    r"^\s*(?:hey\s+|ok\s+)?(?:ph3b3|phoebe|dio)?[,\s]*"
-    r"(?:can|could|would|will)?\s*(?:you\s+)?(?:please\s+)?"
-    r"(?:look|turn|tilt|point|move|aim|face)(?:\s+your\s+(?:head|neck))?\s+"
+    r"^\s*" + _WAKE +
+    r"(?:(?:can|could|would|will)\s+(?:you\s+)?)?(?:please\s+)?"
+    r"(?:look|turn|tilt|point|move|aim|face)(?:\s+your\s+(?:head|neck))?\s*"
+    # "look TO THE right", "look to your left" — said on the bench 2026-10-02
+    # ('Look to the right.') and parsed as nothing, so the turn went to the
+    # model as conversation. Optional, so "look right" is unaffected.
+    r"(?:to\s+(?:the\s+|your\s+)?)?"
     r"(?P<dir>up|down|left|right|upward|downward|upwards|downwards|forward|ahead)"
     r"\s*(?:please|for\s+me|now|a\s+bit|a\s+little)?[.!?]*\s*$"
     # "lower/raise your head" — the verb carries the direction, so no dir group.
-    r"|^\s*(?:hey\s+|ok\s+)?(?:ph3b3|phoebe|dio)?[,\s]*"
-    r"(?:can|could|would|will)?\s*(?:you\s+)?(?:please\s+)?"
+    r"|^\s*" + _WAKE +
+    r"(?:(?:can|could|would|will)\s+(?:you\s+)?)?(?:please\s+)?"
     r"(?P<vdir>lower|drop|bow|raise|lift)\s+(?:your\s+)?(?:head|neck)"
     r"\s*(?:please|for\s+me|now|a\s+bit|a\s+little)?[.!?]*\s*$", re.I)
 
@@ -78,9 +118,15 @@ _VERB_DIRS = {"lower": "down", "drop": "down", "bow": "down",
               "raise": "up", "lift": "up"}
 
 _CENTER_RE = re.compile(
-    r"^\s*(?:hey\s+|ok\s+)?(?:ph3b3|phoebe|dio)?[,\s]*"
-    r"(?:can|could|would)?\s*(?:you\s+)?(?:please\s+)?"
-    r"(?:look\s+at\s+me|face\s+me|centre?\s+(?:your\s+)?head|head\s+(?:home|centre?)"
+    r"^\s*" + _WAKE +
+    r"(?:(?:can|could|would)\s+(?:you\s+)?)?(?:please\s+)?"
+    # BARE "centre" counts. Said on the bench 2026-10-02 as the release word
+    # for a held direction, matched nothing, and the latch stayed on until
+    # "look at me" happened to be tried. The release word has to be the obvious
+    # one, because it is what someone reaches for when she is stuck looking away.
+    r"(?:look\s+at\s+me|face\s+me|cent(?:er|re)|middle|straight\s+ahead"
+    r"|cent(?:er|re)\s+(?:your\s+)?head|head\s+(?:home|cent(?:er|re))"
+    r"|look\s+(?:straight\s+)?(?:ahead|forward)"
     r"|straighten\s+up|face\s+forward|re-?home(?:\s+your\s+head)?)"
     r"\s*(?:please|now)?[.!?]*\s*$", re.I)
 
@@ -106,6 +152,11 @@ def parse(text: str) -> str | None:
         return _DIRS.get(m.group("dir").lower())
     vd = m.group("vdir")
     return _VERB_DIRS.get(vd.lower()) if vd else None
+
+
+def said(cmd: str) -> str:
+    """The line she says once the move has actually happened."""
+    return _SAID.get(cmd, f"Head {cmd}.")
 
 
 def send(cmd: str, host: str | None) -> str:

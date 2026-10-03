@@ -164,3 +164,38 @@ def test_the_probe_actually_uses_the_constant(vis, monkeypatch):
     vis.try_set_dio_host("10.0.0.5")
     assert seen["timeout"] == vm.DIO_VERIFY_TIMEOUT, \
         "the probe hardcodes a timeout instead of reading the constant"
+
+
+# ── hearing from her beats waiting on a timer ────────────────────────────────
+def test_contact_clears_the_backoff(vis, monkeypatch):
+    """A device that was legitimately away must not stay locked out after it
+    comes back. Dio was in download mode; her probes failed correctly, escalated
+    to the 300 s window, and she was still refused her own camera and neck after
+    returning — while answering /cam/status in 0.1 s."""
+    monkeypatch.setattr(vm.requests, "get", _fail)
+    for _ in range(4):
+        vis._dio_verify_fail["10.0.0.5"] = (0.0, 9)   # deep in the long window
+        vis.try_set_dio_host("10.0.0.5")
+    assert "10.0.0.5" in vis._dio_verify_fail
+
+    vis.note_device_alive("10.0.0.5")
+    assert "10.0.0.5" not in vis._dio_verify_fail, "contact did not clear the wait"
+
+    monkeypatch.setattr(vm.requests, "get", lambda *a, **k: _Resp())
+    assert vis.try_set_dio_host("10.0.0.5") is True, "probe still blocked after contact"
+
+
+def test_contact_does_not_adopt_or_skip_verification(vis, monkeypatch):
+    """Clearing the WAIT must not weaken the spoof guard: /cam/status still has
+    to answer and still has to say 'camera'."""
+    vis.note_device_alive("10.0.0.9")
+    assert vis.dio_host is None, "contact alone adopted a host"
+    monkeypatch.setattr(vm.requests, "get",
+                        lambda *a, **k: _Resp(200, "<html>router admin</html>"))
+    assert vis.try_set_dio_host("10.0.0.9") is False
+    assert vis.dio_host is None
+
+
+def test_contact_from_an_unknown_host_is_harmless(vis):
+    vis.note_device_alive("10.0.0.77")      # never failed, nothing to clear
+    assert vis._dio_verify_fail == {}
