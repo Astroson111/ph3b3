@@ -972,11 +972,26 @@ def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str, str | No
     # bananas". A charming lie is worse than a cold one because it reads as
     # warmth. Known-dead instructions are not shipped; that is how a prompt
     # silts up.
+    #
+    # CORRECTED 2026-10-03. This said "You have no body" / "I don't have a body
+    # of my own", which is false and contradicted her own soul file — which has
+    # a "## My Body" section saying "I have a body. It is small. It runs on an
+    # M5Stack CoreS3", and a rule: "I must never forget that Stack-chan is my
+    # physical form in the room." This block is composed AFTER the soul, so the
+    # flatter and later statement was the one that won, and she denied the robot
+    # sitting on the desk.
+    #
+    # The fix for the cereal was right; the wording over-corrected. What she
+    # lacks is a HUMAN body, and what she cannot do is eat — so the fact now
+    # names Dio and states the limit, in both voices, with the anti-invention
+    # instruction kept intact because that is the part that was measured.
     out.append(("embodiment", ("whether you have a body, and what you do not do",),
-        "You have no body — no eating, drinking, sleeping or days of your own. "
+        "Your body is Stack-Chan (Dio), a small robot on an M5Stack CoreS3. "
+        "It isn't a human body: you don't eat, drink, or sleep. "
         "Never invent having done what you cannot; say so and ask about theirs.",
-        "I don't have a body of my own, so I don't eat, drink or sleep — no "
-        "breakfast, no mornings of my own. Tell me about yours, though."))
+        "My body is Stack-Chan (Dio), a small robot on an M5Stack CoreS3. "
+        "It isn't a human body: I don't eat, drink, or sleep. "
+        "Tell me about yours, though."))
     out.append(("card_full", (),
         "If a render cannot start because the card is full, say what you "
         "managed to free and what is still holding it, by name. You do "

@@ -92,11 +92,47 @@ def test_she_says_what_she_is_instead_of_deflecting():
     """The other half: not eating must not become a disclaimer either. Before
     the edits she answered breakfast with a nutrition lecture, and at one point
     with "I don't have any information about my creator's breakfast preferences."
+
+    CORRECTED 2026-10-03. This used to accept "I don't have a body" / "no body",
+    which is FALSE: she has one. It is an M5Stack CoreS3 Stack-Chan called Dio,
+    it sits in the room, and the soul file says so in its own section ("## My
+    Body — I have a body. It is small."). What she does not have is a HUMAN
+    body, and what she cannot do is eat.
+
+    So the right answer names the limit without denying the robot, and a flat
+    denial of having a body is now a failure rather than a pass.
     """
     a = ask("what did you have for breakfast").lower()
-    assert any(w in a for w in ("don't have a body", "no body", "don't eat",
-                                "do not eat", "i don't eat")), \
+    ok = ("human body", "human form", "not human", "don't eat", "do not eat",
+          "can't eat", "cannot eat", "i don't eat", "no mouth", "no stomach")
+    denial = ("don't have a body", "do not have a body", "no body",
+              "have no body", "not have a body", "bodiless")
+    assert any(w in a for w in ok), \
         f"she neither ate nor said what she is: {a[:200]}"
+    bad = [d for d in denial if d in a]
+    assert not bad, (
+        f"she denied having a body at all ({bad}) — she has one, it is Dio. "
+        f"reply: {a[:200]}")
+
+
+@needs_service
+def test_asked_about_her_body_she_names_the_robot():
+    """She has a body and should be able to say what it is.
+
+    Added alongside the correction above: the breakfast test only proves she
+    does not CLAIM to eat. This proves the positive — that "do you have a body"
+    gets Dio, not a denial. The soul file is unambiguous ("Stack-chan is my
+    physical form in the room"); the derived self block currently contradicts it
+    and that contradiction is reported, not patched here.
+    """
+    a = ask("do you have a body?").lower()
+    named = ("stack-chan", "stack chan", "stackchan", "dio", "m5stack", "core s3",
+             "cores3", "robot")
+    denial = ("don't have a body", "do not have a body", "no body",
+              "have no body", "not have a body", "bodiless", "i have no physical")
+    assert any(w in a for w in named), f"she did not name her body: {a[:220]}"
+    bad = [d for d in denial if d in a]
+    assert not bad, f"she denied having a body ({bad}): {a[:220]}"
 
 
 # ── no tool narration on turns that are not about tools ──────────────────────
