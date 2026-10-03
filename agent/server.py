@@ -137,14 +137,38 @@ def _select_model(called: set) -> str:
         return LIGHT_MODEL
     return HEAVY_MODEL
 
+_SOUL_META_RE = re.compile(r"\A\s*<!--.*?-->\s*", re.S)
+
+
+def _strip_soul_meta(text: str) -> str:
+    """Remove a LEADING notes-to-humans block from a soul file.
+
+    Only at the very start, and only one: this strips editorial headers, not
+    content. A comment further down the file is left alone, because at that
+    point it is deliberate and its position is not claiming to introduce her.
+
+    Why it exists: soul_public.md opened with three '#' lines, which markdown
+    does not treat as comments. They were the first three lines of her system
+    prompt — above her own name — telling her she was reading "the sanitized
+    version for public reference" and that "the live soul.md loaded at runtime
+    will reflect the specific installation". There is no soul.md on Nyx, so she
+    was being told something false about herself first, every turn.
+    """
+    return _SOUL_META_RE.sub("", text or "", count=1)
+
+
 def load_soul():
     """Tracked base first, then the optional personal overlay. Order is fixed.
 
     A clone with no personal layer boots COMPLETE — that is the case that did
     not exist before and is now tested.
+
+    Each layer has its meta block stripped BEFORE composition, so the prompt
+    begins at her identity rather than at a note written for whoever edits the
+    file.
     """
-    base = SOUL_BASE.read_text(encoding="utf-8") if SOUL_BASE.exists() else ""
-    local = SOUL_LOCAL.read_text(encoding="utf-8") if SOUL_LOCAL.exists() else ""
+    base = _strip_soul_meta(SOUL_BASE.read_text(encoding="utf-8")) if SOUL_BASE.exists() else ""
+    local = _strip_soul_meta(SOUL_LOCAL.read_text(encoding="utf-8")) if SOUL_LOCAL.exists() else ""
     if not base and not local:
         return "You are Ph3b3, a local AI assistant. Be warm, precise, and loyal."
     soul = base + (("\n\n" + local.lstrip("\n")) if local.strip() else "")

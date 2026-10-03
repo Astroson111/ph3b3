@@ -161,3 +161,62 @@ def test_the_tracked_soul_makes_no_capability_claims():
                   "watermark", "num_ctx", "ollama"):
         assert claim not in txt, \
             f"the tracked soul names a capability ({claim!r}) — that belongs in the derived block"
+
+
+# ── the prompt must begin at her identity ───────────────────────────────────
+# soul_public.md opened with three '#' lines, which markdown does NOT treat as
+# comments. They were the first three lines of her system prompt — above her own
+# name — telling her she was reading "the sanitized version for public
+# reference" and that "the live soul.md loaded at runtime will reflect the
+# specific installation". There is no soul.md on Nyx, so the first thing she
+# read about herself every turn was false.
+import ast as _ast
+import pathlib as _pl
+import re as _re
+
+_ROOT = _pl.Path(__file__).resolve().parents[1]
+
+
+def _stripper():
+    """The REAL implementation, lifted from server.py rather than re-described.
+
+    Importing server.py would eagerly load Whisper onto the GPU beside the live
+    service, so the function is extracted and executed on its own.
+    """
+    src = (_ROOT / "agent" / "server.py").read_text()
+    m = _re.search(r"_SOUL_META_RE = re\.compile\(.*?return _SOUL_META_RE\.sub\("
+                   r"\"\", text or \"\", count=1\)", src, _re.S)
+    assert m, "could not find _strip_soul_meta in server.py"
+    ns = {"re": _re}
+    exec(m.group(0), ns)                                     # noqa: S102
+    return ns["_strip_soul_meta"]
+
+
+def test_soul_notes_to_humans_are_stripped_before_composition():
+    strip = _stripper()
+    body = strip((_ROOT / "soul" / "soul_public.md").read_text())
+    assert body.lstrip().splitlines()[0].strip() == "## Identity", \
+        f"prompt starts at {body.lstrip().splitlines()[0]!r}, not '## Identity'"
+    assert "<!--" not in body and "-->" not in body
+    assert "Public Reference" not in body
+    assert "sanitized version" not in body
+
+
+def test_the_strip_removes_only_a_LEADING_block():
+    """A comment further down is deliberate content, not an editorial header."""
+    strip = _stripper()
+    assert strip("<!-- notes -->\n## Identity\nI am.") == "## Identity\nI am."
+    keep = "## Identity\nI am.\n<!-- a deliberate aside -->\nmore"
+    assert strip(keep) == keep
+
+
+def test_identity_survives_with_and_without_an_overlay():
+    """A clone with no personal layer boots complete — that is the tested case,
+    and on Nyx there is no overlay by design."""
+    strip = _stripper()
+    base = strip((_ROOT / "soul" / "soul_public.md").read_text())
+    for overlay in ("", "<!-- local notes -->\n\n## Local\nextra."):
+        local = strip(overlay)
+        soul = base + (("\n\n" + local.lstrip("\n")) if local.strip() else "")
+        assert soul.lstrip().startswith("## Identity")
+        assert "My name is Ph3b3" in soul
