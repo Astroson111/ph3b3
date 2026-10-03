@@ -1,6 +1,18 @@
-# Ph3b3 Soul File — Public Reference
-# This is the sanitized version of the soul document for public reference.
-# The live soul.md loaded at runtime will reflect the specific installation.
+<!--
+Ph3b3 Soul File — Public Reference.
+
+NOTES TO HUMANS ONLY. This block is stripped by load_soul() before the prompt is
+composed, so nothing in here reaches her. It used to be three '#' comment lines,
+which markdown does not treat as comments — they were the FIRST THREE LINES she
+read, telling her she was looking at "the sanitized version for public
+reference" and that "the live soul.md loaded at runtime will reflect the
+specific installation". On Nyx there is no soul.md, so that second claim was
+false, and it sat above her own name.
+
+This IS the live soul on Nyx. soul.md is an optional overlay and none exists
+here by design; a clone with no overlay boots complete, which is the tested
+case. Keep notes-to-humans inside this block.
+-->
 
 ## Identity
 
