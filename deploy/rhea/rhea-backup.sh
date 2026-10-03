@@ -15,6 +15,7 @@ PASSFILE="/home/astroson/.config/rhea/passphrase" # ABSOLUTE (service runs as ro
 PH3B3_DIR="/home/astroson/Desktop/ph3b3_v2"
 DATA_DIR="/home/astroson/ph3b3_data"
 V2DATA_DIR="/home/astroson/Desktop/ph3b3_v2_data"
+THOTH_DIR="/home/astroson/ph3b3_thoth"            # sacred-text corpus + its vector index
 HISTORY_ARCHIVE="/home/astroson/ph3b3-history-archive.git" # offline bare mirror of the git history; no remote, never pushed
 DISK_SICK_PCT=80                                  # >this% used → Argus flags rhea SICK (space warning)
 
@@ -42,7 +43,7 @@ log "snapshotting SQLite DBs (consistent online backup)..."
 mkdir -p "$SQLITE_STAGE"
 # NB: recipes.db is deliberately NOT here — it's the 2.7GB RecipeNLG *dataset*
 # (re-downloadable bulk, same as the excluded RecipeNLG_code), not identity data.
-for db in "$DATA_DIR"/mnemosyne.db "$DATA_DIR"/argus.db "$V2DATA_DIR"/generations.db; do
+for db in "$DATA_DIR"/mnemosyne.db "$DATA_DIR"/argus.db "$V2DATA_DIR"/generations.db "$THOTH_DIR"/thoth.db; do
   [ -f "$db" ] || continue
   name="$(basename "$db")"
   rm -f "$SQLITE_STAGE/$name"
@@ -74,6 +75,14 @@ if [ -d "$HISTORY_ARCHIVE" ]; then ARCHIVE_PATHS+=("$HISTORY_ARCHIVE"); log "his
 else log "WARN: history archive not found at $HISTORY_ARCHIVE — skipping"; fi
 
 log "restic backup..."
+# THOTH (added 2026-10-03, Captain's call at Rung 1): the corpus texts are
+# re-fetchable and the vectors re-derivable in ~3.5 min, so this was outside the
+# sweep by a defensible decision. It stops being defensible at Rung 5, whose OCR
+# works are NOT re-downloadable — and a manifest that says where a text came from
+# is identity data even when the text is not. thoth.db rides the SQLite
+# online-snapshot path above (the server holds it open); the live file and the
+# re-derivable embedding cache are excluded from the tree copy.
+#
 # EXCLUDED ON PURPOSE (re-downloadable bulk, not identity data):
 #   voices/  — ~1.3 GB of Piper .onnx models, re-fetched hash-pinned by setup.sh.
 #              The voice REGISTRY that describes them (config/voices.yaml) IS backed
@@ -88,7 +97,11 @@ log "restic backup..."
   --exclude "$DATA_DIR/RecipeNLG_license.png" \
   --exclude "$DATA_DIR/edit_scratch" \
   --exclude "$DATA_DIR/voices" \
+  --exclude "$THOTH_DIR"/'*.db' --exclude "$THOTH_DIR"/'*.db-wal' --exclude "$THOTH_DIR"/'*.db-shm' \
+  --exclude "$THOTH_DIR"/'*.bak-*' \
+  --exclude "$THOTH_DIR/cache" \
   "$DATA_DIR" \
+  "$THOTH_DIR" \
   "$V2DATA_DIR" \
   "$PH3B3_DIR/.env" \
   "$PH3B3_DIR/soul" \

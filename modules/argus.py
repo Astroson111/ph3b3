@@ -88,6 +88,15 @@ def _is_sick(row: dict, contract: dict) -> Optional[str]:
         return f"battery {batt}% < {limits['battery_below']}%"
     if "free_heap_below" in limits and heap is not None and heap < limits["free_heap_below"]:
         return f"free heap {heap} < {limits['free_heap_below']}"
+    # Derived counters, reported by the service rather than measured on a device.
+    # thoth_unembedded: passages that SHOULD be searchable and are not. The
+    # Sept 23 crash emptied the vector index while leaving every passage row
+    # intact, so the library looked whole and retrieval silently returned
+    # nothing. "> 0" is the right floor: a partially built index answers some
+    # questions and quietly misses others.
+    unemb = row.get("unembedded")
+    if "unembedded_above" in limits and unemb is not None and unemb > limits["unembedded_above"]:
+        return f"unembedded {unemb} > {limits['unembedded_above']}"
     return None
 
 
@@ -116,12 +125,18 @@ class ArgusStore:
                     uptime        INTEGER,                -- seconds, nullable
                     firmware_hash TEXT,
                     free_heap     INTEGER,                -- bytes, nullable
-                    charging      INTEGER                 -- 1=charging, 0=discharging, NULL=unknown
+                    charging      INTEGER,                -- 1=charging, 0=discharging, NULL=unknown
+                    unembedded    INTEGER                 -- derived counter (thoth), nullable
                 )""")
             c.execute("CREATE INDEX IF NOT EXISTS idx_hb_device_ts ON heartbeats(device_id, ts)")
-            # Migration: add `charging` to a pre-existing table (older DBs).
-            if "charging" not in {r[1] for r in c.execute("PRAGMA table_info(heartbeats)")}:
+            # Migrations: add columns to a pre-existing table (older DBs).
+            # Both are additive and nullable, so an old row simply has NULL and
+            # the matching sick_if predicate skips it rather than firing.
+            _cols = {r[1] for r in c.execute("PRAGMA table_info(heartbeats)")}
+            if "charging" not in _cols:
                 c.execute("ALTER TABLE heartbeats ADD COLUMN charging INTEGER")
+            if "unembedded" not in _cols:
+                c.execute("ALTER TABLE heartbeats ADD COLUMN unembedded INTEGER")
             # Argus's own liveness — its gap is visible here if the daemon dies.
             c.execute("CREATE TABLE IF NOT EXISTS argus_self (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL)")
             # ── State transitions ────────────────────────────────────────────
@@ -149,13 +164,15 @@ class ArgusStore:
 
     # ── writes ──
     def record_heartbeat(self, device_id: str, *, battery=None, rssi=None,
-                         uptime=None, firmware_hash=None, free_heap=None, charging=None, ts=None) -> None:
+                         uptime=None, firmware_hash=None, free_heap=None, charging=None,
+                         unembedded=None, ts=None) -> None:
         ts = int(ts if ts is not None else time.time())
         with self._conn() as c:
             c.execute(
-                "INSERT INTO heartbeats(device_id,ts,battery,rssi,uptime,firmware_hash,free_heap,charging) "
-                "VALUES(?,?,?,?,?,?,?,?)",
-                (device_id, ts, battery, rssi, uptime, firmware_hash, free_heap, charging),
+                "INSERT INTO heartbeats(device_id,ts,battery,rssi,uptime,firmware_hash,"
+                "free_heap,charging,unembedded) VALUES(?,?,?,?,?,?,?,?,?)",
+                (device_id, ts, battery, rssi, uptime, firmware_hash, free_heap,
+                 charging, unembedded),
             )
 
     def record_self(self, ts=None) -> None:
