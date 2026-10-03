@@ -115,6 +115,69 @@ def available() -> bool:
         return False
 
 
+# ── is the index actually usable? ────────────────────────────────────────────
+# The index went empty in the Sept 23 crash with every passage row intact, so
+# the library LOOKED whole: works present, passages present, retrieval silently
+# returning nothing. An unindexed library must be a stated condition, not an
+# empty result set, because the fallback on this path is answering scripture
+# from model weights — the one outcome the forced routing exists to prevent.
+UNINDEXED_LINE = ("My library is unindexed at the moment — the texts are there "
+                  "but the search over them isn't built, so I can't quote "
+                  "chapter and verse. I'd rather tell you that than answer "
+                  "about scripture from memory.")
+
+# STRICT: every eligible passage must be embedded, or she says so.
+#
+# This was 0.99, which let a 128-row shortfall (one batch) read as healthy while
+# Argus — alarming on unembedded > 0 — called the same state SICK. Two
+# thresholds for one fact, and the looser one was the one that decided whether
+# she spoke. The missing rows are not random noise either: they are specific
+# verses, and a question about one of them gets a confident answer assembled
+# from the verses that ARE indexed, with a correct-looking citation attached.
+#
+# Strict is affordable here precisely because the build is cheap and resumable:
+# the whole corpus re-embeds in ~3.5 minutes and an interrupted run picks up
+# where it stopped. "Refuse until it is complete" costs minutes; "answer from a
+# library with holes in it" costs a wrong citation nobody can see is wrong.
+INDEX_MIN_FRACTION = 1.0
+
+
+def index_health() -> dict:
+    """indexed / eligible / unembedded, plus whether that is good enough to use.
+
+    `unembedded` is the number Argus alarms on. It is derived, never stored, so
+    it cannot go stale the way a cached counter would.
+    """
+    try:
+        _c, ix = store()
+        st = ix.stats()
+    except Exception as e:
+        return {"indexed": 0, "eligible": 0, "unembedded": 0,
+                "ok": False, "reason": f"store unavailable: {e}"}
+    indexed, eligible = st["indexed"], st["eligible"]
+    unembedded = max(0, eligible - indexed)
+    if eligible == 0:
+        return {**st, "unembedded": 0, "ok": False, "reason": "no eligible passages"}
+    if indexed == 0:
+        return {**st, "unembedded": unembedded, "ok": False, "reason": "index empty"}
+    frac = indexed / eligible
+    ok = frac >= INDEX_MIN_FRACTION
+    return {**st, "unembedded": unembedded, "ok": ok,
+            "reason": None if ok else f"index short: {indexed:,}/{eligible:,} ({frac:.1%})"}
+
+
+def log_index_health() -> dict:
+    """Boot check. Says the state out loud in the log either way."""
+    h = index_health()
+    if h["ok"]:
+        log.info("thoth: index OK — %s/%s passages embedded",
+                 f"{h.get('indexed',0):,}", f"{h.get('eligible',0):,}")
+    else:
+        log.error("thoth: INDEX NOT USABLE — %s (unembedded=%d). She will say so "
+                  "rather than answer from weights.", h["reason"], h["unembedded"])
+    return h
+
+
 # ── the model call: NO tools key, ever ───────────────────────────────────────
 
 def _generate(prompt: str) -> str:
@@ -141,6 +204,13 @@ def answer(query: str, session_id: str = "") -> str:
         log.warning("thoth: store unavailable — %s", e)
         return ("My library isn't open at the moment, and I'd rather say that "
                 "than answer about scripture from memory.")
+    # DETERMINISTIC, above the lane and above the model. An empty or short index
+    # is a stated condition, not a quiet miss.
+    _h = index_health()
+    if not _h["ok"]:
+        log.error("thoth: refusing to answer — %s (unembedded=%d)",
+                  _h["reason"], _h["unembedded"])
+        return UNINDEXED_LINE
     try:
         got = lane.ask(query, _generate, c, ix, session_id=session_id)
     except Exception as e:
@@ -239,6 +309,10 @@ def status(tts=None) -> dict:
     try:
         c, ix = store()
         out.update(ix.stats())
+        _h = index_health()
+        out["unembedded"] = _h["unembedded"]      # Argus alarms on this
+        out["index_ok"] = _h["ok"]
+        out["index_reason"] = _h["reason"]
         row = c._db.execute(
             "SELECT count(*), coalesce(sum(passage_count),0) FROM works "
             "WHERE ingested=1").fetchone()
@@ -252,6 +326,7 @@ def status(tts=None) -> dict:
     return out
 
 
-__all__ = ["answer", "available", "intent", "is_reading", "reading",
+__all__ = ["answer", "available", "index_health", "log_index_health",
+           "UNINDEXED_LINE", "intent", "is_reading", "reading",
            "resume_reading", "start_reading", "status", "stop_reading",
            "store", "work_names"]

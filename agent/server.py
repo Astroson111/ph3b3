@@ -331,6 +331,32 @@ async def lifespan(app):
             log.warning("[retention] startup sweep skipped: %s", e)
     threading.Thread(target=_sweep_captures, daemon=True).start()
 
+    # ── Thoth index boot check + Argus counter ───────────────────────────────
+    # Semantic retrieval over the sacred-text corpus was dead from the Sept 23
+    # crash until 2026-10-03 and NOTHING SAID SO: the vector table was empty,
+    # every passage row was intact, works and passage counts looked healthy, and
+    # retrieval just returned nothing. The library failed silently for ten days.
+    #
+    # So the state is now asserted at boot and published as a counter Argus can
+    # alarm on (contract: thoth, sick_if unembedded_above 0). The counter is
+    # DERIVED from the store on every beat, never cached, so it cannot go stale
+    # the way a remembered number would.
+    #
+    # Daemon thread with everything swallowed, same as the warm-up above: a
+    # monitoring check that could delay or break startup is a worse bug than the
+    # one it reports.
+    def _thoth_index_watch():
+        first = True
+        while True:
+            try:
+                h = thoth_svc.log_index_health() if first else thoth_svc.index_health()
+                argus_store.record_heartbeat("thoth", unembedded=int(h.get("unembedded", 0)))
+            except Exception as e:                     # noqa: BLE001
+                log.warning("[thoth] index watch skipped: %s", e)
+            first = False
+            time.sleep(300)                            # matches heartbeat_s in the contract
+    threading.Thread(target=_thoth_index_watch, daemon=True).start()
+
     async def _edit_scratch_janitor():
         # Bound edit-mode scratch to the TTL even when no new uploads arrive.
         while True:
