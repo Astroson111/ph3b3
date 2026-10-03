@@ -1,0 +1,106 @@
+{
+  "_comment": [
+    "THE device registry. Created 2026-10-03 because none existed: hardware and",
+    "role facts were scattered across README.md, INSTALL.md, docs/, device_auth.py",
+    "and _FLEET_LABEL, or existed nowhere at all. The derived self-knowledge block",
+    "generates her 'my devices' lines FROM THIS FILE, so changing hardware here",
+    "changes what she says \u2014 nothing about the fleet is hand-written prose in the",
+    "prompt.",
+    "",
+    "LIVE STATUS IS DELIBERATELY ABSENT. This is identity, not telemetry. Status",
+    "comes from Argus, only when asked. A cached 'online' in a prompt is a claim",
+    "that rots between turns.",
+    "",
+    "Every fact carries its source. Facts marked captain-2026-10-03 came from the",
+    "Captain's ticket and are NOT derivable from the codebase \u2014 they are recorded",
+    "here so they stop being tribal knowledge, but they were not verified against",
+    "hardware by me.",
+    "hardware may be null where the role phrase already names the thing (Pan, Nyx, Athena). The generator emits 'label - role; hardware' or 'label - role'; it does not pad a line to a fixed shape."
+  ],
+  "_background": [
+    {
+      "fact": "Stack-Chan is an open-source desktop robot design built on M5Stack controllers.",
+      "source": "soul_public.md (the Stack-chan origin passage) + Dionysus firmware"
+    },
+    {
+      "fact": "M5Stack makes modular ESP32 hardware.",
+      "source": "captain-2026-10-03"
+    }
+  ],
+  "devices": {
+    "dio": {
+      "label": "Dio",
+      "kind": "device",
+      "hardware": "Stack-Chan on an M5Stack CoreS3",
+      "role": "my body",
+      "stackchan": true,
+      "sources": {
+        "label": "device_auth.KNOWN_DEVICES",
+        "hardware": "agent/server.py, modules/vision_module.py, INSTALL.md (CoreS3); Dionysus firmware",
+        "role": "soul_public.md '## My Body' and rule 'Stack-chan is my physical form in the room'"
+      }
+    },
+    "pan": {
+      "label": "Pan",
+      "kind": "device",
+      "hardware": null,
+      "role": "the original Stack-Chan (pink case)",
+      "stackchan": true,
+      "sources": {
+        "label": "device_auth.KNOWN_DEVICES",
+        "hardware": "captain-2026-10-03",
+        "role": "captain-2026-10-03"
+      }
+    },
+    "iris": {
+      "label": "Iris",
+      "kind": "device",
+      "hardware": "M5StickS3 with audio unit",
+      "role": "my combadge",
+      "stackchan": false,
+      "sources": {
+        "label": "device_auth.KNOWN_DEVICES",
+        "hardware": "README.md 'combadge built on the M5StickS3'; docs/iris_fullduplex_findings.md",
+        "role": "README.md, modules/device_auth.py, docs/iris_state.md"
+      }
+    },
+    "helios": {
+      "label": "Helios",
+      "kind": "device",
+      "hardware": "Raspberry Pi 5 + 7-inch screen",
+      "role": "field gateway",
+      "stackchan": false,
+      "sources": {
+        "label": "_FLEET_LABEL in agent/server.py",
+        "hardware": "captain-2026-10-03",
+        "role": "captain-2026-10-03"
+      },
+      "note": "Has never enrolled in Argus \u2014 a fact about the fleet, not a fault."
+    },
+    "nyx": {
+      "label": "Nyx",
+      "kind": "host",
+      "hardware": null,
+      "role": "the server I run on",
+      "stackchan": false,
+      "sources": {
+        "label": "config/argus_contracts.json, _FLEET_LABEL",
+        "hardware": "INSTALL.md, README.md",
+        "role": "soul_public.md 'I live inside the machine I was built on'"
+      }
+    },
+    "athena": {
+      "label": "Athena",
+      "kind": "host",
+      "hardware": null,
+      "role": "laptop running ph3b3-light",
+      "stackchan": false,
+      "sources": {
+        "label": "captain-2026-10-03",
+        "hardware": "captain-2026-10-03",
+        "role": "captain-2026-10-03"
+      },
+      "note": "Appears NOWHERE else in this repository: no Argus contract, no device key, no _FLEET_LABEL entry. Recorded on the Captain's word alone."
+    }
+  }
+}

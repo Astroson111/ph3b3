@@ -145,7 +145,25 @@ def test_it_is_a_few_hundred_tokens_not_an_encyclopedia():
     # picture-text clause from the edit paragraph, which now has one author.
     # This is a budget, not an invariant: if it needs raising again, the thing
     # to question is the preamble, which is the longest CONDUCT text in here.
-    assert approx_tokens < 500, f"self-knowledge has grown to ~{approx_tokens:.0f} tokens"
+    #
+    # 500 -> 600 on 2026-10-03, same procedure. The fleet block cost +125 by this
+    # metric (142 real cl100k tokens): six device lines, the both-Stack-Chans
+    # line, two static background facts, and one line saying live status is not
+    # in here. It paid part of its own way — the first draft was +163 and was cut
+    # by dropping a role/hardware split I had invented for Pan, Nyx and Athena
+    # (the spec gives those one phrase, not two) and by shortening the status
+    # disclaimer from 25 tokens to 10.
+    #
+    # What it buys: she could not say what her own devices are. Measured the same
+    # day, "what is Stack-Chan?" returned a telemetry dump about Dio, and the
+    # self block flatly denied she had a body at all. Those are the same class of
+    # error as the capability claim that bought the last raise — confident,
+    # prompt-shaped and wrong.
+    #
+    # The preamble is STILL the longest conduct text in here and is still the
+    # right thing to question next; it was left alone because trimming conduct
+    # text was not in scope for this change. Flagged, not quietly absorbed.
+    assert approx_tokens < 600, f"self-knowledge has grown to ~{approx_tokens:.0f} tokens"
 
 
 def test_the_prompt_is_built_per_conversation_not_once_at_import():

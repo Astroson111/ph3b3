@@ -856,6 +856,73 @@ _CAPTURE_NUDGE = (
 # — which doubles as a belt against a competing self-description, since
 # `photo_capabilities` answers "what can you do with images" from Apelles'
 # editing map and never mentions generation at all.
+DEVICES_PATH = ROOT / "config" / "devices.json"
+
+
+def _load_devices() -> dict:
+    """The device registry. Hardware and role facts live in ONE file.
+
+    Before this existed the same facts were spread across README.md, INSTALL.md,
+    docs/, device_auth.py and _FLEET_LABEL — or nowhere, which is how a prompt
+    ends up carrying hand-written prose that silently goes stale when the
+    hardware changes.
+    """
+    try:
+        return json.loads(DEVICES_PATH.read_text(encoding="utf-8"))
+    except Exception as e:                                     # noqa: BLE001
+        log.warning("[devices] registry unreadable (%s) — fleet block omitted", e)
+        return {}
+
+
+def unregistered_devices() -> list[str]:
+    """Devices known to auth or Argus with NO registry entry.
+
+    Reported, never invented. A device she can authenticate but cannot describe
+    is a gap in the registry, and guessing its hardware in the prompt would be
+    the same class of error as the "no body" line: confident, prompt-shaped and
+    wrong.
+    """
+    reg = set((_load_devices().get("devices") or {}).keys())
+    known = {device_auth.canonical(n) for n in device_auth.KNOWN_DEVICES}
+    try:
+        contracts = set(load_contracts().get("devices", {}).keys())
+    except Exception:                                          # noqa: BLE001
+        contracts = set()
+    # Services and stores are not hardware and are not expected here.
+    services = {"argus", "metis", "comfyui", "rhea", "atalanta", "thoth", "nyx"}
+    return sorted((known | contracts) - reg - services - {"stackchan"})
+
+
+def _fleet_self_block() -> str:
+    """Her devices, generated from the registry. First person, one line each.
+
+    NO LIVE STATUS. This is identity — what she has and what each thing is for.
+    Status comes from Argus and only when asked, because a cached "online" in a
+    system prompt is a claim that rots between turns and she would state it as
+    current.
+    """
+    reg = _load_devices()
+    devs = reg.get("devices") or {}
+    if not devs:
+        return ""
+    lines = []
+    for key, d in devs.items():
+        label, role, hw = d.get("label", key), d.get("role") or "", d.get("hardware")
+        lines.append(f"  {label} — {role}; {hw}" if hw else f"  {label} — {role}")
+    out = ["My devices:"] + lines
+    sc = [d.get("label", k) for k, d in devs.items() if d.get("stackchan")]
+    if sc:
+        out.append(f"  {' and '.join(sc)} are both Stack-Chans.")
+    for b in (reg.get("_background") or []):
+        if b.get("fact"):
+            out.append(f"  {b['fact']}")
+    # Shortened from a 25-token sentence: every token here rides every turn, and
+    # the block has a measured budget. The meaning that matters is "this file is
+    # not telemetry".
+    out.append("  Live status is not in this list; it comes from Argus when asked.")
+    return "\n".join(out)
+
+
 def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str, str | None]]:
     """Every section that rendered, as (key, topics, prompt_text, answer).
 
@@ -1016,6 +1083,13 @@ def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str, str | No
         "My body is Stack-Chan (Dio), a small robot on an M5Stack CoreS3. "
         "It isn't a human body: I don't eat, drink, or sleep. "
         "Tell me about yours, though."))
+    # Her fleet, generated from config/devices.json — never hand-written prose,
+    # so replacing a device changes what she says without touching the prompt.
+    _fleet = _fleet_self_block()
+    if _fleet:
+        out.append(("devices", ("what devices you have, and what each one is",),
+                    _fleet, _fleet))
+
     out.append(("card_full", (),
         "If a render cannot start because the card is full, say what you "
         "managed to free and what is still holding it, by name. You do "
@@ -5769,6 +5843,26 @@ _FLEET_BARE_RE = re.compile(
 _FLEET_NOT_RE = re.compile(
     r"\b(?:make|draw|render|generate|create|write|play|sing|tell)\b", re.I)
 
+# DEFINITIONAL QUESTIONS ARE NOT STATUS QUESTIONS.
+#
+# "is" is in _FLEET_STATUS_WORDS — correctly, for "is Dio online" — which meant
+# "what is Stack-Chan?" scored a device word plus a status word and went to the
+# fleet lane. Measured 2026-10-03: the answer was "Dio is silent — last checked
+# in 15h ago." A question about what a thing IS got a telemetry dump about one
+# instance of it.
+#
+# The discriminator is POSITION, not vocabulary: a definitional question ends on
+# the device. "what is Dio" asks what she has; "what is Dio doing", "what is
+# Dio's battery" and "is Dio online" all continue past the name into the thing
+# actually being asked. So the frame is anchored, and anything after the device
+# keeps the fleet lane.
+_FLEET_DEF_RE = re.compile(
+    r"^\s*(?:so\s+|and\s+|ok\s+|hey\s+|um\s+)*"
+    r"(?:what|who|whats|whos)\s*(?:'s|\u2019s|\bis\b|\bare\b|\bwas\b)?\s*"
+    r"(?:a|an|the)?\s*"
+    r"(?:" + "|".join(re.escape(w) for w in _FLEET_DEVICE_WORDS) + r")"
+    r"\s*[?.!]*\s*$", re.I)
+
 
 class _FleetIntent:
     """Duck-types the Claim pattern: anything with .search() is accepted."""
@@ -5778,6 +5872,10 @@ class _FleetIntent:
         if _FLEET_BARE_RE.search(t):
             return True
         if _FLEET_NOT_RE.search(t):
+            return None
+        # Definitional before compositional: "what is Stack-Chan?" is answered
+        # from the fleet block in the prompt, not from Argus telemetry.
+        if _FLEET_DEF_RE.match(t):
             return None
         return True if (_FLEET_DEV_RE.search(t) and _FLEET_STAT_RE.search(t)) else None
 
