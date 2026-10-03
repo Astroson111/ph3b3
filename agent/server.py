@@ -3010,6 +3010,20 @@ def claimed_device(request) -> str:
         return ""
 
 
+# One pending read-confirm per session. Deliberately in-memory and tiny: it is
+# conversational state with a lifetime of one turn, not something to persist.
+#
+# The value is the whole request dict, because the two confirms need different
+# answers: a collision name ("The Gospel of John?") takes a bare yes, while a
+# numbered family ("1 Kings or 2 Kings?") takes an ordinal. intent.confirm_answer
+# resolves either into a book name, so the decision stays in one place.
+_THOTH_CONFIRM: dict[str, dict] = {}
+# A bare affirmative ONLY. "yes but first..." is not a yes to this question, and
+# anything longer is a new turn rather than an answer to a one-line question.
+_THOTH_YES = re.compile(r"^(?:yes|yeah|yep|yup|sure|ok|okay|please|go ahead|"
+                        r"that one|do it|aye)[.!]?$", re.I)
+
+
 async def _run_chat_pipeline(body: dict, request: Request):
     """Shared /chat brain: wake-gate → recitation → triage → inference.
 
@@ -3099,6 +3113,39 @@ async def _run_chat_pipeline(body: dict, request: Request):
         session.add("user", user_msg); session.add("assistant", _reply)
         log.info("[thoth] reading resumed")
         return _reply
+    # Two-tier read intent (2026-10-03). A pending confirm is answered FIRST:
+    # "The Gospel of John?" -> "yes" has to mean the gospel and nothing else, so
+    # it is consumed here before any other interpretation of a bare yes.
+    _sid = body.get("session_id", "default")
+    _pending = _THOTH_CONFIRM.pop(_sid, None)
+    if _pending:
+        _chosen = thoth_svc.intent.confirm_answer(user_msg, _pending)
+        if _chosen:
+            _reply = await asyncio.to_thread(
+                thoth_svc.start_reading, f"{_chosen} 1", tts)
+            session.add("user", user_msg); session.add("assistant", _reply)
+            log.info("[thoth] confirm accepted -> reading %s 1", _chosen)
+            return _reply
+
+    _rr = thoth_svc.intent.read_request(
+        user_msg, thoth_svc.book_names(),
+        thoth_active=thoth_svc.thoth_active(tts))
+    if _rr and _rr.get("confirm"):
+        _THOTH_CONFIRM[_sid] = _rr
+        _reply = (thoth_svc.intent.numbered_confirm_line(_rr["stem"], _rr["parts"])
+                  if _rr.get("parts")
+                  else thoth_svc.intent.confirm_line(_rr["book"]))
+        session.add("user", user_msg); session.add("assistant", _reply)
+        log.info("[thoth] ambiguous read %r -> confirming: %s",
+                 _rr.get("stem") or _rr.get("book"), _reply)
+        return _reply
+    if _rr and _rr.get("book"):
+        _ref = f"{_rr['book']} {_rr.get('chapter') or 1}"
+        _reply = await asyncio.to_thread(thoth_svc.start_reading, _ref, tts)
+        session.add("user", user_msg); session.add("assistant", _reply)
+        log.info("[thoth] read request -> %s", _ref)
+        return _reply
+
     if thoth_svc.intent.is_read_intent(user_msg):
         _reply = await asyncio.to_thread(thoth_svc.start_reading, user_msg, tts)
         session.add("user", user_msg); session.add("assistant", _reply)

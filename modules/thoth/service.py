@@ -92,6 +92,49 @@ def work_names() -> frozenset[str]:
     return _names
 
 
+_books: tuple[str, ...] | None = None
+
+
+def book_names() -> tuple[str, ...]:
+    """Book names from the INGESTED corpus, cached per process.
+
+    read_request() matches against this, so a name the corpus does not have
+    cannot become a read request — "read Samuel" resolves to nothing because the
+    corpus holds "1 Samuel" and "2 Samuel" and no bare "Samuel".
+    """
+    global _books
+    with _lock:
+        if _books is None:
+            try:
+                c, _ix = store()
+                _books = tuple(r[0] for r in c._db.execute(
+                    "SELECT DISTINCT p.book FROM passages p JOIN works w ON w.id = p.work_id "
+                    "WHERE w.ingested = 1 AND p.book IS NOT NULL AND p.book <> ''"))
+            except Exception as e:                     # noqa: BLE001
+                log.warning("thoth: book names unavailable — %s", e)
+                _books = ()
+        return _books
+
+
+def thoth_active(tts=None) -> bool:
+    """Is she already in the library? Debate mode on, or a reading in flight.
+
+    This is what makes a bare collision name unambiguous without a confirm:
+    someone in debate mode who says "read John" means the gospel. The Thoth TAB
+    being open is NOT visible here — the panel does not report focus per turn —
+    so a tab-only user still gets the confirm line. Noted rather than faked.
+    """
+    try:
+        if debate.enabled():
+            return True
+    except Exception:                                  # noqa: BLE001
+        pass
+    try:
+        return bool(tts is not None and is_reading(tts))
+    except Exception:                                  # noqa: BLE001
+        return False
+
+
 def _collect_names() -> frozenset[str]:
     c, _ix = store()
     out: set[str] = set()
