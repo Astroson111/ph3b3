@@ -87,6 +87,7 @@ _CLASS = {
     "text_edit":   "subject",
     "video":       "subject",
     "watermark":   "subject",   # "did you sign that?" is a real question
+    "clip_mark":   "subject",   # "is my clip marked?" — same question, video
     "embodiment":  "subject",   # "what did you have for breakfast?" is a real question
     "deaf_window": "conduct",
     "card_full":   "conduct",

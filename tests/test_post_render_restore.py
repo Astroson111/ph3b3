@@ -51,10 +51,15 @@ def test_the_restore_is_kicked_after_the_card_is_released():
     on 2026-09-22, so the order is the whole point: comfy_free, then
     release_card (which drops the tail and reloads her ears), and only then the
     brain."""
-    i = MX_SRC.index("restore_brain_soon()", MX_SRC.index("could not release the card"))
-    window = MX_SRC[:i]
-    assert window.rindex("await herakles.release_card(") < i
-    assert window.rindex("await comfy_free(http)") < i
+    # Since 2026-10-07 the release goes through _give_card (shared by images and
+    # clips), which awaits herakles.release_card. The order is unchanged.
+    gen = MX_SRC[MX_SRC.index("async def run_generation("):]
+    i = gen.index("restore_brain_soon()")
+    window = gen[:i]
+    assert window.rindex("await _give_card(http, job_id, lease)") < i
+    assert window.rindex("await comfy_free(http)") < window.rindex("await _give_card(")
+    give = MX_SRC[MX_SRC.index("async def _give_card("):MX_SRC.index("\nENGINES")]
+    assert "await herakles.release_card(" in give
 
 
 def test_herakles_keeps_its_never_automatic_contract():
@@ -72,8 +77,9 @@ def test_the_restore_does_not_block_the_render_response():
     src = src[:src.index("async def await_brain")]
     assert "create_task" in src
     assert "await restore_brain_soon" not in MX_SRC
-    i = MX_SRC.index("restore_brain_soon()", MX_SRC.index("could not release the card"))
-    assert "await " not in MX_SRC[i - 30:i], "the render path waits on the warm-up"
+    gen = MX_SRC[MX_SRC.index("async def run_generation("):]
+    i = gen.index("restore_brain_soon()")
+    assert "await " not in gen[i - 30:i], "the render path waits on the warm-up"
 
 
 # ── one lease, one restore ───────────────────────────────────────────────────
@@ -105,9 +111,12 @@ def test_a_second_kick_while_one_is_in_flight_is_a_no_op():
 def test_the_render_path_releases_once_per_lease():
     """The batch guarantee comes from morpheus calling release_card once, in a
     finally, guarded on the lease existing."""
-    i = MX_SRC.index("await herakles.release_card(")
-    window = MX_SRC[i - 700:i]
+    start = MX_SRC.index("async def run_generation(")
+    gen = MX_SRC[start:MX_SRC.index("\nasync def ", start + 10)]   # this function only
+    i = gen.index("await _give_card(http, job_id, lease)")
+    window = gen[i - 700:i]
     assert "finally:" in window and "if lease is not None:" in window
+    assert gen.count("await _give_card(") == 1, "released more than once per lease"
 
 
 # ── the failure path is honest and implementation-free ───────────────────────

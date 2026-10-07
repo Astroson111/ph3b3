@@ -71,6 +71,26 @@ def _accept(result):
         return "", f"boilerplate '{text}' (avg_logprob {avg_lp})"
     return text, None
 
+_SELFTEST_WAV = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "assets", "stt_selftest.wav")
+_SELFTEST_WORDS = {"quick", "brown", "fox", "jumps", "lazy", "dog"}
+
+
+def _drop_cuda_cache() -> int:
+    """gc + empty_cache; returns MB handed back to the driver (0 if no CUDA)."""
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            before = _reserved_mb()
+            torch.cuda.empty_cache()
+            return max(0, before - _reserved_mb())
+    except Exception:                                  # noqa: BLE001
+        pass
+    return 0
+
+
 try:
     import whisper
     WHISPER_AVAILABLE = True
@@ -141,6 +161,7 @@ class STTModule:
         self._held_since    = None
         self._load_error    = None       # last failed load, verbatim (trimmed)
         self._load_error_at = None
+        self._selftest_at   = None       # last passing self-test (restore check)
         self._cv        = threading.Condition(threading.RLock())
         if WHISPER_AVAILABLE:
             self._begin_load()
@@ -179,6 +200,14 @@ class STTModule:
                 self._load_error_at = time.time()
                 self._cv.notify_all()
             log.error(f"Whisper load error: {e}")
+            # C1 (2026-10-07): a load that dies partway leaves its tensors in
+            # torch's caching allocator — ~3.8 GB held by this process with
+            # _model None, invisible to release() and to every lease after it.
+            # Hand it back now, while we know it is garbage.
+            freed = _drop_cuda_cache()
+            if freed:
+                log.warning("[stt] failed load left %d MB reserved — returned "
+                            "to the driver", freed)
 
     def ensure_loaded(self, timeout: float = 180.0) -> bool:
         """True once the model is resident. Reloads it if release() took it."""
@@ -211,7 +240,10 @@ class STTModule:
             if self._loading:
                 raise STTBusy("Whisper is mid-load — let it finish, then release")
             if self._model is None:
-                return {"released": False, "why": "not loaded", "freed_mb": 0}
+                # Not loaded is not "nothing to give back": an earlier failed
+                # load may have left memory reserved (C1). Return it either way.
+                freed = _drop_cuda_cache()
+                return {"released": False, "why": "not loaded", "freed_mb": freed}
             before = _reserved_mb()
             self._model     = None
             self._available = False
@@ -384,6 +416,30 @@ class STTModule:
                 "no_speech_prob": avg_ns, "avg_logprob": avg_lp,
                 "language": result.get("language", "")}
 
+    def self_test(self) -> dict:
+        """Transcribe a known clip and check the words came back.
+
+        Restore verification (ruling, 2026-10-07): after a lease, "Whisper
+        loaded AND one transcript works". This proves the model decodes audio;
+        it does NOT prove the microphones — so it is reported separately and
+        does not set hearing_confirmed(), which still needs a live transcript.
+        """
+        if self._held or self._model is None:
+            return {"ok": False, "error": "not loaded", "text": ""}
+        try:
+            with self._using():
+                r = self._model.transcribe(str(_SELFTEST_WAV), **_stt_options("en"))
+            text = (r.get("text") or "").strip()
+            words = set(re.findall(r"[a-z]+", text.lower()))
+            ok = len(words & _SELFTEST_WORDS) >= 4
+            if ok:
+                self._selftest_at = time.time()
+            log.info("[stt] self-test %s: %r", "passed" if ok else "FAILED", text[:60])
+            return {"ok": ok, "text": text}
+        except Exception as e:                       # noqa: BLE001
+            log.error("[stt] self-test error: %s", e)
+            return {"ok": False, "error": str(e), "text": ""}
+
     def hearing_confirmed(self) -> bool:
         """True only if Whisper has produced an accepted transcript since it last
         loaded. Loaded is not hearing."""
@@ -414,5 +470,9 @@ class STTModule:
         if self.hearing_confirmed():
             return (f"Whisper {WHISPER_MODEL} on {dev} — hearing confirmed by a "
                     f"transcript at {at(self._proven_at)}")
-        return (f"Whisper {WHISPER_MODEL} loaded on {dev} at {at(self._loaded_at)} — "
-                f"hearing unconfirmed (no transcript since it loaded)")
+        selftested = (self._selftest_at is not None and self._loaded_at is not None
+                      and self._selftest_at >= self._loaded_at)
+        return (f"Whisper {WHISPER_MODEL} loaded on {dev} at {at(self._loaded_at)}"
+                + (f", self-test transcript passed at {at(self._selftest_at)}"
+                   if selftested else "")
+                + " — no live transcript since it loaded")

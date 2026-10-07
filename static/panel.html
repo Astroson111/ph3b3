@@ -5791,6 +5791,14 @@ document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
 
   let pollId = null;
 
+  // The VRAM lease's plan (shown before anything is evicted) and a failed
+  // hearing restore, which is an ERROR even on a render that succeeded —
+  // ruling 2026-10-07: restore failure is visible, never silent.
+  function showLease(d) {
+    if (d.plan && BUSY_STATES.has(d.state)) outputEmpty.textContent = d.plan;
+    if (d.restore_error) showError(d.restore_error);
+  }
+
   function setStatePill(state) {
     stateCardEl.style.display = '';
     statePillEl.textContent = STATE_LABELS[state] || state;
@@ -5807,6 +5815,7 @@ document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
     try {
       const data = await fetch('/image/status/' + jobId).then(r => r.json());
       setStatePill(data.state);
+      showLease(data);
       if (data.state === 'done') {
         stopPoll();
         outputEmpty.style.display = 'none';
@@ -6057,6 +6066,7 @@ document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
     try {
       const d = await fetch('/morpheus/jobs/' + jobId).then(r => r.json());
       setStatePill(d.state);
+      showLease(d);
       const q = (d.state === 'queued' && d.queue_position > 0) ? ` · #${d.queue_position} in queue` : '';
       vidTimer.textContent = `${fmtDur((Date.now()-t0)/1000)} / ~${fmtDur(eta)}${q}`;
       if (d.state === 'done') {
@@ -6065,7 +6075,7 @@ document.getElementById('wgToggleBtn').addEventListener('click', wgToggle);
       } else if (d.state === 'error' || d.state === 'cancelled') {
         stopPoll(); cancelBtn.style.display='none'; vidTimer.style.display='none';
         genBtn.disabled = false;
-        if (d.state === 'error') showError(d.error || 'Render failed.');
+        if (d.state === 'error') showError([d.error || 'Render failed.', d.restore_error].filter(Boolean).join(' — '));
         outputEmpty.textContent = 'Nothing yet — hit Generate.';
       }
     } catch (e) { /* transient — keep polling */ }

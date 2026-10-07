@@ -133,6 +133,98 @@ qwen_open = lambda: False
 # in which case Herakles simply never reaches the hearing tier.
 stt_provider = lambda: None
 
+# Injected by the server: speak + show a line to whoever is listening. Used for
+# the lease's two announcements — deafness at the start, a failed restore at the
+# end. Default is log-only, so morpheus standalone (and the tests) stay quiet.
+announce = lambda text: log.info("[announce] %s", text)
+
+
+# ── VRAM needs: one config, one lease (Captain's rulings, 2026-10-07) ─────────
+# Images and clips both take the card through herakles.request_card — the
+# ComfyUI → Ollama → Whisper ladder, re-measured after every rung — and give it
+# back through release_card, which restores her hearing and PROVES it. This
+# replaced evict_hermes (chat model only) + assert_vram_for_wan (check and
+# refuse), which never evicted Whisper: on 2026-10-07 six clips in 3½ minutes
+# were refused 233-442 MiB short with Whisper holding 4.5 GB.
+VRAM_NEEDS_FILE = Path(os.getenv("PH3B3_VRAM_NEEDS",
+                       str(Path(__file__).resolve().parents[1] / "config" / "vram_needs.json")))
+
+
+def need_for(mode: str) -> tuple[int, dict]:
+    """(need_mib, entry) for a render mode, margin included. Read every call.
+
+    A missing or broken file fails CLOSED to the largest figure in it — or to
+    the whole card — never to a guess that lets a render start too tight.
+    """
+    try:
+        cfg = json.loads(VRAM_NEEDS_FILE.read_text())
+        margin = int(cfg.get("margin_mib", 500))
+        e = dict(cfg["modes"][mode])
+    except Exception as exc:                            # noqa: BLE001
+        log.error("[vram] no usable need for %r (%s) — asking for the whole card",
+                  mode, exc)
+        return 16000, {"policy": "fallback", "error": str(exc)}
+    pol = e.get("policy", "fixed")
+    figure = e.get(f"{pol}_mib") if pol in ("resident", "streamed") else e.get("need_mib")
+    if figure is None:
+        log.error("[vram] %r has no figure for policy %r — asking for the whole card",
+                  mode, pol)
+        return 16000, e
+    return int(figure) + margin, e
+
+
+async def _take_card(http, job_id: str, mode: str, eta_s: int) -> dict:
+    """Plan, announce, lease. Raises (before anything loads) if it can't fit."""
+    import herakles
+    need, entry = need_for(mode)
+    stt = stt_provider()
+    plan = herakles.plan_card(need, eta_s, stt=stt)
+    jobs[job_id]["plan"] = plan["line"]
+    jobs[job_id]["need_mib"] = need
+    log.info("[vram] job %s %s: need %d MiB (%s%s) — plan: %s", job_id[:8], mode,
+             need, entry.get("policy"), ", PROVISIONAL" if entry.get("provisional") else "",
+             plan["line"])
+    if plan["deaf"]:
+        announce(plan["line"])
+    lease = await herakles.request_card(need, f"{mode}:{job_id[:8]}", http=http,
+                                        stt=stt, holder=job_id, eta_s=eta_s)
+    if lease.get("stt_held"):
+        jobs[job_id]["ears_held"] = True
+        log.info("Morpheus: job %s took her hearing for the render", job_id)
+    if not lease.get("granted"):
+        # Refused before anything was loaded. Name the shortfall and holders.
+        # The lease still goes back through _give_card in the caller's finally,
+        # so anything this attempt evicted is restored.
+        jobs[job_id]["lease"] = lease
+        raise VramTooTight(lease.get("line") or f"not enough VRAM for {mode}")
+    return lease
+
+
+async def _give_card(http, job_id: str, lease: dict | None) -> None:
+    """Release in the caller's finally — success, failure AND cancel.
+
+    A REFUSED lease never reaches the caller's variable (_take_card raises), but
+    the ladder may already have evicted Ollama or held her hearing on the way to
+    refusing — so the job's recorded lease is released too. Skipping it is how
+    a refusal would leave her deaf.
+    """
+    lease = lease or jobs.get(job_id, {}).pop("lease", None)
+    if lease is None:
+        return
+    import herakles
+    try:
+        rel = await herakles.release_card(lease, http=http, stt=stt_provider())
+    except Exception as exc:                            # noqa: BLE001
+        rel = {"restored": False if lease.get("stt_held") else None,
+               "line": f"I couldn't release the card cleanly: {exc}"}
+        log.error("Morpheus: job %s could not release the card: %s", job_id, exc)
+    jobs.get(job_id, {})["restore"] = rel.get("line")
+    if rel.get("restored") is False:
+        # Never silent (ruling 4): spoken AND visible on the job.
+        jobs.get(job_id, {})["restore_error"] = rel.get("line")
+        announce(rel.get("line"))
+
+
 ENGINES = {
     "sdxl": {"label": "SDXL", "model": "sd_xl_base_1.0",
              "hint": "General image generation",
@@ -2988,35 +3080,12 @@ async def run_generation(job_id: str, params: dict) -> None:
     async with gpu_lock:
         async with httpx.AsyncClient() as http:
             try:
-                jobs[job_id]["state"] = "evicting"
-                if engine == "qwen":
-                    # Herakles' first production caller. `holder` is this job:
-                    # we already hold gpu_lock and our own row is non-terminal,
-                    # so without naming ourselves the authority would refuse us
-                    # for being busy — with us.
-                    #
-                    # Ollama goes first, ComfyUI's cache second, her hearing
-                    # only if those were not enough. If it comes to her ears,
-                    # listen() answers with a spoken line for the duration
-                    # rather than silence.
-                    import herakles
-                    lease = await herakles.request_card(
-                        QWEN_NEED_MB, "palamedes", http=http,
-                        stt=stt_provider(), holder=job_id,
-                        eta_s=QWEN_SECONDS + 15)
-                    if not lease.get("granted"):
-                        # Refused BEFORE anything was loaded. Say why.
-                        raise RuntimeError(lease.get("line") or "not enough VRAM")
-                    if "stt" in lease.get("evicted", []):
-                        jobs[job_id]["ears_held"] = True
-                        log.info("Morpheus: job %s took her hearing for the render",
-                                 job_id)
-                else:
-                    # SDXL: unchanged. Herakles is not in a loop it never needed.
-                    await evict_hermes(http)
-
                 jobs[job_id]["state"] = "starting"
-                await ensure_comfy_up(http)
+                await ensure_comfy_up(http)       # the ladder's first rung is ComfyUI's /free
+                jobs[job_id]["state"] = "evicting"
+                lease = await _take_card(http, job_id,
+                                         "qwen" if engine == "qwen" else "sdxl",
+                                         QWEN_SECONDS + 15 if engine == "qwen" else 60)
 
                 jobs[job_id]["state"] = "loading"
                 wf = build_workflow(params)   # resolves seed in-place
@@ -3043,18 +3112,11 @@ async def run_generation(job_id: str, params: dict) -> None:
             finally:
                 await comfy_free(http)   # TRAP #2 — always, even on error
                 if lease is not None:
-                    # AFTER comfy_free, and the order is the point. release_card
-                    # reloads her hearing eagerly rather than leaving it on a
-                    # lazy fuse — and reloading 4.5 GB of Whisper while ComfyUI
-                    # still holds ~11 GB is precisely how she went deaf on
-                    # 2026-09-22: the load hit CUDA OOM and nothing retried it.
-                    # Drop the render's models first, then give her ears back.
-                    try:
-                        await herakles.release_card(lease, http=http,
-                                                    stt=stt_provider())
-                    except Exception as exc:        # noqa: BLE001
-                        log.error("Morpheus: job %s could not release the card: %s",
-                                  job_id, exc)
+                    # AFTER comfy_free, and the order is the point: release_card
+                    # confirms room with the driver, re-evicts any judge the
+                    # output check reloaded, and only then gives her ears back —
+                    # proving it with a self-test transcript (C1, 2026-10-07).
+                    await _give_card(http, job_id, lease)
                     # THIRD DIRECTION, after the release and never during it:
                     # the render evicted Ollama on the way in and release_card
                     # only restores Whisper and ComfyUI. Fire-and-forget so the
@@ -3154,12 +3216,12 @@ async def run_edit(job_id: str, params: dict) -> None:
     async with gpu_lock:
         async with httpx.AsyncClient() as http:
             run_img: Path | None = None
+            lease = None
             try:
-                jobs[job_id]["state"] = "evicting"
-                await evict_hermes(http)
-
                 jobs[job_id]["state"] = "starting"
                 await ensure_comfy_up(http)
+                jobs[job_id]["state"] = "evicting"
+                lease = await _take_card(http, job_id, "edit", 60)
 
                 jobs[job_id]["state"] = "loading"
                 run_img, nw, nh = await asyncio.to_thread(
@@ -3190,6 +3252,7 @@ async def run_edit(job_id: str, params: dict) -> None:
 
             finally:
                 await comfy_free(http)   # TRAP #2 — always
+                await _give_card(http, job_id, lease)
                 # Delete only the transient per-job resized copy. Keep the source
                 # upload so the SAME image can be re-edited at other strengths
                 # (the slider workflow); the source expires via the TTL janitor.
@@ -3256,67 +3319,19 @@ def aspect_of(width: int, height: int) -> str | None:
     return None
 
 
-# ── VRAM: the driver's number, not ComfyUI's opinion ─────────────────────────
-# Measured on this card 2026-09-26, one full wan-fast render: it started with
-# 5,284 MiB used (11,096 MiB free) and completed in 12m17s, peaking at 15,684
-# MiB with BOTH experts reporting "0.00 MB loaded, 10423.12 MB offloaded".
-#
-# READ THAT AGAIN, because it decides what this gate can honestly promise: Wan
-# ALWAYS offloads on a 16 GB card. Each expert is 11 GB, the fp8 text encoder is
-# 6.3 GB, and Whisper holds 4.5 GB inside the server process and is untouchable
-# by ruling. There is no state of this box in which an A14B expert is fully
-# resident, so a gate that refused to "start into offload" would refuse every
-# Wan render ever made here.
-#
-# What this gate does instead: refuse to start when the card is in WORSE shape
-# than the state we have measured a successful render from. Below this line the
-# render does not degrade gracefully — it thrashes, or ComfyUI's planner accepts
-# a fit it cannot honour and the runner dies with cudaMalloc (the same failure
-# the camera lane hit at ~5 GiB free).
-WAN_NEED_MB = 10500          # measured floor: 11,096 MiB free ran clean
-
-
-def free_vram_mb() -> int | None:
-    """Free VRAM per the DRIVER. None when it cannot be read.
-
-    nvidia-smi rather than pynvml: pynvml is not installed on this box, and a
-    number from ComfyUI would be the opinion of the process we are checking up
-    on. None is returned rather than a guess — the caller decides what to do
-    with "unknown", and it must not read as "plenty".
-    """
-    import subprocess
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=15)
-        if out.returncode != 0:
-            return None
-        return int(out.stdout.strip().splitlines()[0].strip())
-    except Exception:                                        # noqa: BLE001
-        return None
-
-
+# ── VRAM history (the gate itself is retired — see need_for / _take_card) ────
+# 2026-09-26: one wan-fast render started with 11,096 MiB free and completed in
+# 12m17s, peaking at 15,684 MiB, BOTH experts "0.00 MB loaded, 10423.12 MB
+# offloaded" — with Whisper "untouchable by ruling" at the time.
+# 2026-10-07: same preset, 10,724 MiB free, ComfyUI peak 10,354 MiB, 12m45s,
+# again fully offloaded. That is the "streamed" figure in config/vram_needs.json.
+# The same day the Captain ruled Whisper may be evicted for a Wan render
+# ("resident" policy, the default), to be measured through the lease.
+# assert_vram_for_wan / WAN_NEED_MB (10,500, check-and-refuse, no eviction) were
+# retired that day: they refused six clips in 3½ minutes with Whisper holding the
+# 4.5 GB that the lease now frees.
 class VramTooTight(RuntimeError):
     """Raised instead of starting a Wan render onto a card that cannot hold it."""
-
-
-def assert_vram_for_wan(need_mb: int = WAN_NEED_MB) -> int:
-    """Driver-confirmed free VRAM, or raise loudly. Returns the free MiB.
-
-    Called AFTER the eviction and the ComfyUI free, so it measures the state the
-    render will actually begin in rather than the state it was asked in.
-    """
-    free = free_vram_mb()
-    if free is None:
-        raise VramTooTight(
-            "I can't read the card's free memory from the driver, so I won't "
-            "start a 12-minute render blind. nvidia-smi did not answer.")
-    if free < need_mb:
-        raise VramTooTight(
-            f"Not enough VRAM to start the clip: {free} MiB free, {need_mb} MiB "
-            f"needed. Something else is still holding the card — the render "
-            f"would thrash or die partway, so it has not been started.")
-    return free
 
 
 def video_eta(preset: str) -> int:
@@ -3473,6 +3488,10 @@ video_lane_open = lambda: True
 async def run_video(job_id: str, params: dict) -> None:
     """Video GPU-swap lifecycle. Always call as a FastAPI BackgroundTask.
     Holds gpu_lock for the whole render (2–40 min) so Ollama stays evicted."""
+    preset = params.get("preset", DEFAULT_VIDEO_PRESET)
+    if preset not in VIDEO_PRESETS:
+        preset = DEFAULT_VIDEO_PRESET
+    lease = None
     async with gpu_lock:
         async with httpx.AsyncClient() as http:
             if jobs[job_id].get("state") == "cancelled":
@@ -3484,27 +3503,17 @@ async def run_video(job_id: str, params: dict) -> None:
                 log.warning("[video] job %s dropped — lane switched off while queued", job_id)
                 return   # the finally below still frees VRAM
             try:
-                jobs[job_id]["state"] = "evicting"
-                await evict_hermes(http)
-
                 jobs[job_id]["state"] = "starting"
-                await ensure_comfy_up(http)
+                await ensure_comfy_up(http)       # the ladder's first rung is ComfyUI's /free
 
-                # ── The card is cleared, then CONFIRMED clear, before a Wan
-                # render starts. Two stages back to back (a 14.5 GB Qwen
-                # keyframe, then a Wan clip that peaks at 15.7 GB) do not fit on
-                # a 16 GB card, so the keyframe's models must be gone — and
-                # "must be gone" is checked against the driver rather than
-                # assumed from having asked.
-                #
-                # Fails LOUD. The alternative is what the camera lane did at
-                # ~5 GiB free: ComfyUI accepts a fit it cannot honour, the runner
-                # dies on cudaMalloc partway in, and the user waited for it.
-                if str(params.get("preset", "")).startswith("wan"):
-                    await comfy_free(http)
-                    free = await asyncio.to_thread(assert_vram_for_wan)
-                    log.info("[video] job %s starting with %d MiB free (need %d)",
-                             job_id, free, WAN_NEED_MB)
+                # EVERY preset through the one lease — LTX included; no preset
+                # skips the check (ruling, 2026-10-07). Plan and deafness are
+                # announced before anything is evicted.
+                jobs[job_id]["state"] = "evicting"
+                lease = await _take_card(http, job_id, preset,
+                                         video_eta(preset))
+                log.info("[video] job %s starting with %d MiB free (need %d)",
+                         job_id, lease.get("free_mib", -1), lease.get("need_mb", -1))
 
                 jobs[job_id]["state"] = "loading"
                 wf = build_video_workflow(params)
@@ -3541,6 +3550,9 @@ async def run_video(job_id: str, params: dict) -> None:
 
             finally:
                 await comfy_free(http)   # always free VRAM
+                # Success, failure AND cancel all land here: her hearing comes
+                # back first and is proven; chat reloads lazily on the next turn.
+                await _give_card(http, job_id, lease)
                 src = params.get("_comfy_image")
                 if src:
                     try:

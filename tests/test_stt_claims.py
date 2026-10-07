@@ -62,7 +62,7 @@ def test_loaded_is_not_hearing(make):
     s = make()
     assert s._model is not None
     assert not s.hearing_confirmed()
-    assert "hearing unconfirmed" in s.status()
+    assert "no live transcript since it loaded" in s.status()
 
 
 def test_an_accepted_transcript_is_what_confirms_it(make):
@@ -119,3 +119,46 @@ def test_no_status_anywhere_makes_a_promise(make):
     s.resume(reload=False); seen.append(s.status())
     for st in seen:
         assert not PROMISE.search(st), st
+
+
+# ── C1 memory: nothing left orphaned ─────────────────────────────────────────
+def test_a_failed_load_hands_its_memory_back(make, monkeypatch):
+    """15:04:29 on 2026-10-07: a reload OOM'd and ~3.8 GB stayed reserved in the
+    process with _model None. The failure path must return it."""
+    dropped = []
+    monkeypatch.setattr(stt_mod, "_drop_cuda_cache", lambda: dropped.append(1) or 3800)
+    make(fail="CUDA out of memory. Tried to allocate 20.00 MiB.")
+    assert dropped, "a failed load left its partial weights reserved"
+
+
+def test_release_when_not_loaded_still_recovers_an_orphan(make, monkeypatch):
+    s = make(fail="CUDA out of memory.")
+    monkeypatch.setattr(stt_mod, "_drop_cuda_cache", lambda: 3800)
+    r = s.release("palamedes")
+    assert r["released"] is False and r["freed_mb"] == 3800, \
+        "'not loaded' returned without giving the orphaned memory back"
+
+
+# ── restore verification ─────────────────────────────────────────────────────
+def test_self_test_passes_on_the_known_clip_words(make):
+    s = make(result={"text": "The quick brown fox jumps over the lazy dog.",
+                     "segments": [{"no_speech_prob": 0.01, "avg_logprob": -0.1}]})
+    r = s.self_test()
+    assert r["ok"]
+    assert "self-test transcript passed at" in s.status()
+    assert not s.hearing_confirmed(), "a self-test is not a live transcript"
+
+
+def test_self_test_fails_on_the_wrong_words(make):
+    s = make(result={"text": "Thank you.", "segments": []})
+    assert s.self_test()["ok"] is False
+
+
+def test_self_test_refuses_while_held(make):
+    s = make()
+    s.hold("palamedes")
+    assert s.self_test()["ok"] is False
+
+
+def test_the_self_test_clip_exists():
+    assert stt_mod.os.path.exists(stt_mod._SELFTEST_WAV), stt_mod._SELFTEST_WAV

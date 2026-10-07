@@ -184,99 +184,11 @@ def test_a_frame_that_matches_no_aspect_is_recognised():
         "a square render must not pass as a clip aspect"
 
 
-# ── the card is checked by the driver, not assumed ───────────────────────────
-def test_enough_free_vram_passes(monkeypatch):
-    monkeypatch.setattr(morpheus, "free_vram_mb", lambda: 11096)   # the measured state
-    assert morpheus.assert_vram_for_wan() == 11096
-
-
-def test_too_little_free_vram_fails_loud(monkeypatch):
-    monkeypatch.setattr(morpheus, "free_vram_mb", lambda: 5000)
-    with pytest.raises(morpheus.VramTooTight) as e:
-        morpheus.assert_vram_for_wan()
-    msg = str(e.value)
-    assert "5000" in msg and str(morpheus.WAN_NEED_MB) in msg
-    assert "not been started" in msg
-
-
-def test_an_unreadable_card_is_not_treated_as_plenty(monkeypatch):
-    monkeypatch.setattr(morpheus, "free_vram_mb", lambda: None)
-    with pytest.raises(morpheus.VramTooTight) as e:
-        morpheus.assert_vram_for_wan()
-    assert "can't read" in str(e.value)
-
-
-def test_the_threshold_is_the_measured_floor():
-    """Not a round guess: 11,096 MiB free ran clean, so the gate sits under it."""
-    assert 10000 <= morpheus.WAN_NEED_MB <= 11096
-
-
-# THE RULED VERIFY: a forced failed eviction produces a visible failure and no
-# Wan job reaches ComfyUI.
-def test_a_failed_eviction_means_no_wan_job(monkeypatch):
-    calls = []
-
-    async def _noop(*a, **k):
-        return None
-
-    async def _free(*a, **k):
-        calls.append("comfy_free")
-
-    async def _queue(*a, **k):
-        calls.append("comfy_queue")
-        return "should-never-happen"
-
-    monkeypatch.setattr(morpheus, "evict_hermes", _noop)
-    monkeypatch.setattr(morpheus, "ensure_comfy_up", _noop)
-    monkeypatch.setattr(morpheus, "comfy_free", _free)
-    monkeypatch.setattr(morpheus, "comfy_queue", _queue)
-    monkeypatch.setattr(morpheus, "free_vram_mb", lambda: 3000)   # card still held
-    monkeypatch.setattr(morpheus, "video_lane_open", lambda: True)
-
-    job = "kf-vram-test"
-    morpheus.jobs[job] = {"state": "queued"}
-    asyncio.run(morpheus.run_video(job, {"preset": "wan-fast", "positive": "x",
-                                         "seed": 1, "aspect": "9:16"}))
-    rec = morpheus.jobs.pop(job)
-    assert rec["state"] == "error", f"the job did not fail: {rec}"
-    assert "VRAM" in rec.get("error", "") or "vram" in rec.get("error", "").lower()
-    assert "comfy_free" in calls, "the card was never freed before the check"
-    assert "comfy_queue" not in calls, \
-        "a Wan job was queued onto a card that could not hold it"
-
-
-def test_a_healthy_card_does_queue(monkeypatch):
-    """The inverse, so the test above is not passing because nothing ever runs."""
-    calls = []
-
-    async def _noop(*a, **k):
-        return None
-
-    async def _queue(*a, **k):
-        calls.append("comfy_queue")
-        raise RuntimeError("stop here — queueing is all this test needs to see")
-
-    monkeypatch.setattr(morpheus, "evict_hermes", _noop)
-    monkeypatch.setattr(morpheus, "ensure_comfy_up", _noop)
-    monkeypatch.setattr(morpheus, "comfy_free", _noop)
-    monkeypatch.setattr(morpheus, "comfy_queue", _queue)
-    monkeypatch.setattr(morpheus, "free_vram_mb", lambda: 12000)
-    monkeypatch.setattr(morpheus, "video_lane_open", lambda: True)
-
-    job = "kf-vram-ok"
-    morpheus.jobs[job] = {"state": "queued"}
-    asyncio.run(morpheus.run_video(job, {"preset": "wan-fast", "positive": "x",
-                                         "seed": 1, "aspect": "9:16"}))
-    morpheus.jobs.pop(job)
-    assert "comfy_queue" in calls
-
-
-def test_the_check_runs_after_the_free_not_before():
-    src = (ROOT / "modules" / "morpheus.py").read_text(encoding="utf-8")
-    i = src.index("async def run_video")
-    body = src[i:i + 4000]
-    assert body.index("comfy_free(http)") < body.index("assert_vram_for_wan"), \
-        "the card is measured before it is freed, which measures the wrong state"
+# ── the card ─────────────────────────────────────────────────────────────────
+# The check-and-refuse gate (assert_vram_for_wan / WAN_NEED_MB) was retired on
+# 2026-10-07: clips now take the card through the same Herakles lease as images.
+# Its guarantees — fail loud, never start blind, no job queued onto a card that
+# can't hold it, the check after the free — live in tests/test_clip_lease.py.
 
 
 # ── the server wires the three surfaces ──────────────────────────────────────

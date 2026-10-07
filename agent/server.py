@@ -7323,6 +7323,20 @@ QWEN_EDIT_ENABLED = os.getenv("PH3B3_QWEN_EDIT", "off").strip().lower() \
 morpheus.stt_provider = lambda: stt
 
 
+def _announce_lease(text: str) -> None:
+    """The lease's announcements — deafness at render start, a failed restore
+    at the end (ruling, 2026-10-07: "never silent"). Spoken and logged; the
+    same line is on the job record, so the panel shows it too."""
+    log.warning("[lease] %s", text)
+    try:
+        tts.speak(text, blocking=False)
+    except Exception as e:                             # noqa: BLE001
+        log.error("[lease] could not speak the announcement: %s", e)
+
+
+morpheus.announce = _announce_lease
+
+
 def _video_lane_gate():
     """Refuse with a stated reason when the lane is off — never a 404.
 

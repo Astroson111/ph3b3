@@ -134,17 +134,24 @@ def test_takes_nothing_when_there_is_already_room(card):
 
 
 def test_stops_as_soon_as_there_is_enough(card):
-    """6000 from ollama alone clears a 6000 need — hearing must survive."""
+    """ComfyUI's cache first, then Ollama — and hearing must survive when those
+    two suffice. (Order ruled cheapest-first, 2026-10-07.)"""
     stt = FakeSTT()
     r = asyncio.run(hk.request_card(6000, "palamedes", http=object(), stt=stt))
-    assert r["granted"] and r["evicted"] == ["ollama"]
+    assert r["granted"] and r["evicted"] == ["comfyui", "ollama"]
     assert stt.held is False, "took her hearing when it was not needed"
+
+
+def test_comfyui_alone_is_tried_before_anything_else(card):
+    stt = FakeSTT()
+    r = asyncio.run(hk.request_card(3000, "clip", http=object(), stt=stt))
+    assert r["granted"] and r["evicted"] == ["comfyui"]
 
 
 def test_escalates_to_hearing_only_when_needed(card):
     stt = FakeSTT(card)
     r = asyncio.run(hk.request_card(13000, "palamedes", http=object(), stt=stt))
-    assert r["evicted"] == ["ollama", "comfyui", "stt"]
+    assert r["evicted"] == ["comfyui", "ollama", "stt"]
     assert stt.held is True and stt.holds[0][0] == "palamedes"
 
 

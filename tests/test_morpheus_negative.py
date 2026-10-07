@@ -27,6 +27,7 @@ morpheus = server.morpheus
 # Hermes or hit ComfyUI during tests. server.py calls `morpheus.run_generation`.
 async def _noop_run_generation(*_a, **_k):
     return None
+_REAL_RUN_GENERATION = morpheus.run_generation     # restored below, once the body has run
 morpheus.run_generation = _noop_run_generation
 
 client = TestClient(server.app)
@@ -168,6 +169,13 @@ finally:
     morpheus.profile_check = _real_profile_check   # always restore
 
 # ── summary ───────────────────────────────────────────────────────────────────
+# The probe body above runs at IMPORT, so the stub had to be live for it — but
+# pytest imports every test file before running any test, so leaving it in
+# place made run_generation a no-op for the WHOLE session. Found 2026-10-07 when
+# tests/test_clip_lease.py's image-path tests saw a job that never left
+# "queued": they were testing a stub. Restore it now that the body is done.
+morpheus.run_generation = _REAL_RUN_GENERATION
+
 if __name__ == "__main__":
     passed = sum(1 for _, ok in _results if ok)
     print(f"\n{passed}/{len(_results)} passed")

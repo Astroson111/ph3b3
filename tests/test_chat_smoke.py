@@ -59,7 +59,7 @@ def _isolated(monkeypatch, tmp_path):
         def recall(self, *a, **k):   return []
         def recent(self, *a, **k):   return []
     monkeypatch.setattr(server, "mem_spine", _NullSpine(), raising=False)
-    async def _fake_chat_with_tools(messages, device="nyx", session_id="default"):
+    async def _fake_chat_with_tools(messages, device="nyx", session_id="default", ui=None):
         return "stubbed reply", messages
 
     monkeypatch.setattr(server, "chat_with_tools", _fake_chat_with_tools)

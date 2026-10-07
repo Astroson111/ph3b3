@@ -379,7 +379,8 @@ def _foreign_breakdown(st: dict) -> str:
         if t["mine"]:
             continue
         who = t.get("proc") or _proc_name(t["pid"]) or "unattributable"
-        rows.append(f"{who} {t['used_mib']} MiB")
+        # PID and size, so the Captain can decide about it — never us.
+        rows.append(f"{who} (pid {t['pid']}) {t['used_mib']} MiB")
     return ", ".join(rows)
 
 
@@ -399,10 +400,18 @@ def _proc_name(pid) -> str:
 
 # ── The single eviction authority ────────────────────────────────────────────
 #
-# Cheapest to restore first. Ollama reloads on the next chat turn and nobody
-# notices; ComfyUI reloads on the next render; her hearing costs ~15s during
-# which she is deaf, so it goes last and only if the first two were not enough.
-_EVICT_ORDER = ("ollama", "comfyui", "stt")
+# Cheapest rung first (Captain's ruling, 2026-10-07). ComfyUI's cache is dropped
+# by every render's finally anyway, so freeing it first costs nothing; Ollama
+# reloads lazily on the next chat turn; her hearing costs ~5-15s during which
+# she is deaf, so it goes last and only if the first two were not enough.
+# Images AND clips use this one ladder — evict_hermes/assert_vram_for_wan retired.
+_EVICT_ORDER = ("comfyui", "ollama", "stt")
+
+# What reloading Whisper needs, driver-confirmed, before release_card tries.
+# Measured 2026-10-07: Whisper medium holds 4,516-4,546 MiB in-process. A
+# reload attempted into less than this OOMs and — before the stt fix — left
+# ~3.8 GB orphaned (C1). The extra is the same margin the renders use.
+WHISPER_RESTORE_MB = int(os.getenv("PH3B3_WHISPER_RESTORE_MB", "5050"))
 
 
 async def request_card(need_mb: int, requester: str, *, http=None, stt=None,
@@ -450,6 +459,7 @@ async def request_card(need_mb: int, requester: str, *, http=None, stt=None,
     # how "everything of mine evicted" appeared beside two live Ollama runners.
     detail: dict[str, str] = {}
     unconfirmed: list[str] = []
+    stt_held = False
     try:
         for who in _EVICT_ORDER:
             before_tier = free_mib()
@@ -472,6 +482,10 @@ async def request_card(need_mb: int, requester: str, *, http=None, stt=None,
                     if stt is None or getattr(stt, "held", False):
                         continue   # no STT injected, or already on hold
                     r = stt.hold(requester, eta_s=eta_s)
+                    # The hold is a fact whether or not the driver shows memory
+                    # coming back. C1: a hold that freed nothing was never
+                    # resumed, because only CONFIRMED tiers reached `evicted`.
+                    stt_held = True
                     detail[who] = f"her hearing ({r.get('freed_mb', 0)} MiB)"
             except Exception as e:                     # noqa: BLE001
                 failed.append(f"{who}: {e}")
@@ -525,7 +539,7 @@ async def request_card(need_mb: int, requester: str, *, http=None, stt=None,
 
     return {"requester": requester, "need_mb": need_mb, "granted": granted,
             "evicted": evicted, "unconfirmed": unconfirmed, "detail": detail,
-            "failed": failed,
+            "failed": failed, "stt_held": stt_held,
             "free_mib": after["free_mib"], "short_mib": short,
             "before": before["free_mib"], "after": after["free_mib"],
             "foreign_mib": after["foreign_mib"], "line": line}
@@ -534,16 +548,29 @@ async def request_card(need_mb: int, requester: str, *, http=None, stt=None,
 async def release_card(lease: dict, *, http=None, stt=None) -> dict:
     """Give back what the lease took, and clear the job's resident tail.
 
-    Both directions on purpose. Her ears are reloaded EAGERLY rather than left
-    on a lazy fuse — otherwise the first person to speak after a render pays a
-    15s stall and hears nothing meanwhile. And ComfyUI's ~11 GB resident tail is
-    dropped rather than left squatting on a card nobody is rendering on.
+    Runs in the caller's `finally` — on success, failure AND cancel.
+
+    THE C1 ORDER (2026-10-07). Whisper was reloaded straight after comfy_free,
+    but by then the job's OUTPUT FLOOR CHECK had pulled llava (~5 GB) and the
+    chat judge (~5.8 GB) back onto the card inside the lease. Every Qwen render
+    then reloaded Whisper into ~3.7 GB, OOM'd, and left ~3.8 GB orphaned. Now:
+      1. drop ComfyUI's tail;
+      2. if Whisper was held, confirm WITH THE DRIVER there is room for it;
+      3. if not, evict Ollama again — ours, and it reloads lazily on the next
+         turn — and confirm again;
+      4. still no room: do NOT attempt a load (that is what orphans memory).
+         Clear the hold and say so, loudly;
+      5. reload, then prove it with a self-test transcript.
+    `restored` is True/False when hearing was involved, None when it was not.
+    Never silent: a failed restore is in `line` and in the log at ERROR.
     """
     import httpx
     import morpheus
 
     before = gpu_status()
     did, failed = [], []
+    restored = None
+    took_stt = bool((lease or {}).get("stt_held")) or "stt" in (lease or {}).get("evicted", [])
 
     own = httpx.AsyncClient() if http is None else None
     client = http or own
@@ -554,25 +581,122 @@ async def release_card(lease: dict, *, http=None, stt=None) -> dict:
         except Exception as e:                         # noqa: BLE001
             failed.append(f"comfy free: {e}")
 
-        if stt is not None and "stt" in (lease or {}).get("evicted", []):
-            try:
-                ok = stt.resume(reload=True)
-                did.append("reloaded Whisper (hearing unconfirmed until a transcript)" if ok
-                           else "cleared the hold (Whisper did not reload)")
-            except Exception as e:                     # noqa: BLE001
-                failed.append(f"stt resume: {e}")
+        if stt is not None and took_stt:
+            restored = False
+            free = free_mib()
+            if free < WHISPER_RESTORE_MB:
+                try:
+                    names = await morpheus.evict_ollama_all(client)
+                    if names:
+                        did.append("unloaded " + ", ".join(names) +
+                                   " to make room for her hearing (reloads on the next turn)")
+                except Exception as e:                 # noqa: BLE001
+                    failed.append(f"ollama evict before restore: {e}")
+                free = await _settle_until(WHISPER_RESTORE_MB)
+            if free < WHISPER_RESTORE_MB:
+                stt.resume(reload=False)               # clear the hold; do not load
+                rest = _foreign_breakdown(gpu_status())
+                failed.append(f"Whisper NOT restored: {free} MiB free, "
+                              f"{WHISPER_RESTORE_MB} needed"
+                              + (f" — holding the rest: {rest}" if rest else ""))
+            else:
+                try:
+                    ok = stt.resume(reload=True)
+                    st = (stt.self_test() if ok and hasattr(stt, "self_test")
+                          else {"ok": ok, "text": ""})
+                    if ok and st.get("ok"):
+                        restored = True
+                        did.append(f"reloaded Whisper and a self-test transcript "
+                                   f"came back ({st.get('text', '')[:40]!r})")
+                    elif ok:
+                        failed.append("Whisper reloaded but its self-test transcript "
+                                      f"failed: {st.get('error') or st.get('text')!r}")
+                    else:
+                        failed.append("Whisper did not reload")
+                except Exception as e:                 # noqa: BLE001
+                    failed.append(f"stt resume: {e}")
         await asyncio.sleep(1.0)
     finally:
         if own is not None:
             await own.aclose()
 
     after = gpu_status()
+    if restored is False:
+        line = ("I couldn't get my hearing back after the render — "
+                + "; ".join(f for f in failed if "Whisper" in f or "stt" in f)
+                + ". I'm not hearing you right now.")
+        log.error("[herakles] release_card(%s): HEARING NOT RESTORED — %s",
+                  (lease or {}).get("requester", "?"), failed)
+    else:
+        line = f"Card back: {after['free_mib']} MiB free."
+        if restored:
+            line += " Hearing restored and checked."
     log.info("[herakles] release_card(%s): free %d -> %d; did=%s failed=%s",
              (lease or {}).get("requester", "?"), before["free_mib"],
              after["free_mib"], did, failed)
-    return {"did": did, "failed": failed,
+    return {"did": did, "failed": failed, "restored": restored,
             "before": before["free_mib"], "after": after["free_mib"],
-            "line": f"Card back: {after['free_mib']} MiB free."}
+            "line": line}
+
+
+async def _settle_until(need: int, timeout: float | None = None) -> int:
+    """Poll the driver until `need` MiB is free or the timeout passes."""
+    deadline = time.monotonic() + (CONFIRM_TIMEOUT_S if timeout is None else timeout)
+    free = free_mib()
+    while free < need and time.monotonic() < deadline:
+        await asyncio.sleep(0.25)
+        free = free_mib()
+    return free
+
+
+# ── The plan, before anything is touched ─────────────────────────────────────
+# Spec (2026-10-07): "show the plan before starting" and "announce deafness at
+# render start". An ESTIMATE from the current tenants — request_card still
+# re-measures after every rung and is the authority on what actually happens.
+_RUNG_TEXT = {"comfyui": "ComfyUI's cache", "ollama": "the chat model",
+              "stt": "Whisper"}
+
+
+def plan_card(need_mb: int, eta_s: int = 60, *, stt=None) -> dict:
+    st = gpu_status()
+    free = st["free_mib"]
+    freeable = {"comfyui": 0, "ollama": 0, "stt": 0}
+    for t in st["tenants"]:
+        if not t.get("mine"):
+            continue
+        owner = t.get("owner")
+        if owner == "comfyui":
+            freeable["comfyui"] += max(0, t["used_mib"] - 250)   # CUDA context stays
+        elif owner == "ollama":
+            freeable["ollama"] += t["used_mib"]
+    if stt is not None and getattr(stt, "_model", None) is not None \
+            and not getattr(stt, "held", False):
+        freeable["stt"] = WHISPER_RESTORE_MB - 500
+    rungs, est = [], free
+    for who in _EVICT_ORDER:
+        if est >= need_mb:
+            break
+        if freeable[who] > 0:
+            rungs.append(who)
+            est += freeable[who]
+    fits = est >= need_mb
+    deaf = "stt" in rungs
+    mins = max(1, round(eta_s / 60))
+    if not rungs and fits:
+        line = f"Room already free — starting now, ~{mins} min."
+    elif fits:
+        what = " + ".join(_RUNG_TEXT[r] for r in rungs)
+        line = f"Freeing {what}, ~{mins} min."
+        if deaf:
+            line += f" I'll be deaf during this render, ~{mins} min."
+        if "ollama" in rungs:
+            line += " Chat pauses until it's done."
+    else:
+        rest = _foreign_breakdown(st)
+        line = (f"Even freeing everything of mine leaves ~{need_mb - est} MiB short"
+                + (f" — also on the card: {rest}" if rest else "") + ".")
+    return {"rungs": rungs, "fits": fits, "deaf": deaf, "need_mb": need_mb,
+            "free_mib": free, "estimate_mib": est, "line": line}
 
 
 # ── The OOM valve ────────────────────────────────────────────────────────────

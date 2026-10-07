@@ -1,0 +1,26 @@
+{
+  "_doc": [
+    "VRAM each render mode asks Herakles for, in MiB, BEFORE the margin.",
+    "Read on every render (morpheus.need_for) — editing this needs no restart.",
+    "need = figure + margin_mib. 'provisional' means NOT YET MEASURED: replace",
+    "it with a measurement taken through the lease and drop the flag.",
+    "Wan presets carry two figures. policy 'resident' = enough room that the 14B",
+    "model can stay on the card (Whisper is evicted for the render — the ruled",
+    "default, 2026-10-07). policy 'streamed' = the measured A option: weights",
+    "streamed from RAM, Whisper stays loaded, 70 MiB spare beside it (2026-10-07)."
+  ],
+  "margin_mib": 500,
+  "modes": {
+    "sdxl":        {"policy": "fixed", "need_mib": 7000, "provisional": true},
+    "edit":        {"policy": "fixed", "need_mib": 7000, "provisional": true},
+    "qwen":        {"policy": "fixed", "need_mib": 13600,
+                    "note": "QWEN_NEED_MB; Qwen peak measured 14,467 MiB on 2026-09-22"},
+    "wan-fast":    {"policy": "resident", "resident_mib": 14000, "provisional": true,
+                    "streamed_mib": 10354,
+                    "streamed_note": "measured 2026-10-07: ComfyUI peak 10,354 MiB with 10,724 free, 12m45s, model fully offloaded"},
+    "wan-quality": {"policy": "resident", "resident_mib": 14000, "provisional": true,
+                    "streamed_mib": 10354,
+                    "streamed_note": "same graph family as wan-fast; not separately measured"},
+    "ltx-fast":    {"policy": "fixed", "need_mib": 9000, "provisional": true}
+  }
+}

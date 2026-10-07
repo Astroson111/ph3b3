@@ -15,6 +15,9 @@ stack-chan/
 # Music / audio content — BRING YOUR OWN. Never commit copyrighted tracks;
 # users source their own and follow the in-repo instructions to load them.
 *.wav
+# The ONE exception: synthetic Piper speech ("The quick brown fox…"), generated on
+# Nyx, recording no one. stt_module.self_test() needs it to verify a restore.
+!assets/stt_selftest.wav
 *.mp3
 *.flac
 *.m4a
