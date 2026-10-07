@@ -4,6 +4,7 @@ import io
 import os
 import logging
 import queue
+import time
 import re
 import subprocess
 
@@ -645,6 +646,13 @@ class TTSModule:
             return None
         if voice is None and _current_text_only():   # declared text-only: no audio
             return None
+        # SYNTHESIS TIMER (2026-10-05). Time-to-first-audio was unmeasurable:
+        # nothing between the reply being composed and sound leaving the device
+        # was timed, so a latency breakdown for stream use had a hole exactly
+        # where a viewer would feel it. Wall clock around the whole method,
+        # including the long-form chunked path, because that is the thing a
+        # listener waits on.
+        _t_synth = time.time()
         model, script, unavailable = _resolve_voice(voice)
         tts_text = _prep(text, script)
         if not tts_text:
@@ -667,8 +675,12 @@ class TTSModule:
         # are well under the threshold, take this same single-job path, and are
         # byte-identical to before.
         if len(tts_text) > self._SYNTH_MAX_CHARS:
-            return self._synth_long_b64(tts_text, model, length_scale,
+            _b64 = self._synth_long_b64(tts_text, model, length_scale,
                                         sentence_silence)
+            log.info("[tts] synth %d chars (long-form) in %.2fs -> %s",
+                     len(tts_text), time.time() - _t_synth,
+                     ("%d B b64" % len(_b64)) if _b64 else "EMPTY")
+            return _b64
 
         with self._lock:
             try:
@@ -705,7 +717,10 @@ class TTSModule:
                     wf.setsampwidth(2)
                     wf.setframerate(WIRE_RATE)
                     wf.writeframes(pcm)
-                return base64.b64encode(buf.getvalue()).decode('ascii')
+                _b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+                log.info("[tts] synth %d chars in %.2fs -> %d B b64",
+                         len(tts_text), time.time() - _t_synth, len(_b64))
+                return _b64
             except Exception as e:
                 log.error(f"TTS synthesize error: {e}")
                 self.last_error = f"{type(e).__name__}: {e}"

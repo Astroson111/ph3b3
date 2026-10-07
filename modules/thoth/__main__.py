@@ -38,13 +38,24 @@ from .index import Index
 from .ingest import main as ingest_main
 
 OLLAMA = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+try:
+    import model_ctx as _model_ctx
+except ImportError:
+    from modules import model_ctx as _model_ctx
+
 MODEL = os.getenv("PH3B3_LIGHT_MODEL", "ph3b3-chat:latest")
 
 
 def _generate(prompt: str) -> str:
     """One tools-disabled completion. There is deliberately no `tools` key."""
     body = json.dumps({"model": MODEL, "prompt": prompt, "stream": False,
-                       "options": {"temperature": 0.3}}).encode()
+                       # Shared window. MODEL here resolves through PH3B3_LIGHT_MODEL, a
+                       # DIFFERENT env var from HEAVY_MODEL — which is exactly why this
+                       # site survived the first sweep — but it lands on the same model
+                       # (ph3b3-chat), so omitting num_ctx seated it at ollama's 4096
+                       # default and rebuilt the chat runner on every Thoth turn.
+                       "options": {"temperature": 0.3,
+                                   "num_ctx": _model_ctx.NUM_CTX}}).encode()
     req = urllib.request.Request(f"{OLLAMA}/api/generate", data=body,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=300) as r:

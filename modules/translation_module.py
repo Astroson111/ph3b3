@@ -6,19 +6,71 @@ from datetime import datetime
 log = logging.getLogger("ph3b3.translator")
 BASE_LOG_DIR = os.path.abspath(os.path.expanduser("~/ph3b3_data/translation_logs"))
 
+# OFFLINE ONLY (Captain's ruling, 2026-10-07). This module used deep_translator's
+# GoogleTranslator, which sent the text of a chat turn to translate.google.com as
+# a URL query string. The audit found 43 such calls in skill_log.jsonl, 35 of
+# them answered HTTP 429 — i.e. received by Google — between 2026-10-04 and
+# 2026-10-07, after tool_groups put translate_text on every turn. There is no
+# Google path left in this file: no import, no fallback, no "if offline fails".
+# Argos Translate runs on this machine; with no language pack installed for a
+# pair, translate() says so rather than reaching anywhere.
+#
+# The voice path (listen_and_translate -> recognize_google) is gone too. Nothing
+# called it, and it would have sent microphone audio to Google.
 try:
-    from deep_translator import GoogleTranslator
+    import argostranslate.translate as _argos
     TRANSLATOR_AVAILABLE = True
 except ImportError:
+    _argos = None
     TRANSLATOR_AVAILABLE = False
-    GoogleTranslator = None
-    log.warning("deep-translator not installed.")
+    log.warning("argostranslate not installed — translation unavailable.")
 
+# ARGOS IS NOT OFFLINE BY DEFAULT. Measured under strace, 2026-10-07: the first
+# es->en translation connected to raw.githubusercontent.com and to an AWS/
+# CloudFront CDN. Argos sentence-splits with stanza.Pipeline() and never passes
+# download_method=None, so stanza fetches resources.json and any processor it
+# decides the language "expects" (Spanish pulled in mwt). No user text went out
+# — but a translator that phones home on first use is not zero-egress.
+#
+# Two locks, both local to this module (site-packages untouched):
+#  1. _LocalSplitter replaces Argos' sentencizer, so stanza is never constructed
+#     on our path at all. Chat-length text needs nothing smarter than this.
+#  2. stanza.Pipeline is pinned to download_method=None, so if anything else in
+#     the process does build one it fails on a missing file instead of fetching.
 try:
-    import speech_recognition as sr
-    SR_AVAILABLE = True
+    import functools as _ft
+    import stanza as _stanza
+    if not getattr(_stanza.Pipeline, "_ph3b3_offline", False):
+        _orig_pipeline = _stanza.Pipeline
+
+        class _OfflinePipeline(_orig_pipeline):            # noqa: N801
+            _ph3b3_offline = True
+
+            def __init__(self, *a, **kw):
+                kw["download_method"] = None
+                super().__init__(*a, **kw)
+
+        _stanza.Pipeline = _OfflinePipeline
 except ImportError:
-    SR_AVAILABLE = False
+    pass
+
+
+class _LocalSplitter:
+    """Sentence split on terminal punctuation. No model, no download."""
+    _RX = re.compile(r"(?<=[.!?。！？])\s+")
+
+    def split_sentences(self, text: str) -> list[str]:
+        return [s for s in self._RX.split(text.strip()) if s] or [text]
+
+
+def _pin_local_splitter(tr) -> None:
+    """Every leg of a (possibly pivoted) Argos translation splits locally."""
+    if tr is None:
+        return
+    if hasattr(tr, "sentencizer"):
+        tr.sentencizer = _LocalSplitter()
+    for leg in ("underlying", "t1", "t2"):     # CachedTranslation wraps; Composite = pivot via en
+        _pin_local_splitter(getattr(tr, leg, None))
 
 # Languages whose scripts are non-Latin and need romanization.
 # Keyed on the base language code (before any hyphen).
@@ -81,16 +133,36 @@ class TranslationModule:
         os.makedirs(BASE_LOG_DIR, mode=0o755, exist_ok=True)
         log.info("Translation module ready.")
 
-    def translate(self, text, target_lang=None):
+    def installed_pairs(self) -> set[tuple[str, str]]:
+        """(from, to) codes with a language pack on disk. Never touches the network."""
         if not TRANSLATOR_AVAILABLE:
-            return {"error": "deep-translator not installed", "text": text}
+            return set()
+        import argostranslate.package as _pkg
+        return {(p.from_code, p.to_code) for p in _pkg.get_installed_packages()}
+
+    def translate(self, text, target_lang=None, source_lang="en"):
+        if not TRANSLATOR_AVAILABLE:
+            return {"error": "offline translation (argostranslate) is not installed", "text": text}
         if not text or not text.strip():
             return {"error": "No text provided", "text": ""}
         target = (target_lang or self.target_lang).lower().strip()
         resolved = _DIALECT_MAP.get(target, target)
-        translator_target = _TRANSLATOR_CODE.get(resolved, resolved)
+        to_code = _TRANSLATOR_CODE.get(resolved, resolved).split("-")[0]
+        from_code = (source_lang or "en").lower().strip().split("-")[0]
+        if from_code == to_code:
+            return {"error": f"source and target are both '{to_code}'", "text": text}
+        # Argos pivots through English on its own when both legs are installed,
+        # so a missing DIRECT pack is not yet a refusal — get_translation is the
+        # authority, and it is local.
+        langs = {l.code: l for l in _argos.get_installed_languages()}
+        src, dst = langs.get(from_code), langs.get(to_code)
+        tr = src.get_translation(dst) if (src and dst) else None
+        if tr is None:
+            return {"error": f"no offline language pack for {from_code} -> {to_code}; "
+                             "nothing was sent anywhere", "text": text}
+        _pin_local_splitter(tr)
         try:
-            translated = GoogleTranslator(source="auto", target=translator_target).translate(text)
+            translated = tr.translate(text)
             display = self._format(text, translated, target)
             tts_text = self._format_tts(text, translated, target)
             self._save_log(text, display, target)
@@ -176,27 +248,6 @@ class TranslationModule:
     def set_default_language(self, lang):
         self.target_lang = lang.lower().strip()
         return f"Default language set to {self.target_lang}"
-
-    def listen_and_translate(self, target_lang=None):
-        if not SR_AVAILABLE:
-            return {"error": "SpeechRecognition not installed", "text": ""}
-        recognized = self._capture_voice()
-        if not recognized:
-            return {"error": "Could not capture audio", "text": ""}
-        result = self.translate(recognized, target_lang)
-        result["recognized"] = recognized
-        return result
-
-    def _capture_voice(self):
-        try:
-            recognizer = sr.Recognizer()
-            with sr.Microphone() as source:
-                recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                audio = recognizer.listen(source, timeout=10, phrase_time_limit=20)
-                return recognizer.recognize_google(audio)
-        except Exception as e:
-            log.warning(f"Voice capture failed: {e}")
-            return None
 
     def _save_log(self, original, translated, target_lang):
         try:

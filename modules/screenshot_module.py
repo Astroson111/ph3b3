@@ -8,6 +8,11 @@ log = logging.getLogger("ph3b3.screenshot")
 
 OLLAMA_HOST   = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 VISION_MODEL  = os.getenv("PH3B3_VISION_MODEL", "llava")
+try:
+    import model_ctx as _model_ctx
+except ImportError:
+    from modules import model_ctx as _model_ctx
+
 HEAVY_MODEL   = os.getenv("PH3B3_HEAVY_MODEL", os.getenv("PH3B3_MODEL", "hermes3:latest"))
 
 DEFAULT_QUESTION = "Describe and analyze everything you see on this screen in detail."
@@ -97,7 +102,11 @@ class ScreenshotModule:
                 },
             ],
             "stream": False,
-            "options": {"temperature": 0.5},
+            # Shared window: this is HEAVY_MODEL, and omitting num_ctx seats it
+            # at ollama's 4096 default, rebuilding the chat runner next turn.
+            # The payload is a short description plus a question, so the larger
+            # window changes nothing it can see.
+            "options": {"temperature": 0.5, "num_ctx": _model_ctx.NUM_CTX},
         }
         try:
             r = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=120)

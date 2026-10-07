@@ -23,33 +23,43 @@ def _names(tools):
     return {t["function"]["name"] for t in tools}
 
 
+# A turn that ASKS for sport. Needed since 2026-10-04 (Knowledge Shelves Rung 2):
+# exposure is core plus the groups a turn needs, because the full table cost
+# 9,010 tokens of a 16,384 window on every turn. The sports tools live in the
+# "sports" group now, so a bare tools_for_turn() would find them absent for the
+# wrong reason — nothing asked — and the egress switch would go untested.
+# Every assertion below uses this, so OFF is still tested against the strongest
+# case: asked for outright, and absent anyway.
+ASKED = "what was the score in the game tonight"
+
+
 def test_sports_tools_are_advertised_when_egress_is_on(monkeypatch):
     monkeypatch.setattr(atalanta, "egress_ok", lambda: True)
-    assert SPORTS <= _names(server.tools_for_turn())
+    assert SPORTS <= _names(server.tools_for_turn(ASKED))
 
 
 def test_sports_tools_are_ABSENT_when_egress_is_off(monkeypatch):
     """OFF means absent from the menu, not merely refused on use: a tool she can
     see is a tool she will offer."""
     monkeypatch.setattr(atalanta, "egress_ok", lambda: False)
-    names = _names(server.tools_for_turn())
+    names = _names(server.tools_for_turn(ASKED))
     assert not (SPORTS & names), f"sports tools still advertised with egress off: {SPORTS & names}"
 
 
 def test_turning_egress_off_removes_only_the_sports_tools(monkeypatch):
     monkeypatch.setattr(atalanta, "egress_ok", lambda: True)
-    on = _names(server.tools_for_turn())
+    on = _names(server.tools_for_turn(ASKED))
     monkeypatch.setattr(atalanta, "egress_ok", lambda: False)
-    off = _names(server.tools_for_turn())
+    off = _names(server.tools_for_turn(ASKED))
     assert on - off == SPORTS, f"filtering removed something else too: {(on - off) - SPORTS}"
 
 
 def test_toggle_takes_effect_without_restart(monkeypatch):
     """tools_for_turn() is evaluated per turn, so the switch is live."""
     monkeypatch.setattr(atalanta, "egress_ok", lambda: False)
-    assert not (SPORTS & _names(server.tools_for_turn()))
+    assert not (SPORTS & _names(server.tools_for_turn(ASKED)))
     monkeypatch.setattr(atalanta, "egress_ok", lambda: True)
-    assert SPORTS <= _names(server.tools_for_turn())
+    assert SPORTS <= _names(server.tools_for_turn(ASKED))
 
 
 # ── handler behaviour ────────────────────────────────────────────────────────
@@ -172,3 +182,10 @@ def test_refusal_names_what_is_covered():
     out = asyncio.run(server._answer_sports("what were the F1 results"))
     for league in ("NFL", "NBA", "MLB", "NHL"):
         assert league in out
+
+
+def test_sport_schema_does_not_ride_an_unrelated_turn(monkeypatch):
+    """Egress being on is not a reason to carry three sports schemas through a
+    conversation about the weather."""
+    monkeypatch.setattr(atalanta, "egress_ok", lambda: True)
+    assert not (SPORTS & _names(server.tools_for_turn("how was your morning")))

@@ -189,6 +189,8 @@ import voices
 from occult_module import OccultModule
 from jokes_module import JokesModule
 import keyframe                           # clip keyframe approval binding
+import model_ctx                          # ONE num_ctx for every HEAVY_MODEL call
+import tool_groups                        # per-turn tool exposure (Rung 2)
 import vision_module                      # the module itself, for the
 from vision_module import VisionModule    # injected make_headroom hook
 from tts_module import TTSModule, trim_silence_b64, rms_b64, PREVIEW_RMS_FLOOR
@@ -1081,21 +1083,46 @@ def _self_knowledge_sections() -> list[tuple[str, tuple[str, ...], str, str | No
                     "You can make short video clips.",
                     "I can make short video clips."))
 
-    if _wm is not None and _wm.enabled():
-        out.append(("watermark", ("the signature on your stills",),
-            f"Every still you make is signed \"{_wm.mark_text()}\" in the "
-            "corner and carries a hidden timestamp. You never remove a "
-            "mark and never add one to an old image.",
-            f"Every still I make is signed \"{_wm.mark_text()}\" in the corner "
-            "and carries a hidden timestamp."))
+    # SAY ONLY WHAT RAN (Captain's ruling, 2026-10-07). This used to read "Every
+    # still you make is signed" — an OUTCOME claim made from a SWITCH, and only
+    # when the switch was on, so a session built while it was on kept saying it
+    # after it was turned off (Session froze the prompt; see Session.messages).
+    # Now it states the switch as a setting in both positions, and names the
+    # per-render record (morpheus.maybe_stamp: stamped / failed / off) as the
+    # only thing that can say whether a particular image was signed.
+    if _wm is not None:
+        _m = _wm.mark_text()
+        if _wm.enabled():
+            out.append(("watermark", ("the signature on your stills",),
+                f"Signing is ON: stills are stamped \"{_m}\" with a hidden "
+                "timestamp when saved, unless a stamp fails. You never remove a "
+                "mark and never add one to an old image.",
+                f"Signing is switched on for my stills — each is stamped \"{_m}\" "
+                "with a hidden timestamp when it's saved. If a stamp ever fails, "
+                "the image is kept unmarked and its record says so."))
+        else:
+            out.append(("watermark", ("the signature on your stills",),
+                "Signing is OFF: stills you make now are NOT signed and "
+                "carry no hidden timestamp.",
+                "Signing is switched off right now, so the stills I make are not "
+                "signed."))
+        _clip = getattr(_wm, "clip_enabled", lambda: False)()
+        if VIDEO_LANE_ENABLED and _clip:        # off = absent, like a lane
+            out.append(("clip_mark", ("the mark on your clips",),
+                "Clips get a visible mark only, no hidden timestamp.",
+                "My clips get a visible mark when they're saved — no hidden "
+                "timestamp, video can't hold one."))
 
     if qwen:
         # Only true when a lane exists that takes the whole card.
         out.append(("deaf_window", (),
             "A big render needs the whole graphics card, and while one "
             "runs you cannot hear. If someone speaks to you then, say so "
-            "plainly and give a rough time — never pretend to be "
-            "listening, and never go silent.", None))
+            "plainly — never pretend to be listening, and never go silent.",
+            None))
+        # (It used to add "and give a rough time". That was the ETA promise C1
+        # found false for an hour; the control is now in stt_module, which can
+        # no longer produce one — not in a line the model is free to ignore.)
 
     # Embodiment is a capability fact, not a personality trait, so it lives here
     # with the engines and the edit lane rather than in the soul. It was tried in
@@ -1309,7 +1336,7 @@ TOOLS = [
     {"type":"function","function":{"name":"spotify_now_playing","description":"Get currently playing track","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"dnd_lookup","description":"Look up D&D rules spells monsters lore","parameters":{"type":"object","properties":{"query":{"type":"string"},"category":{"type":"string","default":"any"},"edition":{"type":"string","default":"5e"}},"required":["query"]}}},
     {"type":"function","function":{"name":"film_lookup","description":"Look up obscure films or get recommendations","parameters":{"type":"object","properties":{"query":{"type":"string"},"mode":{"type":"string","default":"lookup"}},"required":["query"]}}},
-    {"type":"function","function":{"name":"translate_text","description":"Translate text to any language using Google Translate (requires internet). Source language is auto-detected.","parameters":{"type":"object","properties":{"text":{"type":"string"},"target_lang":{"type":"string","description":"Target language code, e.g. 'es' for Spanish, 'ja' for Japanese, 'fr' for French"}},"required":["text","target_lang"]}}},
+    {"type":"function","function":{"name":"translate_offline","description":"Translate text between languages ON THIS MACHINE (Argos Translate, no internet). Only language pairs with an installed pack work; if a pair is missing, say so plainly.","parameters":{"type":"object","properties":{"text":{"type":"string"},"target_lang":{"type":"string","description":"Target language code, e.g. 'es' Spanish, 'fr' French"},"source_lang":{"type":"string","description":"Source language code; default 'en'"}},"required":["text","target_lang"]}}},
     {"type":"function","function":{"name":"remember_fact","description":"Remember a fact permanently","parameters":{"type":"object","properties":{"key":{"type":"string"},"value":{"type":"string"}},"required":["key","value"]}}},
     {"type":"function","function":{"name":"log_anomaly","description":"Log a detected anomaly","parameters":{"type":"object","properties":{"description":{"type":"string"},"source":{"type":"string","default":"camera"}},"required":["description"]}}},
     {"type":"function","function":{"name":"recall_memory","description":"Search long-term memory","parameters":{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"]}}},
@@ -1573,7 +1600,14 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "dnd_lookup": result = dnd.lookup(args["query"], args.get("category","any"), args.get("edition","5e"))
         elif name == "film_lookup": result = film.lookup(args["query"], args.get("mode","lookup"))
         elif name == "translate_text":
-            r = translation.translate(args["text"], args.get("target_lang"))
+            # REMOVED 2026-10-07 (Captain's ruling): it sent chat text to Google.
+            # Not in TOOLS any more; a stale or hallucinated call lands here and
+            # is refused without anything leaving the machine.
+            result = ("Error: online translation was removed — nothing is sent to "
+                      "Google from here. Use translate_offline.")
+        elif name == "translate_offline":
+            r = translation.translate(args["text"], args.get("target_lang"),
+                                      args.get("source_lang") or "en")
             if r.get("error"):
                 result = f"Error: {r['error']}"
             else:
@@ -1599,13 +1633,18 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "web_search": result = await _tool_web_search(args.get("query", ""), session_id)
         elif name == "occult_random": result = occult.random_phenomenon()
         elif name == "tell_joke":
-            joke = jokes.tell_joke(args.get("category","any"))
+            # RETURNS THE JOKE, not "Joke delivered." (2026-10-05). The receipt
+            # told the model nothing about what had been said, so it narrated
+            # around an empty result — "Here is a random joke I found" over a
+            # joke it had invented itself. A tool result the model cannot see is
+            # a tool result it will talk over.
+            joke = jokes.tell_joke(args.get("category", "any"))
             tts.speak(joke, blocking=False)
-            result = "Joke delivered."
+            result = joke or "My joke book is empty — I couldn't read it."
         elif name == "roast":
             roast_text = jokes.roast_security() if args.get("topic") == "security" else jokes.roast_dnd()
             tts.speak(roast_text, blocking=False)
-            result = "Roast delivered."
+            result = roast_text or "I've got no roasts loaded."
         # vision.look/set_baseline/check_anomaly BLOCK waiting for a frame to
         # arrive at the async /vision/frame handler — they MUST run off the event
         # loop or the loop can't service the frame and the capture deadlocks.
@@ -2081,7 +2120,10 @@ CAMERA_TOOL_NAMES = frozenset(t["function"]["name"] for t in CAMERA_TOOLS)
 TOOLS += CAMERA_TOOLS
 
 
-def tools_for_turn() -> list:
+ALL_TOOL_NAMES = frozenset(t["function"]["name"] for t in TOOLS)
+
+
+def tools_for_turn(text: str = "", ui: dict | None = None) -> list:
     """The advertised tool set for THIS turn.
 
     A switch that is OFF means those tools are ABSENT from what Phoebe is offered,
@@ -2090,8 +2132,22 @@ def tools_for_turn() -> list:
     "I could check the scores but web access is off" is a worse answer than never
     raising it. The endpoint still refuses with a stated reason for anything that
     reaches it another way — absent from the menu, never a 404.
+
+    CONDITIONAL EXPOSURE (Rung 2, 2026-10-04). On top of the switches, only the
+    core set plus the groups this turn actually needs are advertised. Measured
+    against ph3b3-chat by prompt_eval_count: the whole table is 9,010 tokens of a
+    16,384 window on EVERY turn; core alone is 1,819, and an ordinary social turn
+    therefore gets 12,651 tokens for history and reply instead of 5,460.
+    That is not a tidiness win. An over-long prompt is not refused by Ollama —
+    the START is discarded and done_reason still reads 'stop', so the first thing
+    schema bloat spends is her system prompt, silently.
+
+    Decided from the sentence and the screen, never by the model. See
+    modules/tool_groups.py for the groups, the triggers, and the narration veto
+    that keeps "I did a web search yesterday" from loading the web group.
     """
-    hidden = set()
+    keep = tool_groups.exposed_names(ALL_TOOL_NAMES, text, ui)
+    hidden = ALL_TOOL_NAMES - keep
     if not atalanta.egress_ok():
         hidden |= ATALANTA_TOOL_NAMES
     if not camera_module.enabled():
@@ -2107,7 +2163,7 @@ def tools_for_turn() -> list:
 # it's switched off" is the answer the absence exists to prevent.
 VIDEO_TOOL_NAMES = frozenset({"generate_video"})
 
-ONE_SHOT_TOOLS = frozenset({"tell_joke", "roast", "web_search"})   # web_search: ONE search per turn (no autonomous loops)
+ONE_SHOT_TOOLS = frozenset({"tell_joke", "roast", "web_search", "translate_offline"})   # web_search: ONE search per turn (no autonomous loops); translate_offline: the TikTok turn looped translate 5x then 3x
 
 
 def _looks_like_tool_call(text: str) -> bool:
@@ -2163,7 +2219,7 @@ async def _summarize_untrusted(query: str, blocks: list) -> str:
     payload = {"model": HEAVY_MODEL, "stream": False,
                "messages": [{"role": "system", "content": sysp},
                             {"role": "user", "content": usr}],
-               "options": {"temperature": 0.2, "num_ctx": 8192}}   # NOTE: no "tools" — cannot call tools
+               "options": {"temperature": 0.2, "num_ctx": CHAT_NUM_CTX}}  # NOTE: no "tools" — cannot call tools
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
         r.raise_for_status()
@@ -2197,7 +2253,7 @@ async def _summarize_pdf_untrusted(query: str, fenced_text: str) -> str:
     payload = {"model": HEAVY_MODEL, "stream": False,
                "messages": [{"role": "system", "content": sysp},
                             {"role": "user", "content": usr}],
-               "options": {"temperature": 0.2, "num_ctx": 8192}}   # NOTE: no "tools" — cannot call tools
+               "options": {"temperature": 0.2, "num_ctx": CHAT_NUM_CTX}}  # NOTE: no "tools" — cannot call tools
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
         r.raise_for_status()
@@ -2551,7 +2607,18 @@ async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
     if claim.module == "time":
         return clock.now()                               # host clock, deterministic, no model
     if claim.module == "fleet":
+        # MARKER so the lane is visible (2026-10-05). This path is deliberately
+        # deterministic and pre-LLM, and it worked perfectly — but it emitted
+        # nothing, so the smoke battery classified every fleet turn as "model"
+        # and failed all nine passes of fleet-status-* on the route check while
+        # pass_ok was true every time. Nine false failures in every baseline,
+        # for a lane that was doing its job. A lane nobody can see is a lane
+        # nobody can measure.
+        log.info("[fleet] deterministic answer for %r", (user_msg or "")[:60])
         return _answer_fleet(user_msg)                   # Argus latest, freshness always attached
+    if claim.module == "jokes":
+        log.info("[joke] deterministic answer for %r", (user_msg or "")[:60])
+        return _answer_joke(user_msg)                    # canon from config/jokes.yaml, spoken
     if claim.module == "document":
         return await _answer_pdf(user_msg, session_id)   # None → no doc staged → fall through
     if claim.module == "apelles":
@@ -2598,7 +2665,11 @@ async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
 #
 # The real fix is fewer tools on the wire. 8,324 tokens of schema to answer "tell
 # me a story" is the actual waste; raising the window buys correctness now.
-CHAT_NUM_CTX = int(os.getenv("PH3B3_CHAT_NUM_CTX", "16384"))
+# ONE WINDOW FOR EVERY HEAVY_MODEL CALLER (2026-10-04). Defined in
+# modules/model_ctx.py and imported here rather than read twice, because a
+# second number anywhere costs ollama a runner rebuild per turn — measured at
+# ~1.25 s each, ~2.6 s a turn, invisible until [gen] logged durations.
+CHAT_NUM_CTX = model_ctx.NUM_CTX
 
 # Longest shelved work that may be inlined into a chat turn, in words. The tool
 # schemas already cost 8,324 tokens of the 16,384 window, leaving roughly 8,060
@@ -2616,9 +2687,125 @@ SHELF_INLINE_MAX_WORDS = int(os.getenv("PH3B3_SHELF_INLINE_MAX_WORDS", "3000"))
 CANON_INLINE_MAX_WORDS = int(os.getenv("PH3B3_CANON_INLINE_MAX_WORDS", "2000"))
 
 
-async def chat_with_tools(messages, device="nyx", session_id=""):
+# ── Generation accounting (ruling, 2026-10-04) ───────────────────────────────
+# Ollama returns done_reason, prompt_eval_count and eval_count on EVERY call and
+# this code discarded all three. The cost was that a reply which stopped early
+# was indistinguishable from one that finished, so "she sometimes just stops"
+# could not be investigated at all — 2,325 recorded replies and no way to tell
+# which, if any, had been cut.
+#
+# METADATA ONLY. No reply text is logged here: the transcript store already keeps
+# the words (deliberate, Captain decision 2026-07-18) and duplicating them into
+# the service journal would put conversation into a second place with different
+# retention for no diagnostic gain.
+#
+# TWO CUT CONDITIONS, measured on Ollama 0.24.0 with ph3b3-chat, because they do
+# NOT behave the same way:
+#
+#   prompt-overflow  prompt_eval_count lands exactly ON num_ctx, the START of the
+#                    prompt is silently discarded (her soul first, then the oldest
+#                    history), and done_reason is 'stop'. Verified: a secret
+#                    planted at the head of a 1,500-token system message with
+#                    num_ctx=512 was simply gone, with no error of any kind. This
+#                    is the dangerous one and the done_reason check cannot see it.
+#
+#   length           done_reason == 'length'. Generation ran into a token cap.
+#                    Note this does NOT fire at num_ctx: with num_ctx=256 and no
+#                    num_predict the model generated 2,560 tokens, shifting the
+#                    window and drifting, so 'length' arrives late and the reply
+#                    is degraded rather than neatly truncated.
+def _gen_log(rj: dict, num_ctx: int, stage: str, session_id: str = "") -> dict:
+    """Record one generation's accounting and return it. Never raises."""
+    # Durations added 2026-10-04 on the ruling. They were left out of the first
+    # pass because the ruling named four fields, and the gap showed up the moment
+    # a model comparison needed a real tok/s figure: the battery's per-turn wall
+    # clock includes triage and lane routing, so it cannot answer "how fast does
+    # this model generate". load is reported separately because a cold load is
+    # seconds of one-off cost that would otherwise be blamed on throughput.
+    #
+    # Nanoseconds from Ollama; stored as seconds.
+    meta = {"done_reason": rj.get("done_reason"),
+            "prompt": rj.get("prompt_eval_count") or 0,
+            "eval": rj.get("eval_count") or 0,
+            "load_s": (rj.get("load_duration") or 0) / 1e9,
+            "eval_s": (rj.get("eval_duration") or 0) / 1e9,
+            # PROMPT EVAL, added 2026-10-05. Measured that day: chat's prompt
+            # eval is ~1,057 ms on every turn because triage's 31-token prompt
+            # evicts the chat prefix from Ollama's single cache slot — against
+            # ~30 ms when two chat calls run back to back. A full second per
+            # turn that eval_duration cannot see, which is why it went unnoticed
+            # through every latency measurement before this field existed.
+            "prompt_s": (rj.get("prompt_eval_duration") or 0) / 1e9,
+            "num_ctx": num_ctx}
+    try:
+        reply_len = len((rj.get("message") or {}).get("content") or "")
+        cut = _gen_cut_reason(meta)
+        rate = meta["eval"] / meta["eval_s"] if meta["eval_s"] > 0 else 0.0
+        log.info("[gen] %-6s prompt=%d/%d eval=%d reply=%dch "
+                 "load=%.2fs peval=%.2fs eval=%.2fs %.1ftok/s done=%s%s",
+                 stage, meta["prompt"], num_ctx, meta["eval"], reply_len,
+                 meta["load_s"], meta["prompt_s"], meta["eval_s"], rate,
+                 meta["done_reason"], f"  CUT={cut}" if cut else "")
+    except Exception:                                      # noqa: BLE001
+        pass
+    return meta
+
+
+def _gen_cut_reason(meta: dict) -> str | None:
+    """Why this generation was cut short, or None if it ran to a natural stop."""
+    nc = meta.get("num_ctx") or 0
+    if nc and (meta.get("prompt") or 0) >= nc:
+        return "prompt-overflow"
+    if meta.get("done_reason") == "length":
+        return "length"
+    return None
+
+
+def _trim_for_retry(messages: list, keep: int = 4) -> list:
+    """System prompt plus the most recent `keep` turns, tool traffic flattened.
+
+    The system prompt is kept FIRST and always: it is the thing prompt-overflow
+    destroys, so a retry that dropped it would reproduce the fault it exists to
+    recover from.
+
+    The most recent tool RESULT is carried forward as plain text rather than as
+    role="tool". A turn that looked something up and then overran must not be
+    retried without what it found — she would answer the question a second time
+    from nothing and sound just as certain.
+    """
+    head = [m for m in messages[:1] if m.get("role") == "system"]
+    tail = [m for m in messages if m.get("role") in ("user", "assistant")
+            and m.get("content")][-keep:]
+    last_tool = next((str(m.get("content") or "") for m in reversed(messages)
+                      if m.get("role") == "tool" and m.get("content")), "")
+    if last_tool:
+        tail.insert(max(0, len(tail) - 1),
+                    {"role": "assistant",
+                     "content": f"(what I just looked up: {last_tool[:600]})"})
+    return head + tail
+
+
+# Said when a reply was cut and the retry could not rescue it. Her voice, no
+# implementation names, and it does not pretend the answer was complete.
+_CUT_LINE = ("— I lost the thread of that partway through. Ask me again, or ask "
+             "for a shorter piece of it, and I'll give you the whole answer.")
+
+
+async def chat_with_tools(messages, device="nyx", session_id="", ui=None):
     async with httpx.AsyncClient(timeout=120) as client:
-        payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":tools_for_turn(),"options":{"temperature":0.7,"num_ctx":CHAT_NUM_CTX}}
+        # The turn's own words decide the exposure, taken from the live user
+        # message rather than threaded from the caller: both call sites already
+        # hand us the history, and deriving it here means the websocket path and
+        # the /chat path cannot drift apart on this.
+        _turn_text = next((str(m.get("content") or "") for m in reversed(messages)
+                           if m.get("role") == "user"), "")
+        _tools = tools_for_turn(_turn_text, ui)
+        _exposed = {t["function"]["name"] for t in _tools}
+        _groups = sorted(tool_groups.groups_for_turn(_turn_text, ui))
+        log.info("[tools] %d/%d advertised  groups=%s%s", len(_tools),
+                 len(TOOLS), ",".join(_groups) or "core-only",
+                 "  (narration veto)" if tool_groups.narrated(_turn_text) else "")
+        payload = {"model":HEAVY_MODEL,"messages":messages,"stream":False,"tools":_tools,"options":{"temperature":0.7,"num_ctx":CHAT_NUM_CTX}}
         try:
             response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
             response.raise_for_status()
@@ -2656,7 +2843,9 @@ async def chat_with_tools(messages, device="nyx", session_id=""):
                 log.error(f"Ollama initial request failed and the brain did not warm: {e}")
                 return ("Give me a moment — I'm just waking back up. Ask me "
                         "again in a few seconds and I'll be here."), messages
-        msg = response.json()["message"]
+        _rj = response.json()
+        _meta = _gen_log(_rj, CHAT_NUM_CTX, "first", session_id)
+        msg = _rj["message"]
         called_tools: set = set()
         tool_cache: dict = {}
         loop = 0
@@ -2679,6 +2868,22 @@ async def chat_with_tools(messages, device="nyx", session_id=""):
                                  or "dio" in _lu or "stackchan" in _lu
                                  or "stack-chan" in _lu or "stack chan" in _lu)
                     fn = "look" if _from_dio else "describe_view"
+                # ROUTING GAP, not a hallucinated call. If she asked for a
+                # real tool that this turn did not advertise, the trigger is
+                # wrong and that is a thing to tune — so it gets named, with the
+                # group that should have fired. The call still runs: she was
+                # right about what she needed and the exposure was wrong, and
+                # refusing here would punish the user for our routing.
+                if fn not in _exposed:
+                    _g = tool_groups.group_of(fn)
+                    if fn in ALL_TOOL_NAMES:
+                        log.warning("[tools] ROUTING GAP — %r wanted but not advertised "
+                                    "(group=%s, groups this turn=%s) for %r",
+                                    fn, _g, ",".join(_groups) or "core-only",
+                                    _turn_text[:80])
+                    else:
+                        log.warning("[tools] INVENTED TOOL — %r is not in the table at all",
+                                    fn)
                 if fn in ONE_SHOT_TOOLS and fn in tool_cache:
                     result = tool_cache[fn]
                 else:
@@ -2696,7 +2901,9 @@ async def chat_with_tools(messages, device="nyx", session_id=""):
             except Exception as e:
                 log.error(f"Ollama follow-up request failed (model={follow_model}): {e}")
                 return f"I completed the action but couldn't formulate a response — model '{follow_model}' may not be installed.", messages
-            msg = response.json()["message"]
+            _rj = response.json()
+            _meta = _gen_log(_rj, CHAT_NUM_CTX, "follow", session_id)
+            msg = _rj["message"]
         content = msg.get("content", "")
 
         # Hermes3 sometimes outputs a tool call as raw JSON/XML text in content
@@ -2712,10 +2919,12 @@ async def chat_with_tools(messages, device="nyx", session_id=""):
                         messages[0],
                         {"role": "user", "content": f"Tool result: {str(_tc_result)[:600]}\n\nSummarise this for the user in one clear paragraph."},
                     ]
-                    _pl = {"model": HEAVY_MODEL, "messages": _synth, "stream": False, "options": {"temperature": 0.7, "num_ctx": 4096}}
+                    _pl = {"model": HEAVY_MODEL, "messages": _synth, "stream": False, "options": {"temperature": 0.7, "num_ctx": CHAT_NUM_CTX}}
                     _r = await client.post(f"{OLLAMA_HOST}/api/chat", json=_pl)
                     _r.raise_for_status()
-                    content = _r.json()["message"].get("content", "") or str(_tc_result)[:300]
+                    _rj2 = _r.json()
+                    _meta = _gen_log(_rj2, CHAT_NUM_CTX, "synth", session_id)
+                    content = _rj2["message"].get("content", "") or str(_tc_result)[:300]
                 except Exception as e:
                     log.error(f"Leaked tool call recovery failed ({_tc_name}): {e}")
 
@@ -2737,10 +2946,49 @@ async def chat_with_tools(messages, device="nyx", session_id=""):
                 try:
                     r = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
                     r.raise_for_status()
-                    raw = r.json()["message"].get("content", "")
+                    _rj3 = r.json()
+                    _meta = _gen_log(_rj3, CHAT_NUM_CTX, "fallbk", session_id)
+                    raw = _rj3["message"].get("content", "")
                     content = raw if not _looks_like_tool_call(raw) else ""
                 except Exception as e:
                     log.error(f"Synthesis fallback failed: {e}")
+
+        # ── RULING 2 — a cut reply is never delivered as a complete one ──────
+        # Retry ONCE on a trimmed history, then say so if that did not rescue it.
+        #
+        # THE RETRY CARRIES NO TOOLS, for two independent reasons:
+        #   1. the schemas are 9,010 of the 16,384 tokens (measured 2026-10-04),
+        #      so dropping them removes most of what caused the overflow — a
+        #      retry that kept them would often overflow again identically.
+        #   2. the tools already RAN this turn. A retry that could call them a
+        #      second time could take a real-world action twice: send the same
+        #      message, move a servo, start the same render.
+        # Which is why the last tool result travels as text instead.
+        _cut = _gen_cut_reason(_meta)
+        if _cut:
+            log.warning("[gen] reply CUT (%s) prompt=%d/%d eval=%d — retrying trimmed",
+                        _cut, _meta.get("prompt", 0), _meta.get("num_ctx", 0),
+                        _meta.get("eval", 0))
+            try:
+                _slim = _trim_for_retry(messages)
+                _rr = await client.post(f"{OLLAMA_HOST}/api/chat", json={
+                    "model": HEAVY_MODEL, "messages": _slim, "stream": False,
+                    "options": {"temperature": 0.7, "num_ctx": CHAT_NUM_CTX}})
+                _rr.raise_for_status()
+                _rjr = _rr.json()
+                _meta_r = _gen_log(_rjr, CHAT_NUM_CTX, "retry", session_id)
+                _again = (_rjr.get("message") or {}).get("content", "") or ""
+                if _again.strip() and not _gen_cut_reason(_meta_r):
+                    log.info("[gen] retry recovered the turn (%d messages -> %d)",
+                             len(messages), len(_slim))
+                    return _again, messages
+                log.warning("[gen] retry did not rescue it (cut=%s) — telling her to say so",
+                            _gen_cut_reason(_meta_r))
+            except Exception as e:                         # noqa: BLE001
+                log.error("[gen] trimmed retry failed (%s)", e)
+            # Fail LOUD, in her voice: the partial is kept because half an answer
+            # is still worth something, but it is never passed off as whole.
+            content = (content.rstrip() + "\n\n" + _CUT_LINE) if content.strip() else _CUT_LINE
         return content, messages
 
 CONV_WINDOW = 8  # conversation turns (user+assistant pairs) kept per session
@@ -2755,6 +3003,13 @@ class Session:
         if len(self.history) > max_msgs:
             self.history = [self.history[0]] + self.history[-(CONV_WINDOW * 2):]
     def messages(self):
+        # REBUILT EVERY TURN (H3, 2026-10-07). The system prompt carries live
+        # facts — the watermark switch, the camera, the lanes — and used to be
+        # built once per Session, so a toggle flipped mid-conversation left her
+        # asserting the old state while capability_answer() said the new one.
+        # Unchanged state yields byte-identical text, so Ollama's prompt-prefix
+        # cache is untouched unless something actually changed.
+        self.history[0] = {"role": "system", "content": system_prompt()}
         return self.history.copy()
     def reset(self):
         self.history = [{"role":"system","content":system_prompt()}]
@@ -3717,10 +3972,23 @@ async def _run_chat_pipeline(body: dict, request: Request):
     if emotions.is_named(_emo_now):
         _emo_dir = emotions.chat_terms(_emo_now)
         if _emo_dir:
-            messages.insert(1, {"role": "system",
-                                "content": f"Tone for this reply: {_emo_dir}. "
-                                           "This shapes how you sound, never what "
-                                           "you will or will not do."})
+            # APPENDED, NOT INSERTED AT INDEX 1 (2026-10-05).
+            #
+            # This sat immediately after the soul, which put it inside the cached
+            # prompt PREFIX. Ollama reuses a prefix verbatim — measured the same
+            # day: 984 ms cold versus 19 ms when the prefix is unchanged — so a
+            # directive that moves invalidates everything after it. Under AUTO the
+            # resolved state drifts on its own, meaning the one block guaranteed to
+            # change was positioned where a change costs the most.
+            #
+            # At the END it sits after the stable soul and tool schemas, so the
+            # expensive part of the prefix survives a mood change. It also reads
+            # as the most recent instruction, which is if anything better for a
+            # tone note than being buried above the conversation.
+            messages.append({"role": "system",
+                             "content": f"Tone for this reply: {_emo_dir}. "
+                                        "This shapes how you sound, never what "
+                                        "you will or will not do."})
 
     # At most ONE story is inlined per turn. A shelved work can run to 3,000
     # words and a filed one to 2,000; injecting both would evict the very history
@@ -4000,7 +4268,11 @@ async def _run_chat_pipeline(body: dict, request: Request):
         updated = messages
     else:
         response, updated = await chat_with_tools(
-            messages, device=(device or "nyx"), session_id=body.get("session_id", "default"))
+            messages, device=(device or "nyx"), session_id=body.get("session_id", "default"),
+            # Optional and absent today: no client sends it yet, so exposure runs
+            # on phrase triggers alone until one does. Wired now so the first
+            # client to send {"ui": {...}} needs no server change.
+            ui=body.get("ui") if isinstance(body.get("ui"), dict) else None)
     _fire_pending_video()   # start any render queued by generate_video — AFTER the reply
 
     # Strip ephemeral notes before storing so they never accumulate in history
@@ -4185,7 +4457,16 @@ async def _judge_goodbye_expression(session) -> str:
         payload = {"model": LIGHT_MODEL, "stream": False,
                    "messages": [{"role": "system", "content": sysp},
                                 {"role": "user", "content": f"Conversation:\n{convo}\n\nOne word:"}],
-                   "options": {"temperature": 0.2, "num_predict": 4, "num_ctx": 2048}}
+                   # 2048 is right for a one-word classification on a SEPARATE
+                   # model. But PH3B3_LIGHT_MODEL is unset by default, making
+                   # LIGHT_MODEL and HEAVY_MODEL the same model — and then a
+                   # 2048 call rebuilds the chat runner, which is the fault
+                   # this ruling closes. The window follows the MODEL, not the
+                   # call site.
+                   "options": {"temperature": 0.2, "num_predict": 4,
+                               "num_ctx": (CHAT_NUM_CTX
+                                           if LIGHT_MODEL == HEAVY_MODEL
+                                           else 2048)}}
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
             r.raise_for_status()
@@ -4245,10 +4526,23 @@ async def chat_stream_endpoint(body: dict, request: Request):
                 "expression": _expr}
     chunks, out_voice = split_for_tts(reply), plan["voice"]
     if not chunks:
+        # A non-empty reply that splits to nothing is a real fault, not a quiet
+        # turn: she shows the words and never speaks them.
+        log.warning("[stream] no chunks for a %d-char reply — nothing will be "
+                    "spoken: %r", len(reply), reply[:80])
         return {"response": reply, "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True}
     sid = _tts_stream_new(chunks, out_voice, *_speech_delivery(reply),
                           sandboxed=_sbx_on)
+    # LOGGED BECAUSE A TRUNCATED REPLY LEFT NO TRACE ANYWHERE (2026-10-03).
+    # Dio's chunk loop breaks out of playback on three conditions and reports
+    # every one of them to a serial console that produces nothing on that unit,
+    # and these two routes logged neither success nor failure — so "she cut off
+    # halfway" was unanswerable from either end. The open line gives the
+    # denominator; the per-chunk lines below give the numerator. If the last
+    # line reads "chunk 3/9" and stops, that is the cut, with a timestamp.
+    log.info("[stream] %s open — %d chunk(s), voice=%s%s", sid, len(chunks),
+             out_voice, " SANDBOX" if _sbx_on else "")
     # SANDBOX: the caption still goes out — the device shows the words, which is
     # what makes the turn measurable — but nothing is synthesised and no audio
     # bytes are served. Read-ahead is skipped too: synthesising audio nobody
@@ -4274,8 +4568,13 @@ async def tts_chunk_endpoint(stream_id: str, n: int):
     one-chunk read-ahead)."""
     st = _TTS_STREAMS.get(stream_id)
     if not st:
+        # last:True here STOPS her mid-reply, so this is never a quiet 404.
+        log.warning("[stream] %s chunk %d REFUSED — unknown or expired stream; "
+                    "she stops here", stream_id, n)
         return {"audio": "", "chunk_index": n, "last": True, "error": "unknown or expired stream"}
     if n < 0 or n >= len(st["chunks"]):
+        log.warning("[stream] %s chunk %d REFUSED — out of range (count=%d)",
+                    stream_id, n, len(st["chunks"]))
         return {"audio": "", "chunk_index": n, "last": True, "error": "chunk out of range"}
     # SANDBOX, at the route that actually hands a device something to play.
     # The guard in TTSModule covers the Nyx speaker; this covers the wire, which
@@ -4285,6 +4584,15 @@ async def tts_chunk_endpoint(stream_id: str, n: int):
         return {"text": st["chunks"][n], "chunk_index": n, "audio": "",
                 "last": n + 1 >= len(st["chunks"]), "sandbox": True}
     audio = await _tts_chunk_b64(stream_id, n)
+    _total = len(st["chunks"])
+    if not audio:
+        # Synthesis produced nothing. She falls silent on this chunk and carries
+        # on to the next, which reads as a dropped word rather than a fault.
+        log.warning("[stream] %s chunk %d/%d synthesised EMPTY — silent gap here",
+                    stream_id, n, _total)
+    else:
+        log.info("[stream] %s chunk %d/%d served — %d B%s", stream_id, n, _total,
+                 len(audio), "  LAST" if n + 1 >= _total else "")
     if n + 1 < len(st["chunks"]):
         asyncio.create_task(_tts_chunk_b64(stream_id, n + 1))   # read-ahead
     # "text" before "audio" so the firmware peeks it and shows this chunk's words
@@ -6071,6 +6379,66 @@ def _answer_fleet(msg: str) -> str:
 
 intent_registry.register("fleet", "fleet_status", _FLEET_INTENT_RE)
 
+
+# ── Joke intent (deterministic, pre-LLM) ─────────────────────────────────────
+# WHY THIS EXISTS. "tell me a joke" had no lane at all. The only path was the
+# tell_joke tool, chosen at the model's discretion, and across five battery runs
+# on 2026-10-05 it fired or didn't at random: 1/3, 0/3, 2/3, 0/3, 3/3 on the same
+# prompt. When it DID fire the tool returned the string "Joke delivered." and
+# nothing else, so she had to narrate around a result containing no joke — which
+# produced "Here is a random joke I found" over a joke she had invented herself.
+# When it didn't fire she made one up and the curated canon went unused.
+#
+# Same doctrine as fleet, head and Thoth: anything that must happen every time
+# gets a deterministic path. The tool stays as the model's fallback.
+#
+# TRIGGERS ARE NARROW ON PURPOSE (Captain's ruling): "tell me a joke" and close
+# variants only. A joke is a thing people TALK about constantly — "that's a
+# joke", "the joke was that nobody came", "is this a joke?" — so the match is
+# anchored to the whole message, exactly like dio_head's head commands, and for
+# the same reason: a message that merely CONTAINS the word is conversation.
+_JOKE_RE = re.compile(
+    r"^\s*(?:hey\s+|ok\s+|okay\s+)?(?:ph3b3|phoebe|pheobe|feebee)?[,\s]*"
+    r"(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?"
+    r"(?:"
+    r"(?:tell|say|give)\s+(?:me\s+)?(?:a|another|one)\s+joke"
+    r"|(?:got|have)\s+(?:any\s+|a\s+)?jokes?"
+    r"|do\s+you\s+(?:know|have)\s+(?:any\s+|a\s+)?jokes?"
+    r"|make\s+me\s+laugh"
+    r"|another\s+joke"
+    r")"
+    r"\s*(?:please|for\s+me|now)?[.!?]*\s*$", re.I)
+
+
+class _JokeIntent:
+    """Duck-types the Claim pattern, same as _FleetIntent."""
+
+    def search(self, text):
+        return True if _JOKE_RE.match(text or "") else None
+
+
+_JOKE_INTENT_RE = _JokeIntent()
+
+
+def _answer_joke(msg: str) -> str:
+    """Return the joke itself, and speak it.
+
+    RETURNS THE TEXT, not a receipt. The caller's reply IS the joke, so the
+    transcript records what was actually said instead of a narration around it.
+    Failure is spoken: an empty canon says so rather than inventing one, which
+    is the same rule as no sight without a capture and no scripture without a
+    retrieved passage.
+    """
+    joke = (jokes.tell_joke("any") or "").strip()
+    if not joke:
+        return ("I've got nothing in my joke book right now — it's empty or I "
+                "couldn't read it. I'd rather say that than make one up.")
+    tts.speak(joke, blocking=False)
+    return joke
+
+
+intent_registry.register("jokes", "tell_joke", _JOKE_INTENT_RE)
+
 @app.post("/argus/heartbeat")
 async def argus_heartbeat(request: Request):
     """Device heartbeat ingest — rides the existing verified check-in path (the
@@ -6175,6 +6543,13 @@ def _persist_capture(device: str, audio_bytes: bytes, text: str, discarded: str 
             stem.with_suffix(".txt").write_text(text, encoding="utf-8")
     except Exception as e:
         log.warning("[CAPTURES] persist failed: %s", e)
+    # Voice is the one writer that never triggered a sweep (frames do, in
+    # vision_module). Hourly at most; retention must never break a capture.
+    try:
+        import retention
+        retention.maybe_sweep()
+    except Exception as e:                         # noqa: BLE001
+        log.warning("[retention] audio-path sweep skipped: %s", e)
 
 @app.get("/captures/feed")
 async def captures_list(device: str = None, type: str = None):
@@ -6742,6 +7117,23 @@ def _tool_generate_video(args: dict) -> str:
     except HTTPException:
         log.warning("[safety] video(tool) blocked")
         return "I can't make that one — it's outside what I'm allowed to generate."
+    # SANDBOX, AT THE ACTUATOR (2026-10-04). A render is a real-world act: it
+    # takes the GPU for minutes, evicts the chat model, and writes a file.
+    #
+    # Found by a battery that invalidated itself. "can you make a video?" is a
+    # CAPABILITY QUESTION, declared side_effect: none quite correctly — and the
+    # model answered it by calling this tool. Morpheus took the card and the
+    # remaining 144 of 168 turns got "I'm rendering a video right now" instead of
+    # a reply, each one still reported as ok or FAIL as though it had been
+    # measured. 112 of the 118 failures were that message.
+    #
+    # Which is the whole argument for the actuator over the lane: no list of
+    # prompts can predict which question the model will answer with a tool.
+    if sandbox.suppress("render video", f"{preset}: {prompt[:60]}"):
+        mins = max(1, round(morpheus.video_eta(preset) / 60))
+        return (f"Rendering started (sandbox — nothing queued, "
+                f"{morpheus.VIDEO_PRESETS[preset]['label']}). About {mins} "
+                f"minute{'s' if mins != 1 else ''}.")
     params = {"positive": prompt, "negative": "", "preset": preset, "seed": -1}
     src = (args.get("source_job_id") or "").strip()
     if src:
@@ -6757,6 +7149,7 @@ def _tool_generate_video(args: dict) -> str:
     _video_seq += 1
     eta = morpheus.video_eta(preset)
     morpheus.jobs[job_id].update(kind="video", preset=preset, eta_s=eta, created_seq=_video_seq)
+    params["_sandboxed"] = sandbox.active()   # read HERE, where the flag is live
     _pending_video_params[job_id] = params
     mins = max(1, round(eta / 60))
     return (f"Rendering started (job {job_id[:8]}, {morpheus.VIDEO_PRESETS[preset]['label']}). "
@@ -6766,9 +7159,19 @@ def _tool_generate_video(args: dict) -> str:
 
 def _fire_pending_video() -> None:
     """Start renders queued by generate_video this turn — AFTER the reply is composed,
-    so the eviction never kills Hermes mid-response."""
+    so the eviction never kills Hermes mid-response.
+
+    SECOND GUARD, deliberately redundant with the one in _tool_generate_video.
+    This runs after the pipeline returns, so the sandbox contextvar may already
+    be gone — the same gap that let a __smoke__ turn serve 152,140 bytes of audio
+    once the flag had been left behind. A queue entry tagged at creation time
+    carries the fact across that boundary; the contextvar check alone would not.
+    """
     for jid, params in list(_pending_video_params.items()):
         del _pending_video_params[jid]
+        if params.pop("_sandboxed", False) or sandbox.active():
+            sandbox.would("start video render", f"job {jid[:8]}")
+            continue
         asyncio.create_task(morpheus.run_video(jid, params))
 
 # ── Morpheus image generation ─────────────────────────────────────────
@@ -7469,6 +7872,16 @@ async def emotion_get(request: Request):
     if _hb and not _hb.startswith("2"):
         log.warning("[argus] %s reports its last heartbeat POST returned %s",
                     request.headers.get("X-Ph3b3-Device", "?"), _hb)
+    # Same channel, same reason: the chunk loop cannot report its own failure,
+    # because the failure IS the channel it would report on. Format is
+    # "<idx>/<count>:<code>" — see TalkApp.h. The server sees that she stopped
+    # at chunk 3 of 9 and why, which no amount of server-side logging could
+    # tell us on its own: a fetch she never issued leaves nothing to log.
+    _ck = request.headers.get("X-Ph3b3-Chunk", "")
+    if _ck:
+        log.warning("[stream] %s reports its chunk playback broke at %s "
+                    "(idx/count:code)",
+                    request.headers.get("X-Ph3b3-Device", "?"), _ck)
 
     st = emotions.get_state()
     return {"selected": st["selected"], "resolved": st["resolved"],

@@ -29,6 +29,11 @@ import httpx
 log = logging.getLogger("ph3b3.triage")
 
 OLLAMA_HOST  = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+try:
+    import model_ctx
+except ImportError:
+    from modules import model_ctx
+
 HERMES_MODEL = os.getenv("PH3B3_HEAVY_MODEL", os.getenv("PH3B3_MODEL", "hermes3"))
 _HERMES_STEM = HERMES_MODEL.split(":")[0]
 
@@ -94,6 +99,26 @@ def gate_enabled() -> bool:
     if os.getenv("PH3B3_TRIAGE", "").strip().lower() in ("off", "0", "false", "no"):
         return False
     return bool(_config().get("enabled", True))
+
+
+def self_tier_enabled() -> bool:
+    """Whether tier 0b (the missing thing is HERS) is live.
+
+    Read fresh per turn like the rest of this config, so the before/after can be
+    measured without a restart — which also means the baseline cannot be
+    contaminated by deploying it early, and there is a kill switch if it
+    over-overrules in the wild.
+
+    Default FALSE: a tier that strips a veto is the direction that costs an
+    invented answer when it is wrong, so it goes on deliberately.
+    PH3B3_TRIAGE_SELF_TIER=on|off wins over the file.
+    """
+    env = os.getenv("PH3B3_TRIAGE_SELF_TIER", "").strip().lower()
+    if env in ("on", "1", "true", "yes"):
+        return True
+    if env in ("off", "0", "false", "no"):
+        return False
+    return bool(_config().get("self_subject_tier", False))
 
 
 def manifest_enabled() -> bool:
@@ -336,6 +361,89 @@ except Exception:                                      # noqa: BLE001
 _WORD_RE = re.compile(r"[a-z0-9']+")
 
 
+# ── Tier 0b: the missing thing is HERS ───────────────────────────────────────
+#
+# THE PRINCIPLE: triage holds only when the missing thing is in the USER'S
+# world, not hers. A question about her body, her devices or her own hardware
+# cannot be answered by the user, so asking them is a livelock with a polite
+# voice.
+#
+# Measured over 20 days of journal (2026-09-13..10-03): 394 holds survived
+# enforcement, and 64 of them named something of hers — 'Stack-Chan', 'body',
+# 'the specific hardware or computing devices you are using', 'your name',
+# 'soul file', 'head'. The acceptance questions "what is Stack-Chan?", "what
+# hardware are you running on?" and "do you have a body?" were all held and
+# answered with a request that the user describe her.
+#
+# Tier 0 already covers her NAME and tier 3 her INTERIORITY (breakfast, mood,
+# opinions). Between them sat everything physical about her, which is most of
+# what anyone actually asks.
+#
+# THE VOCABULARY IS DERIVED, NEVER HAND-KEPT. It comes from config/devices.json
+# (labels, keys, and the words of each role and hardware string) plus the
+# self-knowledge block's own topic lines, which server.py pushes in at startup
+# via set_self_vocabulary(). A second hand-maintained list would drift from the
+# registry within a week, and the whole point of generating the fleet block was
+# to stop that happening.
+_SELF_STRUCTURAL = {
+    # Structural nouns with no registry home. Deliberately small.
+    "body", "bodies", "hardware", "server", "memory", "memories", "voice",
+    "camera", "screen", "soul", "face", "head", "neck", "name",
+}
+_SELF_STOPWORDS = {
+    "a", "an", "the", "your", "yours", "my", "mine", "her", "his", "their",
+    "its", "of", "on", "in", "for", "to", "and", "or", "you", "are", "is",
+    "am", "be", "being", "own", "specific", "exact", "current", "about",
+    "what", "which", "kind", "type", "types", "using", "use", "used",
+    "computing", "devices", "device", "detail", "details", "more",
+}
+SELF_VOCAB: set[str] = set(_SELF_STRUCTURAL)
+
+
+def set_self_vocabulary(words) -> None:
+    """Replace the derived half of the self vocabulary.
+
+    Called once by the server at startup with words from the device registry and
+    the self-knowledge block. Structural nouns are always kept, so triage used
+    standalone (and every existing unit test) still behaves sensibly.
+    """
+    global SELF_VOCAB
+    got = {w.strip().lower() for w in (words or ()) if w and w.strip()}
+    SELF_VOCAB = set(_SELF_STRUCTURAL) | got
+    log.info("[triage] self vocabulary: %d terms", len(SELF_VOCAB))
+
+
+# Asking the LISTENER about herself. Nobody asks you to supply the answer to a
+# question about you, so every item of such a turn is hers by construction.
+_SECOND_PERSON_SELF_RE = re.compile(
+    r"\b(?:do|does|did|are|is|can|could|will|would|have|has|had)\s+you\b"
+    r"|\bwhat\s+(?:are|is|do|does)\s+you(?:r|'re)?\b"
+    r"|\byou(?:r|'re)\s+(?:own\s+)?(?:body|hardware|name|voice|memory|soul|devices?)\b"
+    r"|\bwhat\s+are\s+you\s+running\s+on\b"
+    r"|\btell\s+me\s+about\s+your(?:self)?\b", re.I)
+
+
+def _is_self_subject(item: str, turn: str = "") -> bool:
+    """True when the missing item is about HER rather than the user's world.
+
+    Two ways in, and the second is deliberately strict:
+
+      1. the TURN is a second-person question about her — then every item is
+         hers, whatever the judge called it;
+      2. every content word of the ITEM is self vocabulary. All, not any: "the
+         camera on my phone" contains 'camera' and must still hold, because
+         'phone' is not hers. Requiring the whole item keeps the overrule from
+         swallowing user-world questions that merely mention her parts.
+    """
+    if turn and _SECOND_PERSON_SELF_RE.search(turn):
+        return True
+    words = [w for w in _WORD_RE.findall((item or "").lower())
+             if w not in _SELF_STOPWORDS]
+    if not words:
+        return False
+    return all(w in SELF_VOCAB for w in words)
+
+
 def _is_self(text: str) -> bool:
     return bool(SELF_NAMES & set(_WORD_RE.findall((text or "").lower())))
 
@@ -361,6 +469,13 @@ def classify(item: str, subjects=(), resolver=None, turn: str = ""):
     # 0. HER OWN NAME, before everything. No manifest state, no resolver, no
     #    vocabulary tier gets a vote on this one.
     if _is_self(text):
+        return "overrule"
+
+    # 0b. HER BODY, HER DEVICES, HER HARDWARE. Same reasoning as tier 0 and the
+    #     same answer: the user cannot supply it. See the note above the
+    #     vocabulary for the measured counts. Behind a per-turn flag so the
+    #     before/after is measurable and so it can be switched off live.
+    if self_tier_enabled() and _is_self_subject(text, turn):
         return "overrule"
 
     # 1. Manifest subjects first — the caller's own statement of what the
@@ -763,7 +878,14 @@ async def triage_gate(user_text: str, context: str,
                 ],
                 "stream": False,
                 "format": "json",
-                "options": {"temperature": 0, "num_predict": _MAX_TOKENS},
+                # num_ctx IS REQUIRED, even though triage needs a fraction of
+                # it. Omitting it let ollama default to 4096 while chat asked
+                # for 16384 on the SAME model (triage.py:32 and server.py:99
+                # read the same env var), so every turn rebuilt the runner
+                # twice: ~2.6 s a turn. The 114 TRIAGE_FAILOPEN_EVICTED events
+                # were this seen from the judge's side, not a VRAM shortage.
+                "options": {"temperature": 0, "num_predict": _MAX_TOKENS,
+                            "num_ctx": model_ctx.NUM_CTX},
             }
             try:
                 r = await asyncio.wait_for(

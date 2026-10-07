@@ -67,16 +67,66 @@ def test_the_boundary_is_the_configured_ttl(store):
 
 # ── and NOTHING else is ───────────────────────────────────────────────────────
 @pytest.mark.parametrize("name", [
-    "stackchan_20260101_000000.wav", "stackchan_20260101_000000.txt",
-    "iris_20260101_000000.wav", "iris_20260101_000000.txt",
-    "stackchan_20260101_000000.discarded",
+    "stackchan_20260101_000000.txt", "iris_20260101_000000.txt",
+    "stackchan_20260101_000000.discarded", "dio_20260101_000000.txt",
 ])
-def test_audio_and_transcripts_are_never_touched(store, name):
-    """1,263 voice recordings of a house live in this directory. They are out of
-    scope by ruling, and nothing here may take them."""
+def test_transcripts_are_never_touched(store, name):
+    """Transcripts are a separate store and a separate future decision
+    (Captain's ruling, 2026-10-07). They outlive their audio on purpose."""
     f = _plant(store, name, 400)
+    res = retention.sweep(store)
+    assert f.exists(), f"{name} was deleted by the retention sweep"
+    assert res["refused"] == 0, "a transcript beside its audio raised the drift alarm"
+
+
+@pytest.mark.parametrize("name", [
+    "stackchan_20260101_000000_1.wav", "iris_20260101_000000_1.wav",
+    "pan_20260101_000000_1.wav", "dio_20260101_000000_1.wav",
+])
+def test_old_device_audio_goes_at_the_same_ttl_as_frames(store, name):
+    """Audio TTL = images TTL. One number fleet-wide (ruling, 2026-10-07)."""
+    wav = _plant(store, name, retention.DEFAULT_TTL_DAYS + 1)
+    txt = _plant(store, name.replace(".wav", ".txt"), retention.DEFAULT_TTL_DAYS + 1)
     retention.sweep(store)
-    assert f.exists(), f"{name} was deleted by a CAMERA retention sweep"
+    assert not wav.exists(), f"{name} outlived the TTL"
+    assert txt.exists(), "raw audio's transcript went with it — it must not"
+
+
+def test_fresh_audio_survives(store):
+    f = _plant(store, "stackchan_20261007_000000_1.wav", 0.5)
+    retention.sweep(store)
+    assert f.exists()
+
+
+def test_audio_and_images_share_one_number(store, monkeypatch):
+    """No second knob: the default governs both, so changing it moves both."""
+    monkeypatch.setattr(retention, "DEFAULT_TTL_DAYS", 3)
+    monkeypatch.delenv("PH3B3_CAPTURE_TTL_DAYS_STACKCHAN", raising=False)
+    monkeypatch.delenv("PH3B3_CAPTURE_TTL_DAYS_WEBCAM", raising=False)
+    monkeypatch.setattr(retention, "ttl_days", lambda prefix: retention.DEFAULT_TTL_DAYS)
+    a = _plant(store, "stackchan_x_1.wav", 4)
+    i = _plant(store, "webcam_x_1.jpg", 4)
+    retention.sweep(store)
+    assert not a.exists() and not i.exists()
+
+
+def test_mic_debug_dumps_are_swept(tmp_path, monkeypatch):
+    rec = tmp_path / "debug_audio" / "after_fix_v1"
+    rec.mkdir(parents=True)
+    old = _plant(rec, "20260718-083423-410_iris_dur0.83s.wav", 30)
+    note = _plant(rec, "notes.md", 30)
+    monkeypatch.setattr(retention, "CAPTURE_DIR", tmp_path / "captures")
+    monkeypatch.setattr(retention, "RECORDING_DIRS", [tmp_path / "debug_audio"])
+    retention.sweep()
+    assert not old.exists() and note.exists()
+
+
+def test_deliberate_and_generated_audio_are_out_of_reach():
+    """Orpheus takes are his singing; songs and speech are made work. A privacy
+    TTL eating them would be its own incident."""
+    dirs = " ".join(str(d) for d in retention.RECORDING_DIRS)
+    for banned in ("orpheus", "songs", "karaoke", "speech", "voices", "moonlit"):
+        assert banned not in dirs, f"retention reaches into {banned}"
 
 
 def test_a_non_image_wearing_an_image_prefix_is_REFUSED_not_skipped(store):

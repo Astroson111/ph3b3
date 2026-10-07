@@ -67,14 +67,40 @@ def test_the_flag_reads_the_documented_values(val, expected):
 
 def test_off_removes_the_tool_from_what_she_is_offered(lane_off):
     """A tool she can see is a tool she will mention. 'I could make you a clip
-    but it's switched off' is the answer the absence exists to prevent."""
-    names = {t["function"]["name"] for t in server.tools_for_turn()}
-    assert "generate_video" not in names
+    but it's switched off' is the answer the absence exists to prevent.
+
+    Asked for EXPLICITLY, so the switch is tested against the strongest case:
+    after Rung 2 a trigger phrase loads the media group, and the switch has to
+    win anyway. Calling tools_for_turn() bare would pass for the wrong reason —
+    the tool would be absent because nothing asked for it, not because the
+    switch is off.
+    """
+    names = {t["function"]["name"]
+             for t in server.tools_for_turn("make me a short video clip")}
+    assert "generate_video" not in names, (
+        "the switch must win even on a turn that asks for a clip, or the "
+        "trigger routes around the switch")
 
 
 def test_on_leaves_the_tool_advertised(lane_on):
-    names = {t["function"]["name"] for t in server.tools_for_turn()}
+    """With the lane ON, the tool is advertised on a turn that asks for it.
+
+    The contract changed 2026-10-04 (Knowledge Shelves Rung 2): exposure is core
+    plus the groups a turn needs, because the full table cost 9,010 tokens of a
+    16,384 window on every turn and an over-long prompt makes Ollama discard the
+    START of the prompt — her system prompt first — while still reporting
+    done_reason 'stop'. "Advertised" now means reachable by its trigger.
+    """
+    names = {t["function"]["name"]
+             for t in server.tools_for_turn("make me a short video clip")}
     assert "generate_video" in names
+
+
+def test_on_still_keeps_it_off_an_unrelated_turn(lane_on):
+    """The lane being on is not a reason to carry 1,081 chars of clip schema
+    through a conversation about the weather."""
+    names = {t["function"]["name"] for t in server.tools_for_turn("how are you")}
+    assert "generate_video" not in names
 
 
 def test_off_refuses_with_a_stated_reason_not_a_404(lane_off):

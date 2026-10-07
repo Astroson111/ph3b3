@@ -120,7 +120,8 @@ def test_the_answer_separates_prose_from_pictures(flags):
 def test_a_lane_that_is_off_is_absent_from_the_answer(flags):
     assert "video" not in flags(video=False).lower()
     assert "video" in flags(video=True).lower()
-    assert "signed" not in flags(watermark=False).lower()
+    off = flags(watermark=False).lower()            # off is stated, never claimed
+    assert "not signed" in off and "each is stamped" not in off
 
 
 def test_she_never_names_the_implementation(flags):

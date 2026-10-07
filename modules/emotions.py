@@ -59,6 +59,42 @@ NONE = "none"    # explicit no-emotion; the regression anchor
 AUTO = "auto"    # she reads the conversation and sets the state herself
 DEFAULT = NONE
 
+# ── Intensity and decay ──────────────────────────────────────────────────────
+# NONE IS THE BASELINE. Not a thirteenth "neutral" entry in the table — the
+# absence of a tint already means neutral, and inventing a named neutral would
+# give the inference something to actively choose instead of something to fall
+# back to.
+#
+# WHY THIS EXISTS. On 2026-10-01 Auto was switched on at 10:48:09, read
+# "anxious" fifteen seconds later, and never moved again through seven further
+# chat turns until it was cleared by hand at 10:51:52. There was no decay, no
+# baseline, and no path home: set_resolved() applies a reading only when
+# is_named() is true, and is_named(NONE) is false, so a no-match or a failed
+# model call left the previous state standing. Anxious was an absorbing state.
+#
+# Decay is computed LAZILY from a timestamp, never by a thread or a timer. A
+# background ticker would have to be started, owned, shut down and reasoned
+# about across restarts; arithmetic on read cannot drift, cannot leak, and gives
+# the same answer whether she was asked once an hour or sixty times a second.
+#
+# A MANUAL PICK DOES NOT DECAY. The selector's contract is that a human choice
+# holds until a human changes it, and "actively pushed" describes a person
+# choosing Joy far better than it describes an inference. Only Auto's readings
+# fade.
+INTENSITY_CAP   = 0.70   # uneasy is allowed; spiralling is not
+INTENSITY_NEW   = 0.45   # a first reading of a new state
+INTENSITY_STEP  = 0.12   # each consecutive reading that agrees
+INTENSITY_MANUAL = 0.50  # a human pick sits mid-scale and stays there
+DECAY_PER_MIN   = 0.10   # cap -> baseline in 7 min of nothing pushing back
+
+
+def _decayed(intensity: float, stamped: float, now: float) -> float:
+    """Intensity after the time elapsed since it was last set. Never negative."""
+    if intensity <= 0 or stamped <= 0:
+        return 0.0
+    faded = intensity - DECAY_PER_MIN * ((now - stamped) / 60.0)
+    return faded if faded > 0 else 0.0
+
 _lock = threading.Lock()
 
 # Face states Dio's firmware actually has today (Ph3b3Face::State). A `base` in

@@ -135,11 +135,52 @@ _CENTER_RE = re.compile(
 _DIRS = {"up": "up", "upward": "up", "down": "down", "downward": "down",
          "left": "left", "right": "right", "forward": "center", "ahead": "center"}
 
+# ── Idle motion, on and off by voice ─────────────────────────────────────────
+# Astro, 2026-10-03: "idle movement should be on and off as well on a chat
+# command." The firmware route has accepted cmd=still/alive since today, but the
+# only ways to reach it were the touchscreen toggle and a curl — so the setting
+# existed and could not be asked for.
+#
+# These are SETTINGS, not gestures: "still" stops her idle drift and leaves her
+# pointed where she is, "alive" gives it back and releases any held pose. The
+# firmware enforces that distinction; this file only has to name it.
+#
+# Same whole-message anchor as every other command here, for the same reason —
+# "I need you to stay still while I take this photo" is conversation about a
+# person, and "hold still" said to the robot is an instruction. Only the second
+# one IS the command end to end.
+_STILL_RE = re.compile(
+    r"^\s*" + _WAKE +
+    r"(?:(?:can|could|would|will)\s+(?:you\s+)?)?(?:please\s+)?"
+    r"(?:(?:hold|stay|keep|be|sit|remain)\s+(?:still|steady)"
+    r"|stop\s+(?:moving|fidgeting|wandering|drifting|wriggling|squirming)"
+    r"(?:\s+(?:your\s+)?(?:head|neck|around|about))?"
+    r"|(?:hold|keep)\s+(?:your\s+)?(?:head|neck)\s+(?:still|steady)"
+    r"|(?:don'?t|do\s+not|no\s+more)\s+mov(?:e|ing)(?:\s+(?:your\s+)?(?:head|neck))?"
+    r"|(?:head\s+)?still(?:\s+mode)?|settle\s+down)"
+    r"\s*(?:please|now|for\s+me|for\s+a\s+(?:bit|moment|second))?[.!?]*\s*$", re.I)
+
+_ALIVE_RE = re.compile(
+    r"^\s*" + _WAKE +
+    r"(?:(?:can|could|would|will)\s+(?:you\s+)?)?(?:please\s+)?"
+    r"(?:(?:you\s+can\s+)?move\s+(?:around|again|freely|naturally)"
+    r"(?:\s+(?:your\s+)?(?:head|neck))?"
+    r"|(?:start|keep)\s+moving(?:\s+(?:your\s+)?(?:head|neck))?"
+    r"|move\s+(?:your\s+)?(?:head|neck)\s+(?:again|around|freely|naturally)"
+    r"|(?:come\s+)?(?:alive|back\s+to\s+life)|loosen\s+up|relax"
+    r"|(?:head\s+)?alive(?:\s+mode)?"
+    r"|(?:you\s+can\s+)?(?:stop\s+holding\s+still|be\s+yourself))"
+    r"\s*(?:please|now|again|for\s+me)?[.!?]*\s*$", re.I)
+
 # What she says on success. These describe EYES, which is what moves — "looking
 # down" is exactly true of a gaze shift and claims nothing about her neck.
 _SAID = {"down": "Looking down.", "up": "Looking up.",
          "left": "Looking left.", "right": "Looking right.",
-         "center": "Back to centre."}
+         "center": "Back to centre.",
+         # These two describe a SETTING changing, and say what it costs: "still"
+         # does not re-centre her, so the line must not imply that it did.
+         "still": "Holding still — I'll stay where I'm pointed.",
+         "alive": "Moving freely again."}
 
 def parse(text: str) -> str | None:
     """The command this message IS, or None. Pure text, no side effects."""
@@ -147,6 +188,12 @@ def parse(text: str) -> str | None:
         return None
     if _CENTER_RE.match(text):
         return "center"
+    # Settings before gestures: "stop moving your head" has to reach the motion
+    # switch, not fall through to the direction parser and match nothing.
+    if _STILL_RE.match(text):
+        return "still"
+    if _ALIVE_RE.match(text):
+        return "alive"
     m = _CMD_RE.match(text)
     if not m:
         return None

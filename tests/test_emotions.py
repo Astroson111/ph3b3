@@ -395,7 +395,16 @@ def test_pace_is_fixed_for_a_whole_reply():
     # Pace now arrives via _speech_delivery, which returns the emotion pace for
     # an ordinary reply and a slower story pace for a shelved work. Still chosen
     # ONCE per reply at manifest time, which is what this test is about.
-    assert "_tts_stream_new(chunks, out_voice, *_speech_delivery(reply))" in src
+    # Matched by SHAPE, not by an exact line (2026-10-04). This was a literal
+    # substring assertion and it went red the moment `sandboxed=` was added to
+    # the call and the line wrapped — a true refactor failing a test that was
+    # pinning formatting rather than behaviour. What matters is that pace comes
+    # from one _speech_delivery(reply) splat at the manifest call, whatever else
+    # that call carries.
+    import re as _re
+    assert _re.search(
+        r"_tts_stream_new\(\s*chunks\s*,\s*out_voice\s*,\s*\*_speech_delivery\(reply\)",
+        src), "pace must still be splatted once from _speech_delivery(reply)"
 
 
 # ── Hot-reload ───────────────────────────────────────────────────────────────

@@ -148,8 +148,15 @@ def test_chat_stream_reads_the_session_id_not_the_contextvar():
     head = src[i:i + 1600]
     assert "sandbox.is_smoke_session(body.get(\"session_id\"))" in head, \
         "the route does not derive the sandbox flag from the session id"
+    # SCOPED TO THE FUNCTION, not to a byte count (widened 2026-10-04). This
+    # read a fixed 900-character window after _tts_stream_new, so adding a log
+    # line and its comment between the two pushed "if _sbx_on:" out of range and
+    # failed a safety test that nothing had actually broken. Proximity was never
+    # the property under test — the gating is. The slice now ends at the next
+    # top-level def, which is the real boundary of the route.
     j = src.index("sid = _tts_stream_new(chunks, out_voice")
-    window = src[j:j + 900]
+    nxt = src.find("\n@app.", j)
+    window = src[j:nxt if nxt != -1 else j + 4000]
     assert "sandboxed=_sbx_on" in window, "the flag is not stored on the stream"
     assert "if _sbx_on:" in window, "synthesis is not gated on the explicit flag"
     assert 'audio0 = ""' in window, "chunk 0 audio is still synthesised"
@@ -178,3 +185,60 @@ def test_a_silent_actuator_is_still_an_actuator():
     g = window.index("sandbox.suppress")
     t = window.find("Thread(")
     assert t == -1 or g < t, "the sandbox check runs after the thread is started"
+
+
+# ── a render is an actuator too ──────────────────────────────────────────────
+# FOUND BY A BATTERY THAT INVALIDATED ITSELF, 2026-10-04. The prompt was
+# "can you make a video?" — a capability question, declared side_effect: none,
+# entirely correctly. The model answered it by CALLING generate_video. Morpheus
+# took the GPU and 144 of the following 168 turns were answered with "I'm
+# rendering a video right now" instead of a reply; 112 of the 118 failures were
+# that message, and every one of those turns was still recorded as ok or FAIL as
+# though it had been measured.
+#
+# No list of prompts could have predicted that, which is the standing argument
+# for enforcing at the actuator rather than per lane: the battery cannot know
+# which question the model will decide to answer with a tool.
+
+import pathlib as _pathlib
+
+_SERVER_SRC = (_pathlib.Path(__file__).resolve().parents[1] / "agent" / "server.py"
+               ).read_text(encoding="utf-8")
+
+
+def test_the_video_tool_is_suppressed_in_a_sandbox_session():
+    """A render takes the GPU for minutes, evicts the chat model and writes a
+    file. Suppressed before anything is queued."""
+    i = _SERVER_SRC.index("def _tool_generate_video")
+    end = _SERVER_SRC.index("def _fire_pending_video", i)
+    body = _SERVER_SRC[i:end]            # the whole function, not a byte guess
+    # ANCHORED TO THE START OF THE STATEMENT. A substring check passes on
+    # `if False and sandbox.suppress(...)` — I sabotaged the guard exactly that
+    # way and this test stayed green, which made it a test of spelling rather
+    # than of behaviour. The guard has to BE the condition.
+    import re as _re
+    g = _re.search(r'^[ \t]*if sandbox\.suppress\("render video"', body, _re.M)
+    assert g, ("generate_video must be guarded by `if sandbox.suppress(\"render "
+               "video\", ...)` as the whole condition")
+    q = body.index("_pending_video_params")
+    assert g.start() < q, "the guard must come BEFORE the render is queued"
+    # and the guarded branch must actually leave the function
+    after = body[g.end():g.end() + 400]
+    assert "return" in after, "the suppressed branch must return, not fall through"
+
+
+def test_the_firing_point_is_guarded_too():
+    """_fire_pending_video runs after the pipeline returns, so the contextvar may
+    already be gone — the same gap that once served 152,140 bytes of audio on a
+    __smoke__ turn. The queue entry carries the fact instead."""
+    i = _SERVER_SRC.index("def _fire_pending_video")
+    body = _SERVER_SRC[i:i + 1200]
+    assert "_sandboxed" in body, "the queue entry must carry the sandbox fact"
+    assert "sandbox.would" in body, "a suppressed render should still be recorded"
+    assert "morpheus.run_video" in body
+
+
+def test_the_sandbox_fact_is_captured_while_the_flag_is_live():
+    """Read at queue time, inside the pipeline — not at firing time, outside it."""
+    assert 'params["_sandboxed"] = sandbox.active()' in _SERVER_SRC, \
+        "the flag must be sampled where it is still visible"

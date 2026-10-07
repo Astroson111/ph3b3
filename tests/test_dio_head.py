@@ -152,3 +152,61 @@ NOT_COMMANDS = [
 def test_ordinary_conversation_is_not_a_head_command(text):
     assert dio_head.parse(text) is None, \
         f"{text!r} was swallowed as a head command — a widened verb list leaked"
+
+
+# ── Idle motion as a spoken setting ──────────────────────────────────────────
+# "idle movement should be on and off as well on a chat command" (Astro,
+# 2026-10-03). These are SETTINGS and not gestures, so they get the same
+# whole-message anchor as the directions: the thing that keeps "look up the
+# weather" a search is what keeps "I need you to stay still while I take this
+# photo" a sentence about a person.
+import pytest
+
+
+@pytest.mark.parametrize("text", [
+    "hold still", "Phoebe, hold still", "stay still", "keep still please",
+    "be still", "stop moving", "stop moving your head", "stop fidgeting",
+    "don't move", "dont move your head", "hold your head still",
+    "stop wandering", "settle down", "BB still", "still mode",
+    "Phoebe, can you stop moving your head?", "keep your neck steady",
+])
+def test_still_is_recognised(text):
+    assert dio_head.parse(text) == "still"
+
+
+@pytest.mark.parametrize("text", [
+    "move around", "you can move around", "move again", "move freely",
+    "start moving", "keep moving your head", "come alive", "loosen up",
+    "relax", "alive mode", "be yourself", "move naturally",
+    "Phoebe, you can move around now", "move your head again",
+])
+def test_alive_is_recognised(text):
+    assert dio_head.parse(text) == "alive"
+
+
+@pytest.mark.parametrize("text", [
+    "I need you to stay still while I take this photo",
+    "the water was still",
+    "he stopped moving",
+    "I don't move much these days",
+    "we relax on Sundays",
+    "stop moving the furniture",
+    "can you tell me about still life painting",
+    "they come alive at night",
+    "does the engine still work",
+    "keep moving the boxes to the garage",
+])
+def test_ordinary_talk_about_stillness_is_not_a_command(text):
+    assert dio_head.parse(text) is None
+
+
+def test_still_does_not_promise_a_re_centre():
+    """The firmware stopped re-homing on "still", so the line must not imply it.
+
+    A reply of "back to centre" after a command that deliberately leaves her
+    pointed where she is would be the output describing an act that did not
+    happen — the exact failure this file's history is about.
+    """
+    line = dio_head.said("still")
+    assert "centre" not in line.lower() and "center" not in line.lower()
+    assert "still" in line.lower()

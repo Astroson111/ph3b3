@@ -45,6 +45,11 @@ log = logging.getLogger("ph3b3.morpheus")
 # ── Config (all overridable via env) ─────────────────────────────────
 OLLAMA_HOST  = os.getenv("OLLAMA_HOST",  "http://127.0.0.1:11434")
 # Match against server.py's HEAVY_MODEL so eviction targets the right model.
+try:
+    import model_ctx as _model_ctx
+except ImportError:
+    from modules import model_ctx as _model_ctx
+
 HERMES_MODEL = os.getenv("PH3B3_HEAVY_MODEL",
                os.getenv("PH3B3_MODEL", "hermes3"))
 _HERMES_STEM = HERMES_MODEL.split(":")[0]  # "hermes3" — safe startswith match
@@ -1329,7 +1334,20 @@ def _floor_judge_ex(template: str, text: str) -> tuple[str, str | None]:
         _LAYER_B_MODEL,
         {"model": _LAYER_B_MODEL, "prompt": template.format(prompt=text[:2000]),
          "stream": False, "keep_alive": "5m",
-         "options": {"temperature": 0, "num_predict": 4}},
+         # SHARED WINDOW, AND BEHAVIOUR-NEUTRAL BY CONSTRUCTION.
+         #
+         # _LAYER_B_MODEL resolves to the chat model on this install — the
+         # server says so itself at boot: "[safety] Layer B judge warm
+         # (ph3b3-chat:latest)". With no num_ctx, every floor check seated it
+         # at ollama's 4096 default and rebuilt the chat runner, ~1.25 s each.
+         #
+         # This cannot change a verdict. The prompt above is
+         # template.format(prompt=text[:2000]) — the input is hard-capped at
+         # 2000 characters before it reaches here, so the window is never the
+         # binding constraint on what the judge reads. No timeout is raised,
+         # no verdict assumed, no category waived.
+         "options": {"temperature": 0, "num_predict": 4,
+                     "num_ctx": _model_ctx.NUM_CTX}},
         _LAYER_B_TIMEOUT, "text")
     return verdict.upper(), err
 
@@ -2048,7 +2066,13 @@ async def warm_brain(http=None) -> bool:
         r = await client.post(f"{OLLAMA_HOST}/api/chat", json={
             "model": brain_model(),
             "messages": [{"role": "user", "content": "ok"}],
-            "stream": False, "options": {"num_predict": 1}})
+            # num_ctx MATTERS EVEN FOR A ONE-TOKEN WARM-UP. Without it ollama
+            # seats the model at its 4096 default, and the next chat call at
+            # 16384 tears the runner down and rebuilds it. Measured 2026-10-04:
+            # this call is why ph3b3-chat sat at context_length=4096 straight
+            # after a restart.
+            "stream": False,
+            "options": {"num_predict": 1, "num_ctx": _model_ctx.NUM_CTX}})
         ok = r.status_code == 200
         log.info("[morpheus] brain %s after render (%s)", brain_model(),
                  "warm" if ok else f"HTTP {r.status_code}")

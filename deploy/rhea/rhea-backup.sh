@@ -88,7 +88,22 @@ log "restic backup..."
 #              The voice REGISTRY that describes them (config/voices.yaml) IS backed
 #              up via "$PH3B3_DIR/config" below, so the choice of voices survives; the
 #              weights don't need to.
+#
+# EXCLUDED BY RULING (2026-10-07: "Backups follow the TTL: exclude capture and
+# audio directories from Rhea's snapshot set — exclusion, not expiry logic"):
+#   captures/ images and .wav — camera frames and device voice recordings. The
+#              7-day TTL is a privacy promise, and keep-monthly 6 below would
+#              otherwise hold them for half a year. Patterns, not the directory:
+#              the .txt / .discarded TRANSCRIPTS beside them are a separate,
+#              still-open decision and keep their current treatment.
+#   debug_audio/ — raw mic dumps from the July Iris debugging.
+#   NOTE: this governs snapshots FROM NOW ON. Snapshots already on RHEA still
+#   hold older recordings until they age out of the prune policy.
 "$RESTIC_BIN" backup --tag nightly --exclude-caches \
+  --exclude "$DATA_DIR/captures/*.wav" \
+  --exclude "$DATA_DIR/captures/*.jpg" --exclude "$DATA_DIR/captures/*.jpeg" \
+  --exclude "$DATA_DIR/captures/*.png" --exclude "$DATA_DIR/captures/*.webp" \
+  --exclude "$DATA_DIR/debug_audio" \
   --exclude "$DATA_DIR"/'*.db' --exclude "$DATA_DIR"/'*.db-wal' --exclude "$DATA_DIR"/'*.db-shm' \
   --exclude "$V2DATA_DIR"/'*.db' --exclude "$V2DATA_DIR"/'*.db-wal' --exclude "$V2DATA_DIR"/'*.db-shm' \
   --exclude "$DATA_DIR/sd_backup_16gb_20260704" \

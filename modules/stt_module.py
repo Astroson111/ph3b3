@@ -2,6 +2,7 @@ import os
 import re
 import logging
 import threading
+import time
 
 log = logging.getLogger("ph3b3.stt")
 
@@ -131,6 +132,15 @@ class STTModule:
         self._hold_why  = ""
         self._hold_eta  = 0
         self._in_use    = 0              # transcriptions in flight
+        # CLAIM FOLLOWS PROOF (Captain's ruling, 2026-10-07). A loaded model is
+        # not hearing; a transcript is. On 2026-10-07 status() said "ears back in
+        # ~40s" for over an hour while a failed reload had left her deaf — the
+        # string was computed once, at hold time, and never checked again.
+        self._loaded_at     = None       # last successful load
+        self._proven_at     = None       # last transcript with accepted text
+        self._held_since    = None
+        self._load_error    = None       # last failed load, verbatim (trimmed)
+        self._load_error_at = None
         self._cv        = threading.Condition(threading.RLock())
         if WHISPER_AVAILABLE:
             self._begin_load()
@@ -157,11 +167,16 @@ class STTModule:
                 self._available = True
                 self._loading   = False
                 self._released  = False
+                self._loaded_at = time.time()
+                self._load_error = self._load_error_at = None
                 self._cv.notify_all()
-            log.info(f"Whisper {WHISPER_MODEL} ready on {device}")
+            log.info(f"Whisper {WHISPER_MODEL} loaded on {device} — "
+                     f"hearing unconfirmed until a transcript")
         except Exception as e:
             with self._cv:
                 self._loading = False
+                self._load_error = str(e).splitlines()[0][:160]
+                self._load_error_at = time.time()
                 self._cv.notify_all()
             log.error(f"Whisper load error: {e}")
 
@@ -227,12 +242,14 @@ class STTModule:
             self._held     = True
             self._hold_why = reason
             self._hold_eta = int(eta_s)
+            self._held_since = time.time()
         return out
 
     def resume(self, reload: bool = True) -> bool:
         """Lease over. Reload eagerly so her ears are not on a lazy fuse."""
         with self._cv:
             self._held, self._hold_why, self._hold_eta = False, "", 0
+            self._held_since = None
         return self.ensure_loaded() if reload else True
 
     @property
@@ -240,9 +257,9 @@ class STTModule:
         return self._held
 
     def _hold_line(self) -> str:
-        eta = self._hold_eta
-        when = f"in about {eta} seconds" if eta else "shortly"
-        return f"I'm busy with {self._hold_why} — my ears are back {when}."
+        # No ETA. "My ears are back in about 40 seconds" was a prediction spoken
+        # as fact, and on 2026-10-07 it stayed false for an hour.
+        return f"I can't hear right now — {self._hold_why or 'a render'} has the card."
 
     def _using(self):
         """Context manager marking a transcription in flight, so release() refuses."""
@@ -310,6 +327,8 @@ class STTModule:
             with self._using():
                 result = self._model.transcribe(audio_flat, **_stt_options(language))
             text, _reason = _accept(result)
+            if text:
+                self._proven_at = time.time()
             return {"text": text or None, "language": result.get("language", ""), "error": None}
         except Exception as e:
             return {"text": None, "error": str(e)}
@@ -356,6 +375,8 @@ class STTModule:
         accepted text (None if discarded), the raw decode, why it was discarded,
         and the confidence signals — so the server can log/label the audit trail."""
         text, reason = _accept(result)
+        if text:
+            self._proven_at = time.time()      # the only thing that proves hearing
         avg_ns, avg_lp = _seg_stats(result)
         return {"text": text or None, "error": None,
                 "discard_reason": reason,
@@ -363,16 +384,35 @@ class STTModule:
                 "no_speech_prob": avg_ns, "avg_logprob": avg_lp,
                 "language": result.get("language", "")}
 
+    def hearing_confirmed(self) -> bool:
+        """True only if Whisper has produced an accepted transcript since it last
+        loaded. Loaded is not hearing."""
+        return (self._model is not None and self._proven_at is not None
+                and self._loaded_at is not None and self._proven_at >= self._loaded_at)
+
     def status(self):
+        """What is TRUE now, with the evidence for it. No predictions, no ETAs."""
+        def at(ts):
+            return time.strftime("%H:%M:%S", time.localtime(ts)) if ts else "?"
         if self._held:
-            return (f"Whisper {WHISPER_MODEL} on hold — {self._hold_why} has the "
-                    f"card, ears back in ~{self._hold_eta}s")
-        if self._released and not self._loading:
-            return (f"Whisper {WHISPER_MODEL} released — card handed over, "
-                    f"reloads on the next listen")
-        if self._loading: return f"Whisper {WHISPER_MODEL} loading..."
-        if self._available:
-            import torch
-            return f"Whisper {WHISPER_MODEL} ready on {'cuda' if torch.cuda.is_available() else 'cpu'}"
-        if SR_AVAILABLE: return "Whisper unavailable — using Google fallback"
-        return "No speech recognition available"
+            return (f"Whisper {WHISPER_MODEL} on hold since {at(self._held_since)} for "
+                    f"{self._hold_why} — not hearing")
+        if self._loading:
+            return f"Whisper {WHISPER_MODEL} loading — not hearing yet"
+        if self._model is None:
+            if self._load_error:
+                return (f"Whisper {WHISPER_MODEL} not loaded — last load failed at "
+                        f"{at(self._load_error_at)} ({self._load_error}) — not hearing")
+            if self._released:
+                return (f"Whisper {WHISPER_MODEL} released — not loaded, not hearing; "
+                        f"a reload is attempted on the next listen")
+            if SR_AVAILABLE:
+                return "Whisper unavailable — Google speech fallback (sends audio off this machine)"
+            return "No speech recognition available — not hearing"
+        import torch
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        if self.hearing_confirmed():
+            return (f"Whisper {WHISPER_MODEL} on {dev} — hearing confirmed by a "
+                    f"transcript at {at(self._proven_at)}")
+        return (f"Whisper {WHISPER_MODEL} loaded on {dev} at {at(self._loaded_at)} — "
+                f"hearing unconfirmed (no transcript since it loaded)")

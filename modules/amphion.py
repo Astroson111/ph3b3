@@ -30,6 +30,13 @@ import httpx
 
 import morpheus                      # reuse gpu_lock, evict_hermes, comfy_*, floor_check, profile_check
 from paths import PH3B3_DATA
+# One shared context window for every HEAVY_MODEL caller — this module's
+# _default_llm is HEAVY_MODEL (same env var), so its own num_ctx rebuilt the
+# chat runner on every call. See modules/model_ctx.py.
+try:
+    import model_ctx as _model_ctx
+except ImportError:
+    from modules import model_ctx as _model_ctx
 
 log = logging.getLogger("Ph3b3")
 
@@ -495,7 +502,10 @@ def _default_llm(prompt: str, temperature: float = 0.0) -> str:
     model = os.getenv("PH3B3_HEAVY_MODEL", os.getenv("PH3B3_MODEL", "hermes3"))
     r = _hx.post(f"{host}/api/generate",
                  json={"model": model, "prompt": prompt, "stream": False,
-                       "options": {"temperature": float(temperature), "num_ctx": 4096}},
+                       # Shared window: this is HEAVY_MODEL (same env var), so a
+                      # 4096 call rebuilt the chat runner. See modules/model_ctx.
+                      "options": {"temperature": float(temperature),
+                                  "num_ctx": _model_ctx.NUM_CTX}},
                  timeout=60.0)
     r.raise_for_status()
     return r.json().get("response", "")

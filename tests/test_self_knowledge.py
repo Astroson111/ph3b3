@@ -114,9 +114,29 @@ def test_refusals_name_names_and_touch_nothing(flags):
 
 def test_watermark_facts_track_the_setting(flags):
     on = flags(watermark=True).lower()
-    assert "signed" in on and "hidden timestamp" in on
+    assert "signing is on" in on and "hidden timestamp" in on
     assert "never remove" in on and "never add one to an old image" in on
-    assert "signed" not in flags(watermark=False).lower()
+    off = flags(watermark=False).lower()
+    # Off used to mean SILENT. With a frozen prompt (H3) or an older memory still
+    # saying "my images are signed", silence never contradicted the stale claim,
+    # so off is now stated outright. The intent is unchanged: no affirmative
+    # signing claim when the switch is off.
+    assert "signing is off" in off and "not signed" in off
+    assert "each is stamped" not in off and "every still" not in off
+
+
+def test_signing_is_a_setting_never_an_outcome(flags):
+    """Say only what ran (2026-10-07): the setting cannot vouch for an image."""
+    on = flags(watermark=True).lower()
+    assert "every still you make is signed" not in on
+    # The fact, not an instruction about it: an instruction the model can
+    # decline is not a control (ruling, 2026-10-07).
+    assert "unless a stamp fails" in on
+
+
+def test_the_deaf_window_promises_no_time(flags):
+    txt = flags(qwen=True).lower()
+    assert "rough time" not in txt     # the ETA instruction C1 proved false
 
 
 def test_local_only_is_unconditional(flags):
@@ -177,3 +197,14 @@ def test_the_prompt_is_built_per_conversation_not_once_at_import():
     body = ast.unparse(cls)
     assert "system_prompt()" in body, \
         "Session still pins the boot-time prompt, so a flag flip is invisible"
+
+
+def test_the_system_prompt_is_rebuilt_every_turn(monkeypatch):
+    """H3: a Session built while signing was ON kept asserting it after it was
+    switched OFF, because the prompt was built once in Session.__init__."""
+    state = {"v": "ON"}
+    monkeypatch.setattr(server, "system_prompt", lambda: f"signing {state['v']}")
+    s = server.Session()
+    assert s.messages()[0]["content"] == "signing ON"
+    state["v"] = "OFF"
+    assert s.messages()[0]["content"] == "signing OFF", "frozen at session start"

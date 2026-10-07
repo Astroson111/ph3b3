@@ -27,10 +27,15 @@ def _auth():
     return T.BASE, T.AUTH
 
 
+# Every deterministic pre-LLM lane. A lane missing from here is reported as
+# "model" and fails its route check however well it worked — which is exactly
+# what happened to fleet-status-* for nine passes in every baseline until
+# 2026-10-05. If you add a lane, add it here and make it log a marker.
 LANE_MARKERS = {
     "[head]": "lane:head", "[thoth]": "lane:thoth", "[story]": "lane:story",
     "[kadmos]": "lane:kadmos", "[apelles]": "lane:apelles",
     "[device-cmd]": "lane:device", "[echo-guard]": "lane:echo",
+    "[fleet]": "lane:fleet", "[joke]": "lane:joke",
 }
 TOOL_RE = re.compile(r"\[Ph3b3\] Tool: ([a-z_]+)")
 HOLD_RE = re.compile(r"TRIAGE_HOLD — missing=(\[.*?\]) turn=")
@@ -88,8 +93,6 @@ def main() -> int:
         want = {c.strip() for c in a.only.split(",")}
         prompts = [p for p in prompts if p["category"] in want]
     passes = int(spec["meta"].get("passes", 3))
-    prefix = spec["meta"].get("session_prefix", "__battery__")
-
     # ── the side-effect gate ────────────────────────────────────────────────
     # Belt and suspenders. The real guarantee is the server-side sandbox
     # (reserved __smoke__ prefix, enforced at the actuators), but a runner that

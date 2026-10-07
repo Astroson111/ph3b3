@@ -557,7 +557,7 @@ async def release_card(lease: dict, *, http=None, stt=None) -> dict:
         if stt is not None and "stt" in (lease or {}).get("evicted", []):
             try:
                 ok = stt.resume(reload=True)
-                did.append("reloaded her hearing" if ok
+                did.append("reloaded Whisper (hearing unconfirmed until a transcript)" if ok
                            else "cleared the hold (Whisper did not reload)")
             except Exception as e:                     # noqa: BLE001
                 failed.append(f"stt resume: {e}")

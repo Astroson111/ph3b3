@@ -200,7 +200,11 @@ def test_listen_while_held_speaks_rather_than_going_quiet(stt):
     r = stt.listen(1)
     assert r.get("held") is True
     assert r.get("say"), "no spoken line — the user would just get silence"
-    assert "30 second" in r["say"] and "render" in r["say"]
+    assert "render" in r["say"]
+    # It used to assert "30 second" here — i.e. it PINNED the ETA promise. On
+    # 2026-10-07 that promise stayed false for an hour, and the ruling is that a
+    # claim follows proof: say why she cannot hear, never when she will.
+    assert not any(w in r["say"].lower() for w in ("second", "back in", "shortly")), r["say"]
     assert r.get("error") is None, "a lease is not an error"
 
 
