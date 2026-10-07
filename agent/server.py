@@ -2884,7 +2884,21 @@ async def chat_with_tools(messages, device="nyx", session_id="", ui=None):
                     else:
                         log.warning("[tools] INVENTED TOOL — %r is not in the table at all",
                                     fn)
-                if fn in ONE_SHOT_TOOLS and fn in tool_cache:
+                # CAPTURE IS THE USER'S CALL, NEVER HERS (ruling, 2026-10-07).
+                # The exposure gate alone is not a control: a tool she calls
+                # without it being offered still runs (above). So a camera or
+                # microphone tool executes only if THIS turn's user message
+                # explicitly asked for it. 18:21:39 that day: "how was your
+                # morning" -> take_photo -> the webcam captured the room.
+                _lu_cap = next((str(m.get("content", "")) for m in reversed(messages)
+                                if m.get("role") == "user"), "")
+                if fn in tool_groups.CAPTURE_TOOLS and \
+                        not tool_groups.capture_requested(_lu_cap):
+                    log.warning("[capture] REFUSED %s — not requested by the user "
+                                "this turn (%r)", fn, _lu_cap[:80])
+                    result = ("Not done: no camera or microphone is used unless the "
+                              "person asks for it in this message. Answer without it.")
+                elif fn in ONE_SHOT_TOOLS and fn in tool_cache:
                     result = tool_cache[fn]
                 else:
                     result = await execute_tool(fn, args, device, session_id)
@@ -2912,6 +2926,27 @@ async def chat_with_tools(messages, device="nyx", session_id="", ui=None):
             log.warning(f"Tool-call text leak detected: {content[:120]!r}")
             _tc_name, _tc_args = _parse_tool_call_text(content)
             content = ""
+            # The same capture rule on the leaked-call path — otherwise a call
+            # typed out as text would reach the camera that a structured one
+            # cannot (ruling, 2026-10-07).
+            _lu_leak = next((str(m.get("content", "")) for m in reversed(messages)
+                             if m.get("role") == "user"), "")
+            if _tc_name in tool_groups.CAPTURE_TOOLS and \
+                    not tool_groups.capture_requested(_lu_leak):
+                log.warning("[capture] REFUSED leaked %s — not requested by the user "
+                            "this turn (%r)", _tc_name, _lu_leak[:80])
+                _tc_name = None
+                # Answer the person instead: same conversation, no tools offered.
+                try:
+                    payload["tools"] = []
+                    payload["messages"] = messages
+                    _rr = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
+                    _rr.raise_for_status()
+                    content = (_rr.json().get("message") or {}).get("content", "") or ""
+                    if _looks_like_tool_call(content):
+                        content = ""
+                except Exception as e:                 # noqa: BLE001
+                    log.error("[capture] re-ask without tools failed: %s", e)
             if _tc_name:
                 try:
                     _tc_result = await execute_tool(_tc_name, _tc_args, device, session_id)

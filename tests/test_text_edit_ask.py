@@ -291,6 +291,11 @@ def _env(name, default=""):
 
 
 def _live(question, sid):
+    # SAFE MODE by default (Captain's ruling, 2026-10-07): live tests run with
+    # actuators suppressed — no camera, no speaker, no motion, no memory writes —
+    # unless the test is specifically about hardware. 18:21:39 that day a real
+    # "ps-" session made her take a webcam photo.
+    sid = sid if str(sid).startswith("__smoke__") else "__smoke__" + str(sid)
     import requests
     import urllib3
     urllib3.disable_warnings()

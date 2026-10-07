@@ -62,7 +62,7 @@ needs_service = pytest.mark.skipif(not _up(), reason="ph3b3 service not reachabl
 
 def ask(q):
     r = requests.post(f"{BASE}/chat", verify=False, auth=AUTH, timeout=300,
-                      json={"message": q, "session_id": "ps-" + uuid.uuid4().hex[:8],
+                      json={"message": q, "session_id": "__smoke__ps-" + uuid.uuid4().hex[:8],
                             "text_only": True})
     r.raise_for_status()
     return (r.json().get("response") or "").strip()

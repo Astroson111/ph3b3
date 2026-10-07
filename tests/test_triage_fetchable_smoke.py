@@ -74,7 +74,7 @@ def _resident():
 
 def _ask(q):
     r = requests.post(f"{BASE}/chat", verify=False, auth=AUTH, timeout=240,
-                      json={"message": q, "session_id": "fx2-" + uuid.uuid4().hex[:8],
+                      json={"message": q, "session_id": "__smoke__fx2-" + uuid.uuid4().hex[:8],
                             "text_only": True})
     r.raise_for_status()
     return (r.json().get("response") or "").strip()

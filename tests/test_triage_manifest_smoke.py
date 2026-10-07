@@ -64,6 +64,11 @@ needs_judge = pytest.mark.skipif(
 
 
 def _ask(question, sid):
+    # SAFE MODE by default (Captain's ruling, 2026-10-07): live tests run with
+    # actuators suppressed — no camera, no speaker, no motion, no memory writes —
+    # unless the test is specifically about hardware. 18:21:39 that day a real
+    # "ps-" session made her take a webcam photo.
+    sid = sid if str(sid).startswith("__smoke__") else "__smoke__" + str(sid)
     r = _session().post(f"{BASE}/chat", timeout=240,
                         json={"message": question, "session_id": sid, "text_only": True})
     r.raise_for_status()

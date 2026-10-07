@@ -41,3 +41,25 @@ collide with the self-knowledge work (`_fleet_self_block`, `SELF_VOCAB`) that
 exists precisely so she can answer questions about herself truthfully. If the
 answer is that the preamble should not be reachable, the fix belongs where the
 preamble is assembled, not in a new refusal.
+
+## Claim without proof: a July transcript presented as heard today
+
+Logged 2026-10-07 (Captain's ruling 4 — finding only, no change that session).
+
+Asked "how was your morning" during a live smoke run, she answered "I did notice
+a faint whisper at 17:12:19 saying [a short phrase]" Whisper had
+produced no transcript since the 17:04 restart (journal, and /ready: "no live
+transcript since it loaded"). The words are a real Dio transcript from
+2026-07-18 (a Dio capture transcript), carried in
+memory.json and fed to her prompt by memory_module.as_context() as the last
+logged anomaly ("Anomalies logged: N total. Last: …"). She attached a fresh,
+invented timestamp and presented two-month-old audio as something she had just
+heard.
+
+Same family as C1's "ears back in ~40s" and H3's signing claims: a first-person
+claim that outran what actually ran. Candidate fixes for a later ruling: date
+the anomaly line in as_context(); keep raw transcript text out of the prompt;
+or the parked Epimetheus claim-check.
+
+Privacy note: overheard household audio was surfaced into an unrelated social
+reply.

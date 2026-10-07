@@ -76,6 +76,7 @@ PHRASES = {
     "sports":   "what was the score in the game tonight",
     "camera_ctl": "pan the camera to the left",
     "translate": "translate thank you into Spanish",
+    "capture":  "take a photo of the room",
     "memory":   "do you remember what I told you about the shed",
     "web":      "search the web for the latest news",
 }

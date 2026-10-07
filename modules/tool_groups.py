@@ -67,7 +67,21 @@ CORE = frozenset({
     "add_reminder", "list_reminders", "start_timer", "pomodoro",
     "tell_joke", "roast", "speak",
     "system_status", "fleet_status",
-    "look", "describe_view", "take_photo",
+})
+
+# ── Capture: camera and microphone (Captain's ruling, 2026-10-07) ────────────
+# OPT-IN PER REQUEST. These sat in core — "can you see me?" is an everyday
+# question — until 2026-10-07 18:21:39, when a smoke test's "how was your
+# morning" made her call take_photo and the webcam captured the room. Exposure
+# is only half of it: a tool the model calls WITHOUT it being offered still runs
+# (see the ROUTING GAP note in server.chat_with_tools), so the server ALSO checks
+# capture_requested() at the call site and refuses anything she reached for on
+# her own initiative. Offered only when YOUR message asks; run only when YOUR
+# message asks.
+CAPTURE_TOOLS = frozenset({
+    "take_photo", "look", "describe_view",          # camera, one frame
+    "analyze_camera", "start_monitoring",            # camera, ghost lane
+    "start_evening_capture", "listen",               # camera / microphone
 })
 
 # ── Groups ───────────────────────────────────────────────────────────────────
@@ -98,9 +112,10 @@ GROUPS: dict[str, frozenset[str]] = {
     "ghost": frozenset({
         "investigation_start", "investigation_end", "investigation_status",
         "investigation_log_emf", "investigation_log_evp", "set_baseline",
-        "check_anomaly", "weather_ghost_hunting", "start_evening_capture",
-        "stop_evening_capture", "start_monitoring", "last_capture",
-        "listen", "analyze_camera", "log_anomaly",
+        "check_anomaly", "weather_ghost_hunting",
+        "stop_evening_capture", "last_capture", "log_anomaly",
+        # start_evening_capture, start_monitoring, listen, analyze_camera moved
+        # to "capture": a ghost word is not a request to switch a sensor on.
     }),
     "media": frozenset({
         "spotify_play", "spotify_control", "spotify_now_playing",
@@ -130,6 +145,7 @@ GROUPS: dict[str, frozenset[str]] = {
     # Retrieval, moved out of core — see the CORE comment above.
     "memory": frozenset({"recall", "recall_memory", "search_notes"}),
     "web": frozenset({"web_search"}),
+    "capture": CAPTURE_TOOLS,
     # OUT OF CORE (2026-10-07). translate_text sat here and was chosen for "say
     # thank you for the support on TikTok" — five calls, text to Google. The
     # offline replacement loads only when translation is actually asked for.
@@ -199,6 +215,19 @@ TRIGGERS: dict[str, re.Pattern] = {
                             r"in\s+(?:spanish|french|german|italian|portuguese|"
                             r"japanese|chinese|mandarin|korean|russian|arabic))\b",
                             re.I),
+    # EXPLICIT asks only. Not "camera", not "see", not "morning": the words
+    # have to be a request for a picture, a look, or a listen.
+    "capture": re.compile(
+        r"\b(?:take|snap|grab|get|capture)\s+(?:me\s+)?(?:a\s+|another\s+|one\s+)?"
+        r"(?:photo|picture|pic|snapshot|selfie|shot|frame|image)\b"
+        r"|\b(?:photo|picture)\s+of\s+(?:me|this|that|the\s+room|my)\b"
+        r"|\b(?:look|peek)\s+(?:at|around)\b|\bhave\s+a\s+look\b"
+        r"|\bwhat\s+(?:do|can)\s+you\s+see\b|\bcan\s+you\s+see\s+(?:me|this|that|it)\b"
+        r"|\b(?:describe|show\s+me)\s+(?:what\s+you\s+see|the\s+(?:room|view))\b"
+        r"|\buse\s+(?:your|the)\s+(?:camera|webcam)\b"
+        r"|\b(?:listen\s+(?:to|for)|record\s+(?:audio|sound|this))\b"
+        r"|\b(?:start|begin)\s+(?:monitoring|the\s+evening\s+capture|recording)\b",
+        re.I),
     "camera_ctl": re.compile(r"\b(pan|tilt|zoom|point\s+the\s+camera|"
                              r"move\s+the\s+camera|camera\s+(?:left|right|up|"
                              r"down|home|reset|status))\b", re.I),
@@ -291,3 +320,12 @@ def group_of(name: str) -> str | None:
         if name in names:
             return g
     return None
+
+
+def capture_requested(text: str) -> bool:
+    """True only when THIS message is the user explicitly asking for a capture.
+
+    The call-site authority (server.chat_with_tools). Same trigger as exposure,
+    same narration veto — "I took a picture yesterday" is talk, not a request.
+    """
+    return bool(text) and not narrated(text) and bool(TRIGGERS["capture"].search(text))
