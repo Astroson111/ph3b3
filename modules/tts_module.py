@@ -295,10 +295,35 @@ def unavailable_line(name: str) -> str:
             f"missing or unreadable, so I'm speaking with Alba instead. ")
 
 
+# STAGE DIRECTIONS ARE NOT SPEECH (Captain's ruling, 2026-10-07). She wrote
+# "*Phoebe tilts her head slightly, as if listening intently...*" and Dio read it
+# aloud. A starred span of 3+ words is a direction: dropped. One or two starred
+# words are emphasis ("I *really* do"): the asterisks go, the words stay — so the
+# sentence still means what it said. Bold (**x**) is unwrapped. Speech only; the
+# chat text is untouched.
+_BOLD = re.compile(r"\*\*([^*\n]+?)\*\*")
+_STARRED = re.compile(r"(?<!\*)\*(?!\s)([^*\n]+?)(?<!\s)\*(?!\*)")
+
+
+def _strip_stage_directions(text: str) -> str:
+    text = _BOLD.sub(r"\1", text or "")
+
+    def _one(m):
+        inner = m.group(1)
+        before = text[:m.start()].rstrip()
+        # Where a sentence starts — the very beginning, or after . ! ? — a
+        # starred span is an action at any length ("*smiles* Hello").
+        at_sentence_start = (not before) or before[-1] in ".!?:\n"
+        return "" if at_sentence_start or len(inner.split()) >= 3 else inner
+    text = _STARRED.sub(_one, text)
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
 def _prep(text: str, script: str) -> str:
     """Latin voices: strip to Piper's speakable range. Native voices: pass through
-    (their model handles their own script)."""
-    return (text or "").strip() if script == "native" else _strip_for_piper(text)
+    (their model handles their own script). Stage directions are dropped first."""
+    text = _strip_stage_directions(text)
+    return text.strip() if script == "native" else _strip_for_piper(text)
 
 
 def _current_text_only() -> bool:
@@ -451,7 +476,9 @@ class TTSModule:
             return False
 
     def _speak_now(self, text, model=None, voice=None):
-        chunks = split_for_tts(text, max_chars=self._SPEAK_MAX_CHARS)
+        # Directions out BEFORE the split: one spanning sentences would otherwise
+        # be cut in two, its asterisks unpaired, and read aloud anyway.
+        chunks = split_for_tts(_strip_stage_directions(text), max_chars=self._SPEAK_MAX_CHARS)
         if not chunks:
             return
         with self._lock:

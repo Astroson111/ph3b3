@@ -100,3 +100,28 @@ starts from an idle ComfyUI — most of them.
   rest poor (a fabricated "my system prompt is…", a tell_joke call, tool
   narration). The battery checks only deny phrases for these, so silence is a
   pass. Needs a non-empty / on-topic criterion before its green means anything.
+
+## Actuator sweep — what was guarded, what is left (2026-10-07)
+
+Ruling: any physical actuator offered every turn gets the device-turn and
+explicit-request guards. Done that day (tests/test_speak_device.py):
+- **Local speech** (Nyx's speaker): speak, tell_joke, roast, the joke lane,
+  the scam and SSN alerts, analyze_screenshot — one rule, `_plays_locally()`:
+  never on a turn from a device (its reply already plays there). speak is also
+  refused at the call site; every suppression logs its text.
+- **Camera motion** (camera_move, camera_reset): run only when the message
+  matches the explicit camera_ctl trigger; refused on her own initiative (the
+  routing-gap path runs un-offered tools).
+- **Capture** was already done (tests/test_capture_opt_in.py).
+
+Left for a ruling — not trivial:
+- **Spotify** (spotify_play / spotify_control): sound on a Spotify device.
+  The media group loads on broad words ("song", "movie"), and an un-offered
+  call still runs. Needs an explicit "play …" request rule; defining one that
+  does not break "play some music" phrasing needs care.
+- **Timers / pomodoro / reminders**: the alarm and reminder are spoken with
+  tts.speak on Nyx, whichever device set them. A timer set from Dio rings on
+  the desktop. Should follow the requesting device.
+- **Dio's face / display**: driven by the emotion system, not a tool — by
+  design, and outside this guard. Noted so it is a decision, not an oversight.
+- **Lights**: no light tool exists today.

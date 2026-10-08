@@ -329,3 +329,15 @@ def capture_requested(text: str) -> bool:
     same narration veto — "I took a picture yesterday" is talk, not a request.
     """
     return bool(text) and not narrated(text) and bool(TRIGGERS["capture"].search(text))
+
+
+# ── Motion (2026-10-07 actuator sweep) ───────────────────────────────────────
+# Pan/tilt/zoom moves a physical camera. Same rule as capture: it runs only when
+# THIS message asks — the camera_ctl trigger is already explicit ("pan the camera
+# left", "zoom", "camera reset") — never on her own initiative via the
+# routing-gap path, which runs un-offered tools.
+MOTION_TOOLS = frozenset({"camera_move", "camera_reset"})
+
+
+def motion_requested(text: str) -> bool:
+    return bool(text) and not narrated(text) and bool(TRIGGERS["camera_ctl"].search(text))

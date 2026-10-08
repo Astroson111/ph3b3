@@ -193,7 +193,7 @@ import model_ctx                          # ONE num_ctx for every HEAVY_MODEL ca
 import tool_groups                        # per-turn tool exposure (Rung 2)
 import vision_module                      # the module itself, for the
 from vision_module import VisionModule    # injected make_headroom hook
-from tts_module import TTSModule, trim_silence_b64, rms_b64, PREVIEW_RMS_FLOOR
+from tts_module import TTSModule, trim_silence_b64, rms_b64, PREVIEW_RMS_FLOOR, _strip_stage_directions
 from stt_module import STTModule
 from paths import PH3B3_DATA  # [DBG-AUDIO] instrumentation save-dir root
 from anime_module import AnimeModule
@@ -1639,11 +1639,13 @@ async def execute_tool(name, args, device="nyx", session_id=""):
             # joke it had invented itself. A tool result the model cannot see is
             # a tool result it will talk over.
             joke = jokes.tell_joke(args.get("category", "any"))
-            tts.speak(joke, blocking=False)
+            if _plays_locally(device, "tell_joke", joke):
+                tts.speak(joke, blocking=False)
             result = joke or "My joke book is empty — I couldn't read it."
         elif name == "roast":
             roast_text = jokes.roast_security() if args.get("topic") == "security" else jokes.roast_dnd()
-            tts.speak(roast_text, blocking=False)
+            if _plays_locally(device, "roast", roast_text):
+                tts.speak(roast_text, blocking=False)
             result = roast_text or "I've got no roasts loaded."
         # vision.look/set_baseline/check_anomaly BLOCK waiting for a frame to
         # arrive at the async /vision/frame handler — they MUST run off the event
@@ -1791,7 +1793,7 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "cybersec_study": result = cybersec.study_topic(args["topic"])
         elif name == "analyze_scam":
             result = scam_detector.analyze(args["text"])
-            if "Run. Just run." in result:
+            if "Run. Just run." in result and _plays_locally(device, "analyze_scam", "scam alert"):
                 tts.speak(
                     "Run. Just run. This is a scam. Stop all contact right now. "
                     "Do not send any money. Do not share any information. "
@@ -1801,7 +1803,8 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "check_identity_exposure":
             result = scam_detector.check_identity_exposure(args["exposed"], args.get("context", ""))
             exposed_lower = args["exposed"].lower()
-            if any(kw in exposed_lower for kw in ("ssn", "social security")):
+            if any(kw in exposed_lower for kw in ("ssn", "social security")) \
+                    and _plays_locally(device, "check_identity_exposure", "SSN alert"):
                 tts.speak(
                     "Your Social Security number was exposed. "
                     "The single most important first step is a credit freeze at all three bureaus: "
@@ -1819,7 +1822,8 @@ async def execute_tool(name, args, device="nyx", session_id=""):
         elif name == "analyze_screenshot":
             _img_path = args["image_path"]
             _analysis = screenshot.analyze(_img_path, args.get("question", ""))
-            tts.speak(_analysis, blocking=False)
+            if _plays_locally(device, "analyze_screenshot", _analysis):
+                tts.speak(_analysis, blocking=False)
             if str(_img_path).startswith("/tmp/"):
                 try:
                     Path(_img_path).unlink(missing_ok=True)
@@ -2166,6 +2170,20 @@ def tools_for_turn(text: str = "", ui: dict | None = None) -> list:
 # She must not offer a clip she cannot render — "I could make you a video but
 # it's switched off" is the answer the absence exists to prevent.
 VIDEO_TOOL_NAMES = frozenset({"generate_video"})
+
+def _plays_locally(device, what: str = "", text: str = "") -> bool:
+    """May this turn use NYX's speaker? Only when the turn came from Nyx itself
+    (the panel or this machine). A turn from Dio or Iris already gets its reply
+    played on that device, so playing on Nyx too says it twice — once to the
+    desktop (2026-10-07 sweep: speak, tell_joke, roast, the joke lane, the
+    scam/SSN alerts and analyze_screenshot all did). A spoofed device can only
+    switch local speech OFF. Suppressions are logged with their text."""
+    if str(device or "nyx").lower() in ("nyx", ""):
+        return True
+    log.info("[speech] not on Nyx for a %s turn (%s): %r", device, what or "?",
+             str(text or "")[:200])
+    return False
+
 
 def _speak_refused(device, args) -> bool:
     """speak plays on NYX's speaker. On a turn from Dio or Iris the reply already
@@ -2604,7 +2622,8 @@ class _TriagePass:
     missing = ()
 
 
-async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
+async def _dispatch_claim(claim, user_msg: str, session_id: str = "",
+                          device: str = "") -> str:
     """Route a claimed turn to its owning module. Grows by module key, never by a
     branch inside the request path."""
     if claim.module == "self_knowledge":
@@ -2636,7 +2655,7 @@ async def _dispatch_claim(claim, user_msg: str, session_id: str = "") -> str:
         return _answer_fleet(user_msg)                   # Argus latest, freshness always attached
     if claim.module == "jokes":
         log.info("[joke] deterministic answer for %r", (user_msg or "")[:60])
-        return _answer_joke(user_msg)                    # canon from config/jokes.yaml, spoken
+        return _answer_joke(user_msg, device)            # canon from config/jokes.yaml, spoken
     if claim.module == "document":
         return await _answer_pdf(user_msg, session_id)   # None → no doc staged → fall through
     if claim.module == "apelles":
@@ -2916,6 +2935,12 @@ async def chat_with_tools(messages, device="nyx", session_id="", ui=None):
                                 "this turn (%r)", fn, _lu_cap[:80])
                     result = ("Not done: no camera or microphone is used unless the "
                               "person asks for it in this message. Answer without it.")
+                elif fn in tool_groups.MOTION_TOOLS and \
+                        not tool_groups.motion_requested(_lu_cap):
+                    log.warning("[motion] REFUSED %s — not requested by the user "
+                                "this turn (%r)", fn, _lu_cap[:80])
+                    result = ("Not done: the camera only moves when the person asks "
+                              "for it in this message. Answer without moving it.")
                 elif fn == "speak" and _speak_refused(device, args):
                     result = ("Not done: this conversation is on a device and your "
                               "reply already plays there. Just answer.")
@@ -2954,6 +2979,10 @@ async def chat_with_tools(messages, device="nyx", session_id="", ui=None):
                              if m.get("role") == "user"), "")
             if _tc_name == "speak" and _speak_refused(device, _tc_args or {}):
                 _tc_name = None                        # the reply below still plays on the device
+            if _tc_name in tool_groups.MOTION_TOOLS and \
+                    not tool_groups.motion_requested(_lu_leak):
+                log.warning("[motion] REFUSED leaked %s — not requested", _tc_name)
+                _tc_name = None
             if _tc_name in tool_groups.CAPTURE_TOOLS and \
                     not tool_groups.capture_requested(_lu_leak):
                 log.warning("[capture] REFUSED leaked %s — not requested by the user "
@@ -3978,7 +4007,8 @@ async def _run_chat_pipeline(body: dict, request: Request):
     _claim = _early_claim
     if _claim:
         log.info("[intent] %s claims this turn — dedicated module wins, Metis stands down", _claim.module)
-        answer = await _dispatch_claim(_claim, user_msg, body.get("session_id", ""))
+        answer = await _dispatch_claim(_claim, user_msg, body.get("session_id", ""),
+                                       device=(verified_device(request) or "nyx"))
         if answer is not None:
             session.add("assistant", answer)
             return answer
@@ -4582,7 +4612,10 @@ async def chat_stream_endpoint(body: dict, request: Request):
         return {"response": reply, "stream_id": "", "chunk_count": 0,
                 "chunk_index": -1, "audio": "", "last": True, "text_only": True,
                 "expression": _expr}
-    chunks, out_voice = split_for_tts(reply), plan["voice"]
+    # Stage directions out BEFORE the split (2026-10-07): the 22:01 one ran over
+    # two sentences, so chunking first would leave each half with one asterisk
+    # and both halves would be read aloud on Dio.
+    chunks, out_voice = split_for_tts(_strip_stage_directions(reply)), plan["voice"]
     if not chunks:
         # A non-empty reply that splits to nothing is a real fault, not a quiet
         # turn: she shows the words and never speaks them.
@@ -6478,7 +6511,7 @@ class _JokeIntent:
 _JOKE_INTENT_RE = _JokeIntent()
 
 
-def _answer_joke(msg: str) -> str:
+def _answer_joke(msg: str, device: str = "") -> str:
     """Return the joke itself, and speak it.
 
     RETURNS THE TEXT, not a receipt. The caller's reply IS the joke, so the
@@ -6491,7 +6524,8 @@ def _answer_joke(msg: str) -> str:
     if not joke:
         return ("I've got nothing in my joke book right now — it's empty or I "
                 "couldn't read it. I'd rather say that than make one up.")
-    tts.speak(joke, blocking=False)
+    if _plays_locally(device, "joke lane", joke):
+        tts.speak(joke, blocking=False)
     return joke
 
 
