@@ -63,3 +63,17 @@ or the parked Epimetheus claim-check.
 
 Privacy note: overheard household audio was surfaced into an unrelated social
 reply.
+
+## Herakles: the ComfyUI rung waits 8 s when there is nothing to free
+
+Logged 2026-10-07 (Captain's ruling — backlog, no fix now).
+
+The lease ladder starts with ComfyUI's /free. On the B measurement (job
+c7253931, 20:27) ComfyUI held only its CUDA context, so the free changed
+nothing and request_card waited the full CONFIRM_TIMEOUT_S (8.0 s) for the
+driver to reflect a release that could never come:
+"[herakles] comfyui was asked to release and the driver reflected nothing
+within the wait". plan_card already knows ComfyUI has nothing freeable (its
+tenant is at context size), so the rung could be skipped when the estimate is
+zero, or the confirm wait shortened for it. Cost: 8 s on every lease that
+starts from an idle ComfyUI — most of them.
