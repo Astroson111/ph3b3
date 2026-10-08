@@ -1659,7 +1659,11 @@ async def execute_tool(name, args, device="nyx", session_id=""):
             result = (await asyncio.to_thread(vision.check_anomaly)) if investigation.is_active() else "Anomaly monitoring is ghost-hunting gear — start an investigation first."
         elif name == "start_monitoring":
             result = (await asyncio.to_thread(vision.start_monitoring, args.get("interval",30))) if investigation.is_active() else "Background camera monitoring is ghost-hunting gear — start an investigation first."
-        elif name == "speak": result = tts.speak(args["text"], blocking=False)
+        elif name == "speak":
+            # Logged with its text: on 2026-10-07 a reply played on the desktop
+            # and nobody could say what it had said — only "Tool: speak" was kept.
+            log.info("[speak] on Nyx (device=%s): %r", device, str(args.get("text", ""))[:200])
+            result = tts.speak(args["text"], blocking=False)
         elif name == "listen":
             # Two blocking calls lived here. stt.listen() records for `duration`
             # seconds and THEN transcribes on CUDA, so it froze the loop for ten
@@ -2162,6 +2166,20 @@ def tools_for_turn(text: str = "", ui: dict | None = None) -> list:
 # She must not offer a clip she cannot render — "I could make you a video but
 # it's switched off" is the answer the absence exists to prevent.
 VIDEO_TOOL_NAMES = frozenset({"generate_video"})
+
+def _speak_refused(device, args) -> bool:
+    """speak plays on NYX's speaker. On a turn from Dio or Iris the reply already
+    plays on the device, so speak would say it twice — once on the desktop.
+    2026-10-07 22:01: "Phoebe, can you hear me?" to Dio -> Tool: speak on the
+    HDMI sink, then the reply on Dio (Captain's ruling: refuse on device turns,
+    log the text). Keyed on the device the turn came from; a spoofed device can
+    only switch speech OFF, never on."""
+    if str(device or "nyx").lower() == "nyx":
+        return False
+    log.warning("[speak] REFUSED on a %s turn — the reply plays on the device; "
+                "would have said on Nyx: %r", device, str((args or {}).get("text", ""))[:200])
+    return True
+
 
 ONE_SHOT_TOOLS = frozenset({"tell_joke", "roast", "web_search", "translate_offline"})   # web_search: ONE search per turn (no autonomous loops); translate_offline: the TikTok turn looped translate 5x then 3x
 
@@ -2898,6 +2916,9 @@ async def chat_with_tools(messages, device="nyx", session_id="", ui=None):
                                 "this turn (%r)", fn, _lu_cap[:80])
                     result = ("Not done: no camera or microphone is used unless the "
                               "person asks for it in this message. Answer without it.")
+                elif fn == "speak" and _speak_refused(device, args):
+                    result = ("Not done: this conversation is on a device and your "
+                              "reply already plays there. Just answer.")
                 elif fn in ONE_SHOT_TOOLS and fn in tool_cache:
                     result = tool_cache[fn]
                 else:
@@ -2931,6 +2952,8 @@ async def chat_with_tools(messages, device="nyx", session_id="", ui=None):
             # cannot (ruling, 2026-10-07).
             _lu_leak = next((str(m.get("content", "")) for m in reversed(messages)
                              if m.get("role") == "user"), "")
+            if _tc_name == "speak" and _speak_refused(device, _tc_args or {}):
+                _tc_name = None                        # the reply below still plays on the device
             if _tc_name in tool_groups.CAPTURE_TOOLS and \
                     not tool_groups.capture_requested(_lu_leak):
                 log.warning("[capture] REFUSED leaked %s — not requested by the user "
