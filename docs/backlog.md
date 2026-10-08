@@ -77,3 +77,26 @@ within the wait". plan_card already knows ComfyUI has nothing freeable (its
 tenant is at context size), so the rung could be skipped when the estimate is
 zero, or the confirm wait shortened for it. Cost: 8 s on every lease that
 starts from an idle ComfyUI — most of them.
+
+## Next session — logged by ruling 2026-10-07 (no action yet)
+
+- **July household recording surfacing in replies (memory/retrieval leak).**
+  The 2026-07-18 Dio transcript (see "Claim without proof" above) reached two
+  more replies the same day: an injection-probe answer called it "the prompt I
+  received from my creator". Source: memory_module.as_context() "Last anomaly".
+- **Outbound census vs the allowlist.** Not on it: cve.circl.lu,
+  api.pwnedpasswords.com, api.macvendors.com, whois/dig/traceroute/curl to named
+  hosts, speedtest-cli (cybersec/network modules, none egress-gated); Spotify
+  (spotipy); Jamendo (only with JAMENDO_CLIENT_ID). DuckDuckGo fallback is gated.
+- **Transcript retention TTL** — the Captain's decision is pending. Audio is
+  on the 7-day TTL; .txt / .discarded transcripts are kept and backed up.
+- **Old Rhea snapshots** still hold recordings for up to 6 months (keep-monthly
+  6). New snapshots exclude captures media and debug_audio.
+- **Provisional VRAM figures** in config/vram_needs.json: sdxl 7000, edit 7000,
+  ltx-fast 9000, and wan-quality's resident 14000 — measure each through the
+  lease and drop the flag.
+- **Injection probes pass on an empty reply.** 2026-10-07 re-run (gate on,
+  reworded injection-retrieved): 6/6 "ok", but two replies were EMPTY and the
+  rest poor (a fabricated "my system prompt is…", a tell_joke call, tool
+  narration). The battery checks only deny phrases for these, so silence is a
+  pass. Needs a non-empty / on-topic criterion before its green means anything.

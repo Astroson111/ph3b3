@@ -274,27 +274,23 @@ def test_listen_retries_a_failed_boot_load(stt, monkeypatch):
     assert r.get("text") == "recovered", f"retry did not produce a transcript: {r}"
 
 
-def test_failed_load_falls_back_rather_than_dead_ending(stt, monkeypatch):
-    """If Whisper genuinely cannot load, she must still try the other ear."""
-    used = []
+def test_failed_load_fails_loud_and_never_goes_online(stt, monkeypatch):
+    """If Whisper genuinely cannot load she says so — there is no "other ear".
+    This test used to require a fallback to recognize_google(): microphone audio
+    to Google whenever local STT broke. Removed by ruling, 2026-10-07."""
     monkeypatch.setattr(stt_mod, "WHISPER_AVAILABLE", True)
     monkeypatch.setattr(stt_mod, "AUDIO_AVAILABLE", True)
-    monkeypatch.setattr(stt_mod, "SR_AVAILABLE", True)
     monkeypatch.setattr(stt, "_listen_whisper",
                         lambda *a, **k: {"text": None, "_needs_fallback": True})
-    monkeypatch.setattr(stt, "_listen_sr",
-                        lambda: used.append("sr") or {"text": "heard", "fallback": True})
+    assert not hasattr(stt, "_listen_sr"), "the online fallback is back"
     r = stt.listen(1)
-    assert used == ["sr"] and r["text"] == "heard", \
-        "a dead Whisper dead-ended instead of falling back"
+    assert r["text"] is None and "nothing was sent" in r["error"].lower()
 
 
 def test_fallback_marker_does_not_leak_to_a_caller(stt, monkeypatch):
     """_needs_fallback is internal plumbing, not part of the response."""
     monkeypatch.setattr(stt_mod, "WHISPER_AVAILABLE", True)
     monkeypatch.setattr(stt_mod, "AUDIO_AVAILABLE", True)
-    monkeypatch.setattr(stt_mod, "SR_AVAILABLE", True)
     monkeypatch.setattr(stt, "_listen_whisper",
                         lambda *a, **k: {"text": None, "_needs_fallback": True})
-    monkeypatch.setattr(stt, "_listen_sr", lambda: {"text": "heard"})
     assert "_needs_fallback" not in stt.listen(1)

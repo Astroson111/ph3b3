@@ -105,11 +105,11 @@ try:
 except ImportError:
     AUDIO_AVAILABLE = False
 
-try:
-    import speech_recognition as sr
-    SR_AVAILABLE = True
-except ImportError:
-    SR_AVAILABLE = False
+# NO OFF-MACHINE SPEECH PATH (Captain's ruling, 2026-10-07). This module used to
+# fall back to speech_recognition's recognize_google() whenever Whisper could not
+# load — i.e. it would send microphone audio to Google exactly when local STT was
+# broken, which is when nobody is watching. If local STT fails, she fails LOUD
+# and nothing leaves the machine. tests/test_stt_no_egress.py holds the line.
 
 class STTBusy(RuntimeError):
     """release() was asked for while a transcription was in flight."""
@@ -166,7 +166,7 @@ class STTModule:
         if WHISPER_AVAILABLE:
             self._begin_load()
         else:
-            log.warning("Whisper unavailable — falling back to SpeechRecognition")
+            log.error("Whisper unavailable — no speech recognition (there is no online fallback)")
 
     # -- lifecycle --------------------------------------------------------
     def _begin_load(self):
@@ -322,8 +322,8 @@ class STTModule:
             return {"text": None, "error": "Whisper still loading — try again in a moment."}
         if WHISPER_AVAILABLE:
             # Not `if self._available`: a boot load that failed leaves
-            # _available False forever, and she would stay on the Google
-            # fallback until someone restarted her. Measured 2026-09-22 — a
+            # _available False forever, and she would stay deaf (it used to be
+            # the Google fallback — removed 2026-10-07) until someone restarted her. Measured 2026-09-22 — a
             # render still holding the card when she came back OOM'd the boot
             # load, and nothing would have retried it. _listen_whisper records
             # first and then calls ensure_loaded(), so the retry costs the user
@@ -331,9 +331,13 @@ class STTModule:
             r = self._listen_whisper(duration_seconds, language)
             if not r.get("_needs_fallback"):
                 return r
-        if SR_AVAILABLE:
-            return self._listen_sr()
-        return {"text": None, "error": "No speech recognition available."}
+            log.error("[stt] local speech recognition failed (%s) — NOT falling back "
+                      "to any online service; nothing was sent", self._load_error or "no model")
+            return {"text": None, "error": "My local speech recognition isn't working right "
+                                           "now, so I couldn't hear that. Nothing was sent "
+                                           "anywhere."}
+        return {"text": None, "error": "No local speech recognition is installed — nothing "
+                                       "was sent anywhere."}
 
     def _listen_whisper(self, duration, language=None):
         if not AUDIO_AVAILABLE:
@@ -362,18 +366,6 @@ class STTModule:
             if text:
                 self._proven_at = time.time()
             return {"text": text or None, "language": result.get("language", ""), "error": None}
-        except Exception as e:
-            return {"text": None, "error": str(e)}
-
-    def _listen_sr(self):
-        try:
-            recognizer = sr.Recognizer()
-            recognizer.pause_threshold = 2.0
-            with sr.Microphone() as source:
-                recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                audio = recognizer.listen(source, timeout=10, phrase_time_limit=20)
-            text = recognizer.recognize_google(audio)
-            return {"text": text, "language": "unknown", "error": None, "fallback": True}
         except Exception as e:
             return {"text": None, "error": str(e)}
 
@@ -462,9 +454,7 @@ class STTModule:
             if self._released:
                 return (f"Whisper {WHISPER_MODEL} released — not loaded, not hearing; "
                         f"a reload is attempted on the next listen")
-            if SR_AVAILABLE:
-                return "Whisper unavailable — Google speech fallback (sends audio off this machine)"
-            return "No speech recognition available — not hearing"
+            return "No local speech recognition available — not hearing"
         import torch
         dev = "cuda" if torch.cuda.is_available() else "cpu"
         if self.hearing_confirmed():

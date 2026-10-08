@@ -161,7 +161,7 @@ def test_the_10267_case_starts_after_evicting_and_restores_after(rig):
 
 
 def test_the_ladder_is_cheapest_first(rig):
-    rig.update(ollama=5800, comfy_tail=400)
+    rig.update(free=4500, ollama=5800, comfy_tail=400)     # needs BOTH rungs
     _clip()
     i_c, i_o = rig["calls"].index("comfy_free"), rig["calls"].index("ollama_evict")
     assert i_c < i_o, "Ollama was evicted before ComfyUI's cache was dropped"
@@ -286,11 +286,20 @@ def test_a_failed_self_test_is_a_failed_restore(rig):
 def test_need_is_the_config_figure_plus_the_500_margin():
     cfg = json.loads((ROOT / "config" / "vram_needs.json").read_text())
     assert cfg["margin_mib"] == 500
-    need, e = morpheus.need_for("wan-fast")
-    pol = e["policy"]
-    assert pol == "resident", "the ruled default for Wan Quality is resident (B)"
-    assert need == e["resident_mib"] + 500
-    assert e["streamed_mib"] == 10354, "the measured A option must stay available"
+    for mode in ("sdxl", "edit", "qwen"):
+        need, e = morpheus.need_for(mode)
+        assert need == e["need_mib"] + 500, mode
+
+
+def test_wan_defaults_to_streamed_so_whisper_stays_loaded():
+    """Ruled 2026-10-07 after B measured no speed gain for 13 min of deafness."""
+    for mode in ("wan-fast", "wan-quality"):
+        need, e = morpheus.need_for(mode)
+        assert e["policy"] == "streamed", mode
+        assert need == 10354, f"{mode}: {need} — the peak, no margin (ruled)"
+        assert need <= 10724, "won't fit beside Whisper — she'd be evicted for every clip"
+        assert e.get("resident_mib"), "resident must stay available for measurement"
+    assert morpheus.need_for("wan-fast")[1]["resident_mib"] == 13946, "the measured B figure"
 
 
 def test_a_broken_config_fails_closed(monkeypatch, tmp_path):

@@ -27,19 +27,23 @@
       "note": "QWEN_NEED_MB; Qwen peak measured 14,467 MiB on 2026-09-22"
     },
     "wan-fast": {
-      "policy": "resident",
+      "policy": "streamed",
       "resident_mib": 13946,
       "streamed_mib": 10354,
       "streamed_note": "measured 2026-10-07: ComfyUI peak 10,354 MiB with 10,724 free, 12m45s, model fully offloaded",
-      "resident_note": "measured 2026-10-07 through the lease: 14,543 MiB free, ComfyUI peak 13,946 MiB, 13m00s, model STILL fully offloaded (0.00 MB loaded) - B bought no speed over A (streamed, 12m45s) and cost 13 min of deafness"
+      "resident_note": "measured 2026-10-07 through the lease: 14,543 MiB free, ComfyUI peak 13,946 MiB, 13m00s, model STILL fully offloaded (0.00 MB loaded) - B bought no speed over A (streamed, 12m45s) and cost 13 min of deafness",
+      "margin_mib": 0,
+      "margin_note": "Captain's ruling 2026-10-07: streamed is the Wan default so Whisper stays loaded. No margin: 10,354 is a measured PEAK (494 MiB still free at it); +500 would exceed the ~10,724 freeable beside Whisper and evict her anyway. 'resident' kept for future measurement \u2014 set policy to use it."
     },
     "wan-quality": {
-      "policy": "resident",
+      "policy": "streamed",
       "resident_mib": 14000,
       "provisional": true,
       "streamed_mib": 10354,
       "streamed_note": "same graph family as wan-fast; not separately measured",
-      "resident_note": "not separately measured; wan-fast's figure is the closest data"
+      "resident_note": "not separately measured; wan-fast's figure is the closest data",
+      "margin_mib": 0,
+      "margin_note": "Captain's ruling 2026-10-07: streamed is the Wan default so Whisper stays loaded. No margin: 10,354 is a measured PEAK (494 MiB still free at it); +500 would exceed the ~10,724 freeable beside Whisper and evict her anyway. 'resident' kept for future measurement \u2014 set policy to use it."
     },
     "ltx-fast": {
       "policy": "fixed",

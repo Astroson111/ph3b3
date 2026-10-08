@@ -158,8 +158,11 @@ def need_for(mode: str) -> tuple[int, dict]:
     """
     try:
         cfg = json.loads(VRAM_NEEDS_FILE.read_text())
-        margin = int(cfg.get("margin_mib", 500))
         e = dict(cfg["modes"][mode])
+        # A mode may carry its own margin. Wan "streamed" does (0): its figure is
+        # a PEAK already taken with 494 MiB left free, and +500 would push it past
+        # what can be freed beside Whisper — evicting her for every clip.
+        margin = int(e.get("margin_mib", cfg.get("margin_mib", 500)))
     except Exception as exc:                            # noqa: BLE001
         log.error("[vram] no usable need for %r (%s) — asking for the whole card",
                   mode, exc)
